@@ -2,7 +2,7 @@
 title: Agentic AI 보안 이벤트 DB 및 탐지·방지 플랫폼 기획
 tags: [ai-agent, security, telemetry, detection, prevention, postgresql, architecture]
 date: 2026-07-15
-version: 1.0
+version: 1.1
 status: planning
 source: agentic-위협매트릭스-통합-최종-v3-2026-07.md
 ---
@@ -616,6 +616,47 @@ CREATE TABLE evidence_refs (
 - DB 장애 시 원본 이벤트는 로컬 bounded spool 또는 Event Bus에 보존하고 재전송한다.
 - 이벤트 중복은 `event_id`와 producer sequence로 제거한다.
 - 장기적으로 분석량이 커지면 PostgreSQL은 catalog·policy·incident를 유지하고 event fact는 ClickHouse로 복제한다.
+
+### 9.2 테넌트 격리와 불변성 (RLS·append-only)
+
+tenant 격리는 애플리케이션 필터가 아니라 DB 정책으로 이중 강제한다. 아래 패턴을 `tenant_id`가 있는 모든 fact·catalog 테이블에 적용한다. `security_events`를 예로 든다.
+
+```sql
+-- 신뢰된 tenant는 세션에서 자유롭게 바꿀 수 있는 GUC가 아니라
+-- '인증된 DB 역할(current_user)'에서 파생한다. SET app.tenant_id로는 바꿀 수 없다.
+CREATE TABLE role_tenant (        -- 애플리케이션 역할 → tenant 결합(연결=인증 경계)
+    role_name text PRIMARY KEY,
+    tenant_id text NOT NULL REFERENCES tenants(tenant_id)
+);
+
+-- 테넌트 격리. FORCE는 '테이블 소유자'에게도 RLS를 적용한다.
+--   단 superuser와 BYPASSRLS 속성 역할은 여전히 우회하므로,
+--   애플리케이션·마이그레이션 역할에 그 속성을 부여하지 않는다(CORE-SIM-TENANT-004).
+ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_events FORCE  ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON security_events
+    USING (tenant_id = (SELECT tenant_id FROM role_tenant WHERE role_name = current_user));
+-- current_user는 인증으로만 바뀌므로 SET app.tenant_id로 tenant를 바꿀 수 없다.
+-- USING만 지정하면 INSERT의 WITH CHECK도 동일 조건으로 적용된다.
+
+-- 불변성(append-only). 두 계층으로 방어한다.
+--   (1) RBAC: 쓰기 역할에서 UPDATE/DELETE 권한 회수 → permission denied (트리거 도달 전)
+--   (2) trigger: UPDATE 권한이 있는 역할이라도 append-only 위반 예외
+-- app_writer와 시험용 역할은 배포 시 사전 생성된다(이 블록의 전제 조건).
+REVOKE UPDATE, DELETE ON security_events FROM app_writer;
+GRANT  INSERT, SELECT ON security_events TO app_writer;
+CREATE FUNCTION deny_event_mutation() RETURNS trigger LANGUAGE plpgsql AS
+$$ BEGIN RAISE EXCEPTION 'security_events is append-only'; END $$;
+CREATE TRIGGER security_events_no_mutation
+    BEFORE UPDATE OR DELETE ON security_events
+    FOR EACH ROW EXECUTE FUNCTION deny_event_mutation();
+```
+
+> **왜 세션 GUC를 신뢰하지 않는가.** PostgreSQL은 임의의 2단계 custom parameter를 받아들이므로, `current_setting('app.tenant_id')`에 의존하면 애플리케이션 역할이 `SET app.tenant_id='다른-tenant'`로 경계를 넘을 수 있다(`SECURITY DEFINER`로 값을 넣어도 이후 직접 `SET`을 막지 못한다). 그래서 위 정책은 세션 값이 아니라 **인증으로만 바뀌는 `current_user`**에서 tenant를 파생한다. 대규모 멀티테넌시로 역할 수가 부담되면, 애플리케이션이 위조·재설정할 수 없는 신뢰 연결 계층 컨텍스트(전용 프록시·확장)로 대체하되 "앱이 값을 못 바꾼다"를 시험으로 증명해야 한다.
+
+- `tenant_id`가 없는 이벤트는 ingest에서 거부하고 `ingest_errors`에 남긴다.
+- evidence 조회도 tenant 경계를 넘지 못하며(§15.2), 조회 자체가 별도 보안 이벤트로 기록된다.
+- 이 격리와 우회 방지는 [05 L1 검증 계획](05-l1-security-validation-plan.md) §10의 `CORE-SIM-TENANT-001`(`SET app.tenant_id` 무효)·`002`(권한 회수)·`003`(append-only trigger)·`004`(RLS 우회 속성) 회귀 시험으로 검증한다.
 
 ---
 

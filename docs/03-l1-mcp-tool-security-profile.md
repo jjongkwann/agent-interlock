@@ -2,7 +2,7 @@
 title: Agent Interlock L1 MCP·Tool 보안 프로파일
 tags: [agent-interlock, mcp, tool, threat-model, security-profile]
 date: 2026-07-15
-version: 1.0
+version: 1.1
 status: proposed
 source: agentic-l1-mcp-tool-위협-기술명세-v1-2026-07.md
 ---
@@ -198,6 +198,7 @@ Agent Host --INVOKES--> MCP Tool --SENDS/READS/WRITES--> External Resource
 | P0 | audience/scope/resource/tenant 검증과 token passthrough 금지 | M5 |
 | P0 | URL 검증, Connector sandbox, process/network 관측 | M4, M6 |
 | P0 | source-to-destination egress policy와 transaction 전 차단 | M9 |
+| P0 | 부작용·목적지가 ActorSpec 선언을 초과하면 실행 전 차단·실행 후 회수(선언–관측 대사) | M1, M4, M9 |
 | P1 | publisher provenance·signature·artifact admission | M4 |
 | P1 | 구성 최소 공개·서명·drift 탐지 | M7 |
 | P1 | context/argument/result secret DLP와 revoke 연계 | M8 |

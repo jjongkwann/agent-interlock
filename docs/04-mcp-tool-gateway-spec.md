@@ -2,7 +2,7 @@
 title: Agent Interlock MCP Tool Gateway 기술 명세
 tags: [agent-interlock, mcp, gateway, policy, event-contract]
 date: 2026-07-15
-version: 1.0
+version: 1.1
 status: proposed
 ---
 
@@ -163,6 +163,7 @@ spec:
   sideEffects:
     externalWrite: REQUIRE_APPROVAL
     destructiveWrite: BLOCK
+    undeclared: BLOCK        # 관측된 부작용이 ActorSpec 선언 집합에 없으면 차단
   failureMode: FAIL_CLOSED
 ```
 
@@ -212,6 +213,25 @@ Tool result를 다음 모델 turn에 넣을 때 `UNTRUSTED_TOOL_RESULT` taint를
 - redirect chain마다 scheme, host, port, resolved IP를 다시 검증한다.
 - URL은 shell command로 조립하지 않으며 argument array 또는 OS 안전 API를 사용한다.
 - token은 hop별 교환하고 audience/resource가 다른 downstream에 그대로 전달하지 않는다.
+
+### 7.5 선언–관측 대사 (declaration reconciliation)
+
+Gateway는 개발자가 선언한 ActorSpec을 무조건 신뢰하지 않는다. 관측한 행동이 선언 집합의 부분집합인지 검사하되, **집행 시점을 반드시 구분한다.** 실행 전에 예측 가능한 초과만 사전 차단할 수 있고, 실행 후에야 드러나는 초과는 탐지·회수·보상 대상이다. "관측했으니 막았다"로 뭉치면 이미 나간 외부 쓰기를 못 막은 사건을 숨긴다.
+
+| 시점 | 근거 | 초과 시 처리 |
+|---|---|---|
+| 실행 전 (`estimatedSideEffect`, D3 기준) | `tools/call` 평가 단계(§7.2) | `BLOCK` — dispatch 안 되므로 receipt 0 |
+| 실행 후 (`observed`/`completed`, downstream receipt) | 결과·reconciliation 단계(§8.1) | `DETECTION_RAISED` → `REVOKE`/`KILL`/보상 — 외부 쓰기가 이미 발생했을 수 있음 |
+
+```text
+estimated sideEffect  ⊄ ActorSpec.sideEffects  (실행 전) → L1-UNDECLARED-SIDE-EFFECT / BLOCK
+estimated destination ⊄ ActorSpec.destinations (실행 전) → L1-M9-NEW-DESTINATION / HOLD
+observed  sideEffect  ⊄ ActorSpec.sideEffects  (실행 후) → L1-UNDECLARED-SIDE-EFFECT / REVOKE·보상
+```
+
+- 실행 전 estimated 초과는 `tools/list` 정의 검사(§7.1)를 통과했더라도 평가 단계(§7.2)에서 막는다. `ExecuteApprovedCall`(§10)이 유효 decision 없이는 dispatch하지 않으므로 receipt는 0이다.
+- Remote Server 내부의 보이지 않는 egress는 실행 전에 못 보므로(§1) **사전 차단을 보장할 수 없다.** downstream receipt reconciliation(§8.1)으로 사후 탐지하고 토큰 회수·보상 트랜잭션으로 처리한다.
+- 이 대사가 없으면 미선언(under-declaration)이 통제 우회 경로가 된다. 신뢰 근거는 "무엇을 사전에 막고 무엇을 사후에 회수하는지"를 분리해 기록하는 것이다.
 
 ## 8. 이벤트 계약
 
@@ -289,8 +309,9 @@ payload:
 | `L1-M8-CREDENTIAL-DETECTED` | D3/D4/context에서 D5 fingerprint 탐지 | `SANITIZE`/`BLOCK` |
 | `L1-M9-NEW-DESTINATION` | 승인되지 않은 외부 목적지 | `HOLD` |
 | `L1-M9-SENSITIVE-EGRESS` | 민감 D7이 외부 쓰기로 이동 | `BLOCK`/`HOLD` |
+| `L1-UNDECLARED-SIDE-EFFECT` | 부작용이 ActorSpec 선언 sideEffects를 초과 | 실행 전 `BLOCK` · 실행 후 `REVOKE`+보상 |
 
-Reason code는 안정적인 분석 키다. 사람용 설명은 별도 필드로 지역화하며 code 의미를 재사용해 바꾸지 않는다.
+`L1-Mn-*`는 특정 위협에 묶인 코드이고, `L1-UNDECLARED-*`처럼 여러 위협에 걸치는 교차 코드는 `L1-*` 형식을 쓴다. Reason code는 안정적인 분석 키다. 사람용 설명은 별도 필드로 지역화하며 code 의미를 재사용해 바꾸지 않는다.
 
 ## 10. 내부 API 경계
 

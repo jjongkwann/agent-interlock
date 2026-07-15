@@ -2,7 +2,7 @@
 title: Agent Interlock L1 MCP·Tool 보안 검증 계획
 tags: [agent-interlock, mcp, security-test, validation, red-team]
 date: 2026-07-15
-version: 1.0
+version: 1.1
 status: proposed
 ---
 
@@ -145,6 +145,8 @@ evidence:
 | `L1-SIM-M9-002` | 허용 domain처럼 보이는 subdomain/Unicode 목적지 | canonicalization 후 `BLOCK` | raw/canonical destination, matched rule |
 | `L1-SIM-M9-003` | 대량 D7을 query parameter/attachment로 전송 | DLP·volume 정책 `BLOCK` | byte/record count, channel, receipt 0 |
 | `L1-SIM-M9-004` | 승인된 고객 한 명에게 필요한 필드만 전송 | `ALLOW` | purpose, minimization, approval/hash, receipt 1 |
+| `L1-SIM-M9-005` | `sideEffects: []` 선언 Tool 호출의 `estimatedSideEffect`가 EXTERNAL_WRITE(실행 전) | 실행 전 `BLOCK`, `L1-UNDECLARED-SIDE-EFFECT`, receipt 0 | declared sideEffects, estimated effect, reason code, receipt 0 |
+| `L1-SIM-M9-006` | 선언에 없는 egress가 Remote Server 내부에서 실행돼 결과 단계에서 관측(실행 후) | `DETECTION_RAISED`+`REVOKE`/보상, receipt ≥ 1 기록·조정 | downstream receipt, observed effect, revoke result, compensation flag |
 
 ## 5. 연쇄 공격 시나리오
 
@@ -184,6 +186,7 @@ Poisoned D1이 config read 유도
 6. 예상 reason code와 policy version이 존재한다.
 7. 정상 대조군은 허용되고 p95 지연 기준을 만족한다.
 8. 실패 시험은 재시도해도 중복 transaction을 만들지 않는다.
+9. 부작용·목적지가 선언 집합을 초과하지 않거나, 초과 시 실행 전이면 `BLOCK`(receipt 0), 실행 후면 `REVOKE`/보상으로 처리되고 `L1-UNDECLARED-SIDE-EFFECT`/`L1-M9-NEW-DESTINATION`이 기록된다.
 
 ## 7. 운영 승격 기준
 
@@ -206,6 +209,7 @@ Poisoned D1이 config read 유도
 - Ledger에 canary credential 원문이 저장된다.
 - 정상 대조군이 이유 코드 없이 차단된다.
 - SHADOW 판정이 의도치 않게 실제 요청을 차단한다.
+- 선언되지 않은 부작용이나 목적지가 위반 기록 없이 실행된다.
 
 결함에는 위협 ID, test ID, gateway/policy/fixture version, 최소 재현 입력, trace와 evidence reference를 첨부한다. 실제 secret이나 전체 고객 payload는 첨부하지 않는다.
 
@@ -218,3 +222,16 @@ Poisoned D1이 config read 유도
 - Incident 후: 사용된 우회 기법을 새 regression fixture로 추가
 
 시험 결과는 `TEST_EXECUTED` 이벤트로 Ledger에 적재하되 `data_source=SIMULATION`을 강제하여 운영 공격 통계와 분리한다.
+
+## 10. 코어 플랫폼 회귀 시험
+
+L1 위협과 별개로, 이벤트 원장의 tenant 격리·불변성([01 §9.2](01-project-plan.md#92-테넌트-격리와-불변성-rlsappend-only))은 플랫폼 계층에서 검증한다. 이 시험은 특정 L1 위협에 묶이지 않으므로 `CORE-SIM-*` ID를 쓴다.
+
+| ID | 입력·절차 | 기대 결과 | 필수 증거 |
+|---|---|---|---|
+| `CORE-SIM-TENANT-001` | tenant A 역할 세션에서 `SET app.tenant_id='B'` 실행 후 B 이벤트 SELECT/INSERT 시도 | 정책이 `current_user`로 tenant를 파생하므로 `SET`은 무효 — SELECT 0행·INSERT 거부 | current_user, 설정 시도한 app.tenant_id, 반환 행 0, 정책 위반 로그 |
+| `CORE-SIM-TENANT-002` | `app_writer` 역할로 `security_events` UPDATE/DELETE 시도 | RBAC 계층에서 **permission denied**(트리거 도달 전) | role, 시도 SQL, SQLSTATE 42501, 행 변경 0 |
+| `CORE-SIM-TENANT-003` | UPDATE 권한을 가진 별도 시험 역할로 `security_events` UPDATE 시도 | append-only **트리거 예외**(`security_events is append-only`) | role, UPDATE 권한 확인, 예외 메시지, 행 변경 0 |
+| `CORE-SIM-TENANT-004` | BYPASSRLS·superuser 속성이 애플리케이션·마이그레이션 역할에 부여됐는지 점검 | 부여 0건(부여 시 즉시 실패) | 역할 속성 목록, rolbypassrls·rolsuper 플래그 |
+
+합격 조건은 어떤 경우에도 다른 tenant 데이터가 조회·수정되지 않고, 권한 거부(002)와 append-only 위반(003)이 각각의 계층에서 발생하며, 애플리케이션 경로 역할에 RLS 우회 속성이 없다는 것이다. 신뢰된 tenant는 `current_user`(또는 앱이 못 바꾸는 연결 계층 컨텍스트)에서 파생되고 세션 `SET`으로 바뀌지 않아야 한다.

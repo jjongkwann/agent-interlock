@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 문서 맵
 date: 2026-07-15
-version: 1.0
+version: 1.1
 status: active
 ---
 
@@ -38,8 +38,8 @@ status: active
 | 위협 | `M1`–`M9` | `M2` Rug Pull |
 | 관계 | `REL-nn` | `REL-05` Agent → Tool |
 | 탐지 규칙 | `DET-nnn` | `DET-005` definition digest 불일치 |
-| L1 사유 코드 | `L1-Mn-*` | `L1-M5-TOKEN-AUDIENCE-MISMATCH` |
-| 시험 | `L1-SIM-Mn-nnn` | `L1-SIM-M6-001` |
+| L1 사유 코드 | `L1-Mn-*`, 교차 `L1-*` | `L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-UNDECLARED-SIDE-EFFECT` |
+| 시험 | `L1-SIM-Mn-nnn`, 코어 `CORE-SIM-*` | `L1-SIM-M6-001`, `CORE-SIM-TENANT-001` |
 | 정책 | 의미 있는 kebab-case ID | `mcp-tool-invoke-default` |
 
 `M1–M9`는 연구·위협 분류 ID이고 `DET-*`는 구현된 탐지 규칙이다. 하나의 위협이 여러 규칙으로 구현될 수 있으므로 두 ID를 같은 것으로 취급하지 않는다.
