@@ -7,7 +7,7 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any, Iterable, Mapping
 
-from .ledger import Event, InMemoryLedger
+from .ledger import Event, Ledger
 from .models import (
     ActorSpec,
     ActorType,
@@ -237,7 +237,7 @@ class CompiledArchitecture:
     links: Mapping[str, LinkPolicy]
     findings: tuple[ArchitectureFinding, ...]
 
-    def build_interlock(self, ledger: InMemoryLedger | None = None) -> Interlock:
+    def build_interlock(self, ledger: Ledger | None = None) -> Interlock:
         runtime = Interlock(ledger)
         actor_handles = {
             actor_id: runtime.define_actor(actor) for actor_id, actor in self.actors.items()

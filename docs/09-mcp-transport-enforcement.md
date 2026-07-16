@@ -185,7 +185,7 @@ Tool 승인 절차는 `tools/list → observed digest 확인 → reviewed manife
 현재 carrier를 production 운영과 나머지 실행 경계로 확장하려면 다음이 필요하다.
 
 1. platform별 production OS sandbox backend와 signed attestation verifier
-2. persistent Definition Registry·PostgreSQL Ledger와 OTLP Collector export
+2. persistent Definition Registry와 OTLP Collector·signed Audit Sink export
 3. inbound GET SSE 송신, resumable event store와 multi-instance lifecycle/session store
 4. server-initiated request, 비동기 task, cancellation/replay 정책
 

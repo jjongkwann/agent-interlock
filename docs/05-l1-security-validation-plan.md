@@ -229,9 +229,9 @@ L1 위협과 별개로, 이벤트 원장의 tenant 격리·불변성([01 §9.2](
 
 | ID | 입력·절차 | 기대 결과 | 필수 증거 |
 |---|---|---|---|
-| `CORE-SIM-TENANT-001` | tenant A 역할 세션에서 `SET app.tenant_id='B'` 실행 후 B 이벤트 SELECT/INSERT 시도 | 정책이 `current_user`로 tenant를 파생하므로 `SET`은 무효 — SELECT 0행·INSERT 거부 | current_user, 설정 시도한 app.tenant_id, 반환 행 0, 정책 위반 로그 |
+| `CORE-SIM-TENANT-001` | tenant A 역할 세션에서 `SET app.tenant_id='B'` 실행 후 B 이벤트 SELECT/INSERT 시도 | 정책이 인증 연결의 `session_user`로 tenant를 파생하므로 `SET`은 무효 — SELECT 0행·INSERT 거부 | session_user, 설정 시도한 app.tenant_id, 반환 행 0, 정책 위반 로그 |
 | `CORE-SIM-TENANT-002` | `app_writer` 역할로 `security_events` UPDATE/DELETE 시도 | RBAC 계층에서 **permission denied**(트리거 도달 전) | role, 시도 SQL, SQLSTATE 42501, 행 변경 0 |
 | `CORE-SIM-TENANT-003` | UPDATE 권한을 가진 별도 시험 역할로 `security_events` UPDATE 시도 | append-only **트리거 예외**(`security_events is append-only`) | role, UPDATE 권한 확인, 예외 메시지, 행 변경 0 |
 | `CORE-SIM-TENANT-004` | BYPASSRLS·superuser 속성이 애플리케이션·마이그레이션 역할에 부여됐는지 점검 | 부여 0건(부여 시 즉시 실패) | 역할 속성 목록, rolbypassrls·rolsuper 플래그 |
 
-합격 조건은 어떤 경우에도 다른 tenant 데이터가 조회·수정되지 않고, 권한 거부(002)와 append-only 위반(003)이 각각의 계층에서 발생하며, 애플리케이션 경로 역할에 RLS 우회 속성이 없다는 것이다. 신뢰된 tenant는 `current_user`(또는 앱이 못 바꾸는 연결 계층 컨텍스트)에서 파생되고 세션 `SET`으로 바뀌지 않아야 한다.
+합격 조건은 어떤 경우에도 다른 tenant 데이터가 조회·수정되지 않고, 권한 거부(002)와 append-only 위반(003)이 각각의 계층에서 발생하며, 애플리케이션 경로 역할에 RLS 우회 속성이 없다는 것이다. 신뢰된 tenant는 인증 연결의 `session_user`(또는 앱이 못 바꾸는 연결 계층 컨텍스트)에서 파생되고 세션 `SET`·`SET ROLE`로 바뀌지 않아야 한다.

@@ -1,7 +1,10 @@
-"""Append-only event ledger with integrity hashes and secret-safe payloads."""
+"""Append-only event ledger contracts with integrity-safe, bounded queries."""
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import re
 import secrets
 import threading
@@ -9,14 +12,28 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
-from .canonical import canonical_digest
+from .canonical import canonical_digest, canonical_json
 from .models import DataSource, Environment
 from .security import sanitize_secrets
 
 
 _SENSITIVE_KEY = re.compile(r"(?i)(authorization|password|secret|token|api[_-]?key|credential)")
+_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MAX_QUERY_LIMIT = 500
+
+
+class LedgerError(RuntimeError):
+    """Base error for Ledger storage and query failures."""
+
+
+class LedgerIdempotencyConflict(LedgerError):
+    """Raised when one idempotency key is reused for a different event."""
+
+
+class LedgerIntegrityError(LedgerError):
+    """Raised when a stored event no longer matches its canonical hash."""
 
 
 def _uuid7() -> str:
@@ -30,11 +47,11 @@ def _uuid7() -> str:
 
 
 def redact_payload(value: Any, key: str = "") -> Any:
-    if not isinstance(value, (Mapping, list, tuple, set, frozenset)) and _SENSITIVE_KEY.search(key) and key not in {
-        "credentialFingerprint",
-        "secretDetected",
-        "tokenPassthrough",
-    }:
+    if key == "credentialFingerprint":
+        return value if isinstance(value, str) and _FINGERPRINT.fullmatch(value) else "[REDACTED]"
+    if key in {"secretDetected", "tokenPassthrough"}:
+        return value if isinstance(value, bool) else "[REDACTED]"
+    if not isinstance(value, (Mapping, list, tuple, set, frozenset)) and _SENSITIVE_KEY.search(key):
         return "[REDACTED]"
     if isinstance(value, Mapping):
         return {str(k): redact_payload(v, str(k)) for k, v in value.items()}
@@ -67,12 +84,175 @@ class Event:
     payload: Mapping[str, Any]
     integrity_hash: str
 
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class EventPage:
+    events: tuple[Event, ...]
+    next_cursor: str | None
+
+
+class Ledger(Protocol):
+    """Storage contract used by the SDK, Gateway, and query API."""
+
+    def append(
+        self,
+        event_type: str,
+        *,
+        tenant_id: str,
+        trace_id: str,
+        span_id: str,
+        source_actor_id: str,
+        payload: Mapping[str, Any],
+        target_actor_id: str | None = None,
+        interaction_id: str | None = None,
+        parent_span_id: str | None = None,
+        relationship_type: str = "INVOKES",
+        relationship_id: str = "REL-05",
+        severity: str = "INFO",
+        environment: Environment = Environment.DEV,
+        data_source: DataSource = DataSource.PRODUCTION,
+        idempotency_key: str | None = None,
+    ) -> Event: ...
+
+    def trace(self, tenant_id: str, trace_id: str) -> tuple[Event, ...]: ...
+
+    def interaction(self, tenant_id: str, interaction_id: str) -> tuple[Event, ...]: ...
+
+    def query_trace(
+        self,
+        tenant_id: str,
+        trace_id: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> EventPage: ...
+
+
+def build_event(
+    event_type: str,
+    *,
+    tenant_id: str,
+    trace_id: str,
+    span_id: str,
+    source_actor_id: str,
+    payload: Mapping[str, Any],
+    target_actor_id: str | None = None,
+    interaction_id: str | None = None,
+    parent_span_id: str | None = None,
+    relationship_type: str = "INVOKES",
+    relationship_id: str = "REL-05",
+    severity: str = "INFO",
+    environment: Environment = Environment.DEV,
+    data_source: DataSource = DataSource.PRODUCTION,
+    event_id: str | None = None,
+    occurred_at: str | None = None,
+    ingested_at: str | None = None,
+) -> Event:
+    """Create one canonical event; storage adapters persist this exact value."""
+
+    if not tenant_id or not trace_id or not span_id or not source_actor_id:
+        raise ValueError("tenant_id, trace_id, span_id, and source_actor_id are required")
+    if not isinstance(payload, Mapping):
+        raise ValueError("payload must be a mapping")
+    normalized_payload = json.loads(canonical_json(redact_payload(payload)))
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    body = {
+        "event_id": event_id or _uuid7(),
+        "event_type": event_type,
+        "schema_version": "1.0",
+        "occurred_at": occurred_at or now,
+        "ingested_at": ingested_at or now,
+        "tenant_id": tenant_id,
+        "environment": environment.value,
+        "data_source": data_source.value,
+        "trace_id": trace_id,
+        "span_id": span_id,
+        "parent_span_id": parent_span_id,
+        "interaction_id": interaction_id,
+        "source_actor_id": source_actor_id,
+        "target_actor_id": target_actor_id,
+        "relationship_type": relationship_type,
+        "relationship_id": relationship_id,
+        "severity": severity,
+        "payload": normalized_payload,
+    }
+    return Event(**body, integrity_hash=canonical_digest(body))
+
+
+def event_request_digest(event: Event) -> str:
+    """Hash stable producer-controlled fields for idempotency binding."""
+
+    return canonical_digest(
+        {
+            "event_type": event.event_type,
+            "schema_version": event.schema_version,
+            "tenant_id": event.tenant_id,
+            "environment": event.environment,
+            "data_source": event.data_source,
+            "trace_id": event.trace_id,
+            "span_id": event.span_id,
+            "parent_span_id": event.parent_span_id,
+            "interaction_id": event.interaction_id,
+            "source_actor_id": event.source_actor_id,
+            "target_actor_id": event.target_actor_id,
+            "relationship_type": event.relationship_type,
+            "relationship_id": event.relationship_id,
+            "severity": event.severity,
+            "payload": event.payload,
+        }
+    )
+
+
+def verify_event(event: Event) -> bool:
+    body = asdict(event)
+    expected = body.pop("integrity_hash")
+    return canonical_digest(body) == expected
+
+
+def validate_query(tenant_id: str, value: str, limit: int) -> None:
+    if not tenant_id or not value:
+        raise ValueError("tenant_id and query identifier are required")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= _MAX_QUERY_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_MAX_QUERY_LIMIT}")
+
+
+def encode_event_cursor(event: Event) -> str:
+    value = json.dumps([event.occurred_at, event.event_id], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def decode_event_cursor(cursor: str) -> tuple[str, str]:
+    if not isinstance(cursor, str) or not cursor or len(cursor) > 512:
+        raise ValueError("cursor is invalid")
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+        value = json.loads(decoded)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("cursor is invalid") from error
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise ValueError("cursor is invalid")
+    try:
+        datetime.fromisoformat(value[0].replace("Z", "+00:00"))
+        uuid.UUID(value[1])
+    except ValueError as error:
+        raise ValueError("cursor is invalid") from error
+    return value[0], value[1]
+
 
 class InMemoryLedger:
     """Thread-safe append-only ledger used by the reference runtime and tests."""
 
     def __init__(self) -> None:
         self._events: list[Event] = []
+        self._idempotency: dict[tuple[str, str], tuple[str, Event]] = {}
         self._lock = threading.RLock()
 
     def append(
@@ -92,32 +272,39 @@ class InMemoryLedger:
         severity: str = "INFO",
         environment: Environment = Environment.DEV,
         data_source: DataSource = DataSource.PRODUCTION,
+        idempotency_key: str | None = None,
     ) -> Event:
-        if not tenant_id or not trace_id or not span_id or not source_actor_id:
-            raise ValueError("tenant_id, trace_id, span_id, and source_actor_id are required")
-        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        body = {
-            "event_id": _uuid7(),
-            "event_type": event_type,
-            "schema_version": "1.0",
-            "occurred_at": now,
-            "ingested_at": now,
-            "tenant_id": tenant_id,
-            "environment": environment.value,
-            "data_source": data_source.value,
-            "trace_id": trace_id,
-            "span_id": span_id,
-            "parent_span_id": parent_span_id,
-            "interaction_id": interaction_id,
-            "source_actor_id": source_actor_id,
-            "target_actor_id": target_actor_id,
-            "relationship_type": relationship_type,
-            "relationship_id": relationship_id,
-            "severity": severity,
-            "payload": redact_payload(payload),
-        }
-        event = Event(**body, integrity_hash=canonical_digest(body))
+        event = build_event(
+            event_type,
+            tenant_id=tenant_id,
+            trace_id=trace_id,
+            span_id=span_id,
+            source_actor_id=source_actor_id,
+            payload=payload,
+            target_actor_id=target_actor_id,
+            interaction_id=interaction_id,
+            parent_span_id=parent_span_id,
+            relationship_type=relationship_type,
+            relationship_id=relationship_id,
+            severity=severity,
+            environment=environment,
+            data_source=data_source,
+        )
         with self._lock:
+            if idempotency_key is not None:
+                key = (tenant_id, idempotency_key)
+                if not idempotency_key or len(idempotency_key) > 200:
+                    raise ValueError("idempotency_key must be between 1 and 200 characters")
+                existing = self._idempotency.get(key)
+                digest = event_request_digest(event)
+                if existing is not None:
+                    existing_digest, existing_event = existing
+                    if existing_digest != digest:
+                        raise LedgerIdempotencyConflict(
+                            "idempotency key is already bound to another event"
+                        )
+                    return existing_event
+                self._idempotency[key] = (digest, event)
             self._events.append(event)
         return event
 
@@ -127,17 +314,55 @@ class InMemoryLedger:
 
     def trace(self, tenant_id: str, trace_id: str) -> tuple[Event, ...]:
         with self._lock:
-            return tuple(event for event in self._events if event.tenant_id == tenant_id and event.trace_id == trace_id)
+            return tuple(
+                sorted(
+                    (
+                        event
+                        for event in self._events
+                        if event.tenant_id == tenant_id and event.trace_id == trace_id
+                    ),
+                    key=lambda item: (item.occurred_at, item.event_id),
+                )
+            )
 
     def interaction(self, tenant_id: str, interaction_id: str) -> tuple[Event, ...]:
         with self._lock:
             return tuple(
-                event for event in self._events
-                if event.tenant_id == tenant_id and event.interaction_id == interaction_id
+                sorted(
+                    (
+                        event
+                        for event in self._events
+                        if event.tenant_id == tenant_id and event.interaction_id == interaction_id
+                    ),
+                    key=lambda item: (item.occurred_at, item.event_id),
+                )
             )
+
+    def query_trace(
+        self,
+        tenant_id: str,
+        trace_id: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> EventPage:
+        validate_query(tenant_id, trace_id, limit)
+        boundary = decode_event_cursor(cursor) if cursor is not None else None
+        with self._lock:
+            values = sorted(
+                (
+                    event
+                    for event in self._events
+                    if event.tenant_id == tenant_id
+                    and event.trace_id == trace_id
+                    and (boundary is None or (event.occurred_at, event.event_id) > boundary)
+                ),
+                key=lambda item: (item.occurred_at, item.event_id),
+            )
+        page = tuple(values[:limit])
+        next_cursor = encode_event_cursor(page[-1]) if len(values) > limit and page else None
+        return EventPage(page, next_cursor)
 
     @staticmethod
     def verify(event: Event) -> bool:
-        body = asdict(event)
-        expected = body.pop("integrity_hash")
-        return canonical_digest(body) == expected
+        return verify_event(event)

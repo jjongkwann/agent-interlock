@@ -623,11 +623,16 @@ tenant 격리는 애플리케이션 필터가 아니라 DB 정책으로 이중 �
 
 ```sql
 -- 신뢰된 tenant는 세션에서 자유롭게 바꿀 수 있는 GUC가 아니라
--- '인증된 DB 역할(current_user)'에서 파생한다. SET app.tenant_id로는 바꿀 수 없다.
+-- 인증 연결의 session_user에서 파생한다. SET/SET ROLE로는 바꿀 수 없다.
 CREATE TABLE role_tenant (        -- 애플리케이션 역할 → tenant 결합(연결=인증 경계)
     role_name text PRIMARY KEY,
     tenant_id text NOT NULL REFERENCES tenants(tenant_id)
 );
+
+CREATE FUNCTION current_tenant() RETURNS text LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = pg_catalog, public AS
+$$ SELECT tenant_id FROM role_tenant WHERE role_name = session_user $$;
+REVOKE ALL ON FUNCTION current_tenant() FROM PUBLIC;
 
 -- 테넌트 격리. FORCE는 '테이블 소유자'에게도 RLS를 적용한다.
 --   단 superuser와 BYPASSRLS 속성 역할은 여전히 우회하므로,
@@ -635,9 +640,9 @@ CREATE TABLE role_tenant (        -- 애플리케이션 역할 → tenant 결합
 ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_events FORCE  ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON security_events
-    USING (tenant_id = (SELECT tenant_id FROM role_tenant WHERE role_name = current_user));
--- current_user는 인증으로만 바뀌므로 SET app.tenant_id로 tenant를 바꿀 수 없다.
--- USING만 지정하면 INSERT의 WITH CHECK도 동일 조건으로 적용된다.
+    USING (tenant_id = current_tenant())
+    WITH CHECK (tenant_id = current_tenant());
+-- session_user는 인증 연결에 고정되므로 custom GUC나 SET ROLE로 tenant를 바꿀 수 없다.
 
 -- 불변성(append-only). 두 계층으로 방어한다.
 --   (1) RBAC: 쓰기 역할에서 UPDATE/DELETE 권한 회수 → permission denied (트리거 도달 전)
@@ -652,7 +657,7 @@ CREATE TRIGGER security_events_no_mutation
     FOR EACH ROW EXECUTE FUNCTION deny_event_mutation();
 ```
 
-> **왜 세션 GUC를 신뢰하지 않는가.** PostgreSQL은 임의의 2단계 custom parameter를 받아들이므로, `current_setting('app.tenant_id')`에 의존하면 애플리케이션 역할이 `SET app.tenant_id='다른-tenant'`로 경계를 넘을 수 있다(`SECURITY DEFINER`로 값을 넣어도 이후 직접 `SET`을 막지 못한다). 그래서 위 정책은 세션 값이 아니라 **인증으로만 바뀌는 `current_user`**에서 tenant를 파생한다. 대규모 멀티테넌시로 역할 수가 부담되면, 애플리케이션이 위조·재설정할 수 없는 신뢰 연결 계층 컨텍스트(전용 프록시·확장)로 대체하되 "앱이 값을 못 바꾼다"를 시험으로 증명해야 한다.
+> **왜 세션 GUC를 신뢰하지 않는가.** PostgreSQL은 임의의 2단계 custom parameter를 받아들이므로, `current_setting('app.tenant_id')`에 의존하면 애플리케이션 역할이 `SET app.tenant_id='다른-tenant'`로 경계를 넘을 수 있다(`SECURITY DEFINER`로 값을 넣어도 이후 직접 `SET`을 막지 못한다). 그래서 실행 migration은 **인증 연결에 고정되는 `session_user`**에서 tenant를 파생한다. `current_user`는 `SET ROLE`로 바뀔 수 있어 인증 주체의 고정 식별자로 사용하지 않는다. 대규모 멀티테넌시로 역할 수가 부담되면, 애플리케이션이 위조·재설정할 수 없는 신뢰 연결 계층 컨텍스트(전용 프록시·확장)로 대체하되 "앱이 값을 못 바꾼다"를 시험으로 증명해야 한다. 실행 가능한 축소 migration과 API 계약은 [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md)를 따른다.
 
 - `tenant_id`가 없는 이벤트는 ingest에서 거부하고 `ingest_errors`에 남긴다.
 - evidence 조회도 tenant 경계를 넘지 못하며(§15.2), 조회 자체가 별도 보안 이벤트로 기록된다.
@@ -886,7 +891,7 @@ sequenceDiagram
 | GET | `/v1/controls/health` | 통제 상태 조회 |
 | POST | `/v1/rules/{id}/simulate` | 과거 이벤트에 규칙 시험 |
 
-동기 판정 API는 짧은 timeout과 idempotency key를 가져야 한다. timeout 시 행동은 요청에 맡기지 않고 관계별 장애 정책에서 결정한다.
+`POST /v1/events`와 `GET /v1/traces/{trace_id}`의 현재 실행 계약은 [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md)와 [`ledger-api.openapi.yaml`](../schemas/ledger-api.openapi.yaml)에 있다. mutation은 인증 principal·tenant·idempotency key를 결합한다. 동기 판정 API는 짧은 timeout과 idempotency key를 가져야 한다. timeout 시 행동은 요청에 맡기지 않고 관계별 장애 정책에서 결정한다.
 
 ---
 

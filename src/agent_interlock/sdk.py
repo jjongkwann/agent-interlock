@@ -9,7 +9,7 @@ from typing import Any, Callable, Mapping
 
 from .canonical import canonical_digest
 from .gateway import GatewayError
-from .ledger import InMemoryLedger
+from .ledger import InMemoryLedger, Ledger
 from .models import ActorSpec, ControlDecision, DataSource, Environment, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
 from .security import validate_schema
 
@@ -50,7 +50,7 @@ class Actor:
 
 
 class Interlock:
-    def __init__(self, ledger: InMemoryLedger | None = None) -> None:
+    def __init__(self, ledger: Ledger | None = None) -> None:
         self.ledger = ledger or InMemoryLedger()
         self._actors: dict[str, Actor] = {}
         self._links: dict[tuple[str, str], LinkPolicy] = {}

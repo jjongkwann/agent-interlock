@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .canonical import canonical_digest
-from .ledger import InMemoryLedger
+from .ledger import InMemoryLedger, Ledger
 from .models import (
     ActionResult,
     ActorSpec,
@@ -73,7 +73,7 @@ class _Pending:
 
 
 class MCPToolGateway:
-    def __init__(self, *, registry: DefinitionRegistry | None = None, ledger: InMemoryLedger | None = None) -> None:
+    def __init__(self, *, registry: DefinitionRegistry | None = None, ledger: Ledger | None = None) -> None:
         self.registry = registry or DefinitionRegistry()
         self.ledger = ledger or InMemoryLedger()
         self._actors: dict[str, ActorSpec] = {}

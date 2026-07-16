@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
 date: 2026-07-16
-version: 0.2.0
+version: 0.3.0
 status: active
 ---
 
@@ -12,9 +12,9 @@ status: active
 ## 구현 기준
 
 - 언어: Python 3.11
-- 배포 형태: 외부 의존성이 없는 reference core
+- 배포 형태: 외부 의존성이 없는 reference core + optional psycopg PostgreSQL adapter
 - 기준 명세: `03`–`05` version 1.1
-- 구현 모드: 메모리 Registry/Ledger와 동기 Connector
+- 구현 모드: 메모리 Registry, 메모리/PostgreSQL Ledger와 동기 Connector
 
 ## 계약 추적
 
@@ -33,6 +33,8 @@ status: active
 | 사후 receipt reconciliation | `reconcile_transaction` | 미선언 egress 회귀 시험 |
 | 판정·집행·결과 분리 이벤트 | `InMemoryLedger`, `gateway.py` | 이벤트 순서·무결성 시험 |
 | PostgreSQL partition·RLS·append-only | `migrations/postgresql` | PostgreSQL 16 임시 DB 적용 검증 |
+| PostgreSQL Ledger adapter·hash 재검증 | `PostgreSQLLedger` | 실제 psycopg append·replay·query live 시험 |
+| Event ingest·trace query HTTP API | `LedgerHTTPAPI`, `ledger-api.openapi.yaml` | 실제 socket tenant·scope·idempotency·pagination 시험 |
 | Architecture-as-Code manifest | `architecture.py`, `architecture.schema.json` | `ArchitectureModelTests` |
 | 보안 보장 수준과 Architecture lint | `ArchitectureLinter` | `ArchitectureSecurityLintTests` |
 | Dynamic Sub-Agent Edge 계약 | `DynamicTargetSelector` | dynamic instance 회귀 시험 |
@@ -52,7 +54,7 @@ status: active
 
 ## 현재 자동화된 L1 범위
 
-`tests/test_core.py`는 M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 인수·결과 secret, M9 Unicode 목적지·미선언 부작용·사후 egress를 검증한다. 정상 호출, SHADOW 비집행, 승인 binding, idempotency도 함께 검증한다. `tests/test_architecture.py`는 Architecture compile, 보안 lint, Dynamic Edge와 runtime drift를 검증한다. `tests/test_mcp_transport.py`는 실제 MCP JSON-RPC D1/D3/D4 경계, exact digest binding, drift·삭제, trusted context와 dispatch 0을 검증한다. `tests/test_mcp_http.py`는 로컬 실제 HTTP socket으로 lifecycle, JSON/SSE, session, Origin, 인증, timeout, redirect와 token 분리를 검증한다. `tests/test_mcp_oauth.py`는 실제 OAuth HTTP fixture로 protected resource/AS discovery, PKCE, SSRF, redirect, callback replay와 token claim binding을 검증한다. `tests/test_mcp_stdio.py`와 `tests/test_receipts.py`는 실제 subprocess stdio 경계와 외부 전송 없는 transaction reconciliation을 검증한다.
+`tests/test_core.py`는 M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 인수·결과 secret, M9 Unicode 목적지·미선언 부작용·사후 egress를 검증한다. 정상 호출, SHADOW 비집행, 승인 binding, idempotency도 함께 검증한다. `tests/test_architecture.py`는 Architecture compile, 보안 lint, Dynamic Edge와 runtime drift를 검증한다. `tests/test_mcp_transport.py`는 실제 MCP JSON-RPC D1/D3/D4 경계, exact digest binding, drift·삭제, trusted context와 dispatch 0을 검증한다. `tests/test_mcp_http.py`는 로컬 실제 HTTP socket으로 lifecycle, JSON/SSE, session, Origin, 인증, timeout, redirect와 token 분리를 검증한다. `tests/test_mcp_oauth.py`는 실제 OAuth HTTP fixture로 protected resource/AS discovery, PKCE, SSRF, redirect, callback replay와 token claim binding을 검증한다. `tests/test_mcp_stdio.py`와 `tests/test_receipts.py`는 실제 subprocess stdio 경계와 외부 전송 없는 transaction reconciliation을 검증한다. `tests/test_ledger_http.py`와 `tests/test_postgres_ledger.py`는 event/trace API와 DB role tenant binding을 검증하며, PostgreSQL 16 live 시험은 DSN이 있는 CI에서 실행된다.
 
 이는 [05 검증 계획](05-l1-security-validation-plan.md)의 전체 M1–M9 matrix 완료를 뜻하지 않는다. 특히 다음 항목은 통합 fixture가 필요하다.
 
@@ -60,16 +62,15 @@ status: active
 - IdP별 JWT/JWKS 또는 introspection verifier와 browser consent adapter
 - production OS sandbox backend와 서명된 attestation verifier
 - RAG/config/file canary corpus
-- PostgreSQL Ledger adapter와 CORE-SIM-TENANT 전체 CI
-- HTTP API, streaming OpenTelemetry Collector adapter, Incident/response service
+- PostgreSQL CORE-SIM-TENANT 전체 CI와 자동 partition/retention 운영
+- streaming OpenTelemetry Collector adapter, Incident/response service
 - Studio의 저장소·Git review·policy deployment 연동
 
 ## 다음 구현 순서
 
-1. PostgreSQL Ledger adapter와 `/v1/events`, trace query API
-2. `05`의 M1–M9 전체 test ID 자동화와 RAG/config/file canary corpus
-3. Studio export → review → compile → SHADOW 배포 workflow
-4. OTLP Collector receiver와 signed Audit Sink evidence 검증
-5. inbound resumable SSE와 multi-instance session store
-6. production IdP verifier·browser consent·분산 OAuth transaction store
-7. production OS sandbox backend와 signed attestation verifier
+1. `05`의 M1–M9 전체 test ID 자동화와 RAG/config/file canary corpus
+2. Studio export → review → compile → SHADOW 배포 workflow
+3. OTLP Collector receiver와 signed Audit Sink evidence 검증
+4. inbound resumable SSE와 multi-instance session store
+5. production IdP verifier·browser consent·분산 OAuth transaction store
+6. production OS sandbox backend와 signed attestation verifier

@@ -40,6 +40,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - [`docs/09-mcp-transport-enforcement.md`](docs/09-mcp-transport-enforcement.md): Architecture manifest와 MCP JSON-RPC 집행을 연결하는 어댑터
 - [`docs/10-mcp-oauth-identity-guard.md`](docs/10-mcp-oauth-identity-guard.md): OAuth discovery, PKCE, SSRF/redirect와 token identity binding
 - [`docs/11-mcp-stdio-sandbox-receipts.md`](docs/11-mcp-stdio-sandbox-receipts.md): stdio process sandbox attestation과 fake external receipt reconciliation
+- [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.md): PostgreSQL RLS·append-only Ledger adapter와 event/trace API
 
 ## 기본 구현 전략
 
@@ -52,7 +53,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 
 ## 현재 구현
 
-문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. 외부 런타임 의존성 없이 다음 기능을 실행할 수 있다.
+문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. Core는 외부 런타임 의존성이 없고 PostgreSQL adapter만 optional `postgres` extra를 사용한다.
 
 - `ActorSpec`, `LinkPolicy`, `define_actor()`, `connect()`, `wrap()` SDK
 - MCP Tool 정의 canonical/raw digest와 `DISCOVERED` → `APPROVED` → `ACTIVE` 상태 전이
@@ -68,7 +69,8 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - contextual Connector와 외부 전송 없는 fake receipt·compensation reconciliation
 - 사후 downstream receipt reconciliation과 `REVOKE` 증거
 - 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
-- PostgreSQL partition, RLS, append-only migration
+- PostgreSQL partition, `session_user` 기반 FORCE RLS, append-only migration·adapter
+- tenant·scope·idempotency가 결합된 `POST /v1/events`, cursor 기반 `GET /v1/traces/{trace_id}`
 - 박스/연결선 기반 `ArchitectureGraph`와 실행 가능한 JSON Schema
 - PREVENT·DETECT·RESPOND·EVIDENCE 및 DECLARED·OBSERVED·ENFORCED·RECONCILED 보장 수준
 - Multi-Agent Dynamic Edge Contract와 설계/런타임 drift 비교
@@ -96,6 +98,9 @@ npm run dev
 
 # editable install을 원하는 경우
 python3 -m pip install -e .
+
+# PostgreSQL adapter까지 설치하는 경우
+python3 -m pip install -e '.[postgres]'
 ```
 
 주요 경로는 다음과 같다.
@@ -105,16 +110,19 @@ python3 -m pip install -e .
 | `src/agent_interlock/` | SDK, Registry, 정책, Gateway, Ledger |
 | `schemas/` | Actor와 Event Envelope JSON Schema |
 | `schemas/architecture.schema.json` | Canvas와 compiler가 공유하는 Architecture 계약 |
+| `schemas/ledger-api.openapi.yaml` | Event ingest·trace query OpenAPI 계약 |
 | `migrations/postgresql/` | PostgreSQL 초기 schema와 partition helper |
 | `tests/test_core.py` | L1 핵심 공격·정상 회귀 시험 |
 | `tests/test_mcp_http.py` | 실제 HTTP socket 기반 MCP lifecycle·JSON/SSE·보안 carrier 시험 |
 | `tests/test_mcp_oauth.py` | 실제 OAuth fixture 기반 discovery·PKCE·SSRF·token binding 시험 |
 | `tests/test_mcp_stdio.py` | 실제 subprocess 기반 stdio lifecycle·sandbox·timeout 시험 |
 | `tests/test_receipts.py` | fake external transaction·receipt 0/1·reconciliation 시험 |
+| `tests/test_ledger_http.py` | 실제 socket 기반 tenant·scope·idempotency·pagination 시험 |
+| `tests/test_postgres_ledger.py` | DB role binding과 선택적 PostgreSQL 16 live 시험 |
 | `examples/secure_email.py` | 최소 실행 예제 |
 | `examples/secure_multi_agent_architecture.json` | Multi-Agent 보안 아키텍처 예제 |
 | `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |
 | `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
 | `studio/` | Actor 박스·관계 보안 편집 및 manifest export UI |
 
-현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·Streamable HTTP carrier, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·token binding, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 fail-closed process/receipt 경계를 포함한다. IdP별 서명 검증/browser adapter, platform별 production sandbox backend, inbound resumable SSE store, PostgreSQL adapter와 운영 API는 다음 통합 단계다.
+현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·Streamable HTTP carrier, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·token binding, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 fail-closed process/receipt 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md)의 tenant별 저장·조회 경계를 포함한다. IdP별 서명 검증/browser adapter, platform별 production sandbox backend, inbound resumable SSE store, persistent Definition Registry와 signed Audit Sink는 다음 통합 단계다.

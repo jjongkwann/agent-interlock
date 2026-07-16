@@ -24,6 +24,7 @@ status: active
 | Architecture를 MCP 호출에 집행 | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) |
 | MCP OAuth discovery·token binding 구현 | [10 MCP OAuth Identity Guard](10-mcp-oauth-identity-guard.md) | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) |
 | 로컬 MCP process와 부작용 증거 구현 | [11 MCP stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md) | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) |
+| PostgreSQL Ledger와 event/trace API 운영 | [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md) | [01 프로젝트 기획](01-project-plan.md#9-postgresql-mvp-ddl) |
 
 ## 2. 문서별 책임
 
@@ -40,6 +41,7 @@ status: active
 | `09-mcp-transport-enforcement.md` | Architecture compile, MCP JSON-RPC와 Streamable HTTP 실집행 | OAuth·stdio sandbox·resumable SSE 운영 구현 |
 | `10-mcp-oauth-identity-guard.md` | OAuth metadata discovery, PKCE, redirect/SSRF, token claims binding | IdP별 서명 검증·browser UI·분산 token 저장소 |
 | `11-mcp-stdio-sandbox-receipts.md` | stdio process/JSONL 제한, OS sandbox attestation, fake receipt reconciliation | platform별 sandbox 설치·운영 정책 |
+| `12-postgresql-ledger-api.md` | PostgreSQL adapter, RLS·append-only migration, `/v1/events`·trace API | HA proxy·pool·partition scheduler·signed Audit Sink 운영 |
 
 ## 3. 추적 ID
 

@@ -1,0 +1,228 @@
+openapi: 3.1.0
+info:
+  title: Agent Interlock Ledger API
+  version: 0.1.0
+  description: Tenant-bound event ingestion and bounded trace queries.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Loopback reference server; production requires TLS at a trusted proxy.
+security:
+  - bearerAuth: []
+paths:
+  /v1/events:
+    post:
+      operationId: ingestEvent
+      summary: Append one normalized event
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventInput'
+      responses:
+        '201':
+          description: Event appended or an exact idempotent replay returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: '#/components/schemas/Event'
+                additionalProperties: false
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409':
+          description: Idempotency key is bound to a different normalized event
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/traces/{trace_id}:
+    get:
+      operationId: getTrace
+      summary: Query one tenant-scoped trace in canonical event order
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: trace_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 256}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+        - name: cursor
+          in: query
+          schema: {type: string, minLength: 1, maxLength: 512}
+      responses:
+        '200':
+          description: Trace page; an unknown or cross-tenant trace is an empty page
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TracePage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A token verified by the configured authenticator and bound to tenant, scopes, and allowed source Actor IDs; do not decode an unverified JWT.
+  parameters:
+    TenantHeader:
+      name: X-Interlock-Tenant-Id
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+      description: Must exactly match the authenticated principal tenant.
+    IdempotencyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 200}
+  schemas:
+    EventInput:
+      type: object
+      required: [event_type, tenant_id, trace_id, span_id, source_actor_id, payload]
+      properties:
+        event_type:
+          $ref: '#/components/schemas/EventType'
+        tenant_id: {type: string, minLength: 1}
+        trace_id: {type: string, minLength: 1, maxLength: 256}
+        span_id: {type: string, minLength: 1, maxLength: 256}
+        parent_span_id: {type: [string, 'null'], maxLength: 256}
+        interaction_id: {type: [string, 'null'], maxLength: 256}
+        source_actor_id: {type: string, minLength: 1, maxLength: 512}
+        target_actor_id: {type: [string, 'null'], maxLength: 512}
+        relationship_type: {type: string, minLength: 1, maxLength: 64, default: INVOKES}
+        relationship_id: {type: string, pattern: '^REL-[0-9]{2}$', default: REL-05}
+        severity: {$ref: '#/components/schemas/Severity'}
+        environment: {type: string, enum: [DEV, STAGE, PROD], default: DEV}
+        data_source:
+          type: string
+          enum: [PRODUCTION, SIMULATION, RED_TEAM, TEST]
+          default: PRODUCTION
+        payload:
+          type: object
+          description: The _interlock key is reserved; the API adds authenticated producer metadata.
+      additionalProperties: false
+    Event:
+      type: object
+      required:
+        - event_id
+        - event_type
+        - schema_version
+        - occurred_at
+        - ingested_at
+        - tenant_id
+        - environment
+        - data_source
+        - trace_id
+        - span_id
+        - parent_span_id
+        - interaction_id
+        - source_actor_id
+        - target_actor_id
+        - relationship_type
+        - relationship_id
+        - severity
+        - payload
+        - integrity_hash
+      properties:
+        event_id: {type: string, format: uuid}
+        event_type: {$ref: '#/components/schemas/EventType'}
+        schema_version: {type: string, const: '1.0'}
+        occurred_at: {type: string, format: date-time}
+        ingested_at: {type: string, format: date-time}
+        tenant_id: {type: string, minLength: 1}
+        environment: {type: string, enum: [DEV, STAGE, PROD]}
+        data_source: {type: string, enum: [PRODUCTION, SIMULATION, RED_TEAM, TEST]}
+        trace_id: {type: string, minLength: 1, maxLength: 256}
+        span_id: {type: string, minLength: 1, maxLength: 256}
+        parent_span_id: {type: [string, 'null'], maxLength: 256}
+        interaction_id: {type: [string, 'null'], maxLength: 256}
+        source_actor_id: {type: string, minLength: 1, maxLength: 512}
+        target_actor_id: {type: [string, 'null'], maxLength: 512}
+        relationship_type: {type: string, minLength: 1, maxLength: 64}
+        relationship_id: {type: string, pattern: '^REL-[0-9]{2}$'}
+        severity: {$ref: '#/components/schemas/Severity'}
+        payload: {type: object}
+        integrity_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+      additionalProperties: false
+    TracePage:
+      type: object
+      required: [trace_id, events, next_cursor]
+      properties:
+        trace_id: {type: string}
+        events:
+          type: array
+          maxItems: 500
+          items: {$ref: '#/components/schemas/Event'}
+        next_cursor: {type: [string, 'null']}
+      additionalProperties: false
+    EventType:
+      type: string
+      enum:
+        - INTERACTION_REQUESTED
+        - DATA_FLOW_OBSERVED
+        - CONTROL_EVALUATED
+        - ACTION_EXECUTED
+        - INTERACTION_COMPLETED
+        - SECURITY_OUTCOME_SET
+        - DETECTION_RAISED
+        - INCIDENT_UPDATED
+        - CONTROL_HEALTH_CHANGED
+        - POLICY_CHANGED
+        - TEST_EXECUTED
+    Severity:
+      type: string
+      enum: [INFO, LOW, MEDIUM, HIGH, CRITICAL]
+      default: INFO
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+          additionalProperties: false
+      additionalProperties: false
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Missing or invalid bearer authentication
+      headers:
+        WWW-Authenticate: {schema: {type: string}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: Principal tenant, scope, or origin denied
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    TooLarge:
+      description: Request body exceeds the configured bound
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unavailable:
+      description: Ledger unavailable; storage details are not disclosed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
