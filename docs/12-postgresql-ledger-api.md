@@ -1,7 +1,7 @@
 ---
 title: PostgreSQL Interaction Ledger와 Query API
-date: 2026-07-16
-version: 0.1.0
+date: 2026-07-17
+version: 0.2.0
 status: active
 ---
 
@@ -93,6 +93,7 @@ Psycopg connection은 명시적으로 commit/rollback/close한다. 읽기 역시
 |---|---|---|---|
 | `POST` | `/v1/events` | `events:write` | Bearer, tenant header/body, `Idempotency-Key`, JSON 256 KiB 기본 상한 |
 | `GET` | `/v1/traces/{trace_id}` | `events:read` | tenant 격리, `limit≤500`, opaque cursor, body 금지 |
+| `POST` | `/v1/traces` | `telemetry:write` | OTLP/HTTP JSON decode, principal tenant/header binding, context 누락 issue 반환, body 상한; Ledger append 없음 |
 
 공통으로 `X-Interlock-Tenant-Id`가 인증 principal tenant와 정확히 같아야 한다. Event producer는 principal의 `allowed_source_actor_ids` 안에 있는 `source_actor_id`만 기록할 수 있어 같은 tenant 안의 다른 Actor를 사칭할 수 없다. API는 producer가 덮어쓸 수 없는 `payload._interlock.producerSubject`를 추가하고 이 값을 integrity hash와 idempotency binding에 포함한다. 다른 tenant의 동일 trace ID 조회는 존재 여부를 누설하지 않고 빈 page를 반환한다. 응답은 `Cache-Control: no-store`, `nosniff`, restrictive CSP를 포함한다.
 
@@ -132,11 +133,13 @@ server.serve_forever()
 - tenant B에서 A trace 0 row
 - 관리자 UPDATE를 append-only trigger가 거부
 - 실제 psycopg adapter의 append, replay, conflict, pagination
+- OTLP/HTTP JSON receiver의 인증·tenant/scope·context 누락 처리
+- `SignedAuditSink`의 integrity 선검증, detached seal·tamper·record swap 거부
 
 ## 6. 현재 경계
 
 - Migration runner·자동 partition scheduler·retention job은 포함하지 않는다.
 - connection pool은 제공하지 않는다. tenant별 인증 credential을 유지하는 pool/factory를 주입해야 한다.
 - reference API는 sync HTTP이며 HA, distributed rate limit, TLS termination을 제공하지 않는다.
-- producer 서명·mTLS, signed Audit Sink, hash chain/WORM 복제는 다음 관찰성 단계다.
+- symmetric keyed `SignedAuditSink` reference는 제공하지만 Ledger/API와 외부 보존소 사이의 durable export pipeline은 제공하지 않는다. producer 비대칭 서명·mTLS, KMS/HSM key 관리, hash chain/WORM 복제는 운영 관찰성 단계다.
 - PostgreSQL live 검증은 로컬에서 통과했지만 CI에서는 `INTERLOCK_TEST_POSTGRES_DSN_TENANT_A/B`를 설정해야 실행되며, 없으면 해당 integration test만 skip한다.

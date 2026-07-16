@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Agent Interlock Ledger API
-  version: 0.1.0
-  description: Tenant-bound event ingestion and bounded trace queries.
+  version: 0.2.0
+  description: Tenant-bound event ingestion, OTLP/HTTP runtime decoding, and bounded trace queries.
 servers:
   - url: http://127.0.0.1:8080
     description: Loopback reference server; production requires TLS at a trusted proxy.
@@ -42,6 +42,30 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/traces:
+    post:
+      operationId: importOTLPTraces
+      summary: Decode one authenticated OTLP/HTTP JSON export for runtime reconciliation
+      description: Requires the telemetry:write scope. The reference endpoint returns observations and issues but does not append Ledger events.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OTLPTraceExport'
+      responses:
+        '200':
+          description: OTLP spans decoded into security relationship observations
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TelemetryImportResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '413': {$ref: '#/components/responses/TooLarge'}
         '503': {$ref: '#/components/responses/Unavailable'}
   /v1/traces/{trace_id}:
@@ -167,6 +191,47 @@ components:
           maxItems: 500
           items: {$ref: '#/components/schemas/Event'}
         next_cursor: {type: [string, 'null']}
+      additionalProperties: false
+    OTLPTraceExport:
+      type: object
+      required: [resourceSpans]
+      properties:
+        resourceSpans:
+          type: array
+          items: {type: object}
+      additionalProperties: true
+    TelemetryObservation:
+      type: object
+      required: [source_actor_id, target_actor_id, relationship_type, relationship_id, interaction_id]
+      properties:
+        source_actor_id: {type: string}
+        target_actor_id: {type: string}
+        relationship_type: {type: string}
+        relationship_id: {type: string}
+        interaction_id: {type: [string, 'null']}
+      additionalProperties: false
+    TelemetryImportIssue:
+      type: object
+      required: [code, message, span_id]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        span_id: {type: [string, 'null']}
+      additionalProperties: false
+    TelemetryImportResult:
+      type: object
+      required: [format, observations, control_evaluated_interactions, issues]
+      properties:
+        format: {type: string, const: OTLP_JSON}
+        observations:
+          type: array
+          items: {$ref: '#/components/schemas/TelemetryObservation'}
+        control_evaluated_interactions:
+          type: array
+          items: {type: string}
+        issues:
+          type: array
+          items: {$ref: '#/components/schemas/TelemetryImportIssue'}
       additionalProperties: false
     EventType:
       type: string

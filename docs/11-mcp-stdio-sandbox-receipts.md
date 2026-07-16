@@ -1,7 +1,7 @@
 ---
 title: MCP stdio Sandbox와 External Receipt
-date: 2026-07-16
-version: 1.0.0
+date: 2026-07-17
+version: 1.1.0
 status: active
 ---
 
@@ -82,6 +82,8 @@ Architecture 예제의 REL-05에는 `MCP_GATEWAY`와 `SANDBOX` PREVENT control�
 
 기본 backend인 `DenyUnisolatedSandboxBackend`는 항상 fail closed한다. `AttestedExternalSandboxBackend`는 digest가 고정된 운영 launcher/container adapter를 연결하는 계약이며, 그 launcher 자체가 OS 격리를 실제로 집행해야 한다. 필요한 attestation bit가 하나라도 없으면 subprocess를 만들지 않는다.
 
+`AttestationVerifier`는 backend별 신뢰 key로 canonical attestation 서명과 모든 restriction bit를 검증한다. `BubblewrapSandboxBackend`는 Linux에서 private root·mount와 network namespace를 구성하는 reference launch plan을 만들고 서명한다. 현재 계약은 seccomp FD를 전달하지 않으므로 child process 제한을 주장하지 않으며, `allow_child_processes=False` profile은 실행 전에 거부한다.
+
 `DirectTestSandboxBackend`는 이름 그대로 시험 전용이다. `allow_unenforced_test_mode=True`가 profile digest에 명시된 경우에만 실행되며 attestation은 세 격리를 모두 `false`로 기록한다. 이 경로의 성공을 production sandbox 증거로 사용할 수 없다.
 
 ```python
@@ -158,6 +160,8 @@ outcome = gateway.reconcile_receipt_store(
 - stdout noise, oversized response, server request 차단
 - timeout request 1회와 전체 process group 종료
 - stdio artifact set과 Architecture/MCPServerProfile exact binding
+- attestation 서명·wrong-key·tamper·미서명 거부와 client verifier 강제
+- Bubblewrap argv·unsafe mount 거부·정직한 fs/network/child restriction bit
 
 `tests/test_receipts.py`는 정상 receipt 1, 정책 차단 receipt 0, idempotent transaction 1, hidden egress의 `PARTIALLY_EXECUTED`/`REVOKE`, compensation과 cross-decision binding을 검증한다.
 
@@ -165,11 +169,11 @@ outcome = gateway.reconcile_receipt_store(
 
 ## 6. 남은 운영 경계
 
-reference core는 OS sandbox를 흉내 내지 않는다. 운영 완료를 위해서는 다음 중 하나가 `AttestedExternalSandboxBackend` 계약을 충족해야 한다.
+reference core에는 서명 attestation verifier와 Linux Bubblewrap launch-plan backend가 있다. 다만 현재 자동 검증은 argv와 증거 계약 수준이며 실제 Linux+bwrap process 격리를 CI에서 실행하지 않는다. 운영 완료를 위해서는 Bubblewrap live 시험 또는 다음 중 하나가 같은 attestation 계약을 충족해야 한다.
 
 - Linux user/mount/network namespace와 seccomp/cgroup 정책
 - gVisor, Kata Containers 또는 hardened container runtime
 - macOS App Sandbox처럼 platform에서 지원하는 격리 프로파일
 - Kubernetes workload sandbox와 deny-by-default NetworkPolicy
 
-추가로 launcher attestation 서명 검증, immutable artifact mount/FD execution으로 digest 검사와 exec 사이 TOCTOU 제거, 장기 process supervisor와 운영 sandbox health telemetry가 필요하다.
+추가로 seccomp 기반 child-process 강제, 목적지별 network egress, immutable artifact mount/FD execution으로 digest 검사와 exec 사이 TOCTOU 제거, macOS backend, 장기 process supervisor와 운영 sandbox health telemetry가 필요하다. reference의 symmetric signing key는 운영에서 KMS/HSM 발급·회전·폐기 체계로 교체해야 한다.

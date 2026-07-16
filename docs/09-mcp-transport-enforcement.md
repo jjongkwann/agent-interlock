@@ -1,8 +1,8 @@
 ---
 title: Agent Interlock MCP Transport 집행 어댑터
 tags: [agent-interlock, mcp, architecture, enforcement, json-rpc]
-date: 2026-07-16
-version: 1.1
+date: 2026-07-17
+version: 1.2
 status: implemented-reference
 ---
 
@@ -174,6 +174,8 @@ Tool 승인 절차는 `tools/list → observed digest 확인 → reviewed manife
 - initialize → initialized lifecycle과 protocol version 협상
 - session header 수립·후속 요청 binding·404 만료
 - JSON 응답, POST SSE 응답, GET SSE notification
+- inbound `SessionStore`의 principal binding·READY 전이·GET SSE·`Last-Event-ID` replay·DELETE
+- 하나의 공유 store를 사용하는 carrier instance 사이 session lifecycle 연속성
 - redirect 미추적, timeout/response size 경계
 - Origin·Host·authentication·Accept·content type 검증
 - authenticated principal과 trusted invocation context 결합
@@ -184,11 +186,11 @@ Tool 승인 절차는 `tools/list → observed digest 확인 → reviewed manife
 
 현재 carrier를 production 운영과 나머지 실행 경계로 확장하려면 다음이 필요하다.
 
-1. platform별 production OS sandbox backend와 signed attestation verifier
-2. persistent Definition Registry와 OTLP Collector·signed Audit Sink export
-3. inbound GET SSE 송신, resumable event store와 multi-instance lifecycle/session store
+1. platform별 production OS sandbox live 검증과 운영 attestation issuer·key rotation
+2. persistent Definition Registry와 OTLP gRPC Collector·외부 KMS/WORM Audit Sink export
+3. Redis/PostgreSQL 기반 분산 `SessionStore`, event retention·backpressure와 multi-instance 장애 복구
 4. server-initiated request, 비동기 task, cancellation/replay 정책
 
 공식 [MCP Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)과 [Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)가 금지하는 token passthrough는 [10 OAuth Identity Guard](10-mcp-oauth-identity-guard.md)가 discovery·token exchange 단계부터 차단한다. stdio process와 sandbox attestation은 [11 stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md)를 따른다.
 
-downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 동기 JSON 응답만 반환하고 GET SSE에는 405를 반환한다. 이는 명세가 허용하는 non-listening endpoint 동작이지만 server push가 필요한 배포는 resumable SSE event store를 추가해야 한다. server-initiated JSON-RPC request는 현재 fail closed한다.
+downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 `SessionStore`를 주입하면 인증 principal에 결합된 session의 GET SSE를 송신하고 `Last-Event-ID` 이후 event를 재전송하며, store가 없으면 405로 fail closed한다. 기본 `InMemorySessionStore`는 단일 프로세스 reference이므로 HA 배포는 같은 protocol의 분산 store가 필요하다. server-initiated JSON-RPC request는 현재 fail closed한다.

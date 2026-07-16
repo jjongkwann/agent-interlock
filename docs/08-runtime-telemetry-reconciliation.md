@@ -1,7 +1,7 @@
 ---
 title: Runtime Telemetry와 Design/Runtime Reconciliation
-date: 2026-07-16
-version: 0.1.0
+date: 2026-07-17
+version: 0.2.0
 status: active
 ---
 
@@ -16,7 +16,7 @@ Architecture manifest의 의도와 실제 Agent 실행을 비교해 다음을 �
 - `CONTROL_EVALUATED` 없이 실행된 interaction
 - 보안 상관분석에 필요한 context가 빠진 GenAI/MCP span
 
-Studio와 CLI는 Interlock Ledger event 배열 및 OTLP/HTTP JSON `resourceSpans`를 입력으로 받는다.
+Studio와 CLI는 Interlock Ledger event 배열 및 OTLP/HTTP JSON `resourceSpans`를 입력으로 받는다. Ledger HTTP API의 인증된 `POST /v1/traces`도 같은 OTLP/HTTP JSON을 받아 runtime observation과 import issue로 decode한다. 이 reference endpoint는 Ledger event를 append하지 않는다.
 
 ## 2. OpenTelemetry 기준
 
@@ -75,7 +75,8 @@ Studio의 `Runtime graph` 또는 `Drift` 탭에서 같은 JSON을 가져올 수 
 
 ## 6. 현재 제한과 다음 통합
 
-- OTLP/HTTP JSON 파일 import만 지원하며 Collector receiver는 아직 없다.
+- OTLP/HTTP JSON 파일 import와 인증된 HTTP receiver는 구현되어 있다. OTLP/gRPC `:4317`, 표준 Collector 배포 설정과 backpressure·queue는 아직 없다.
+- `SignedAuditSink`는 integrity 검증을 통과한 event를 symmetric keyed signature로 seal하는 reference다. 비대칭/KMS key, workload mTLS와 별도 WORM 보존소 export는 아직 없다.
 - Langfuse·LangSmith 등 vendor trace adapter는 아직 없다.
 - 표준 attribute 변경을 흡수할 semantic convention version adapter가 필요하다.
 - Dynamic Sub-Agent instance가 다시 source가 되는 관계는 admission identity registry와 함께 검증해야 한다.

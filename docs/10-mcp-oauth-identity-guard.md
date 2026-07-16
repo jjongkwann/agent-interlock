@@ -1,7 +1,7 @@
 ---
 title: MCP OAuth Identity Guard
-date: 2026-07-16
-version: 1.0.0
+date: 2026-07-17
+version: 1.1.0
 status: active
 ---
 
@@ -58,8 +58,11 @@ status: active
 | PKCE | metadata에 `S256` 명시 필수, 43–128자 verifier, SHA-256 base64url challenge | authorization 시작 차단 |
 | Authorization request | 등록 redirect URI 정확 일치, `state`, `resource`, challenge scope 결합 | transaction 발급 차단 |
 | Callback | scheme/authority/path, state, code/error 배타성, 만료, one-time consume | transaction 폐기 |
+| Consent adapter | loopback-only callback listener, exact one-time callback와 명시적 browser opener | timeout·두 번째 callback 거부 |
 | Token request | `resource`, 동일 redirect URI, code verifier 필수, redirect 금지, one-time consume | 재교환·redirect 차단 |
-| Token verification | 외부 signature verifier 또는 introspection 결과로 issuer/audience/resource/actor/scope/expiry 검사 | token 공급 차단 |
+| Opaque token verification | RFC 7662 introspection, client auth, redirect/SSRF/size 제한, `active`와 claim shape 검사 | token 공급 차단 |
+| JWT verification | optional `jwt` extra의 JWKS 기반 RS256/ES256/EdDSA, alg·kid·iss·exp/nbf 검사 | token 공급 차단 |
+| Transaction state | 교체 가능한 one-time `OAuthTransactionStore`, 단일 노드 메모리 reference | replay 시 transaction 없음 |
 | Token handling | access token과 PKCE/state의 `repr` 정제, token fingerprint만 `CredentialClaims`에 저장 | 원장에 raw token 미저장 |
 | SSRF | HTTPS 기본, host allowlist, userinfo/fragment 차단, DNS 결과의 non-public IP 차단 | fetch 전 차단 |
 | 개발 profile | 명시적 port의 loopback HTTP만 별도 opt-in | 기본 profile에서는 차단 |
@@ -120,7 +123,7 @@ client = MCPStreamableHTTPClient(
 trusted_credential_claims = token_provider.credential
 ```
 
-`verify_signature_or_introspect`는 access token 서명 검증 또는 Authorization Server introspection을 수행하고 `VerifiedAccessTokenClaims`를 반환해야 한다. 단순 JWT payload decode 결과는 이 인터페이스에 넣으면 안 된다. `trusted_credential_claims`는 `MCPInvocationContext.credential`에 전달해 Gateway 정책과 동일한 actor/resource binding을 집행한다.
+`verify_signature_or_introspect`는 `MCPJWKSVerifier`, `MCPTokenIntrospectionVerifier` 또는 같은 계약의 IdP adapter로 구성하고 `VerifiedAccessTokenClaims`를 반환해야 한다. 단순 JWT payload decode 결과는 이 인터페이스에 넣으면 안 된다. loopback installed-app 흐름은 `LoopbackCallbackReceiver`와 `run_consent`로 authorization URI를 열고 정확한 callback URI를 받을 수 있다. `trusted_credential_claims`는 `MCPInvocationContext.credential`에 전달해 Gateway 정책과 동일한 actor/resource binding을 집행한다.
 
 ## 5. Redirect와 SSRF 운영 기준
 
@@ -130,16 +133,16 @@ trusted_credential_claims = token_provider.credential
 - `resolve_dns=True`가 기본이며 private, loopback, link-local, multicast, reserved, unspecified 주소를 차단한다. loopback HTTP는 시험 profile에서만 허용한다.
 - Python reference client의 검사와 실제 연결 사이에는 DNS TOCTOU 가능성이 남는다. 운영 배포에서는 고정 egress proxy, DNS pinning 또는 service mesh 정책으로 같은 allowlist를 집행해야 한다.
 
-## 6. 의도적으로 포함하지 않은 운영 구성요소
+## 6. Reference 범위와 남은 운영 구성요소
 
-다음은 보안상 중요하지만 외부 의존성이 없는 reference core가 안전하게 대신 구현할 수 없는 영역이다.
+reference core는 loopback callback receiver, browser opener 계약, RFC 7662 introspection verifier, optional JWKS/JWT verifier와 one-time `InMemoryOAuthTransactionStore`를 제공한다. 이는 protocol 경계의 실행 가능한 기준이며 다음 운영 구성요소는 포함하지 않는다.
 
-- 사용자 로그인·동의 browser UI와 callback HTTP endpoint
-- JWKS cache, JWT 알고리즘 정책, 서명 검증 또는 RFC 7662 introspection client
+- 조직별 로그인·동의 UI, public HTTPS callback service와 consent audit workflow
+- IdP별 JWKS cache·rotation·장애 정책과 introspection credential 수명주기
 - client 등록·secret 저장소와 Dynamic Client Registration/Client ID Metadata Document
 - refresh token 암호화 저장·회전·폐기
 - DPoP, mTLS sender-constrained token
-- 분산 transaction/state store와 다중 instance replay 방지
+- Redis/PostgreSQL transaction/state store와 다중 instance 원자적 replay 방지
 - egress proxy에서의 DNS pinning과 실제 연결 IP 강제
 
 따라서 현재 상태는 OAuth protocol guard와 token binding reference 구현 완료이며, 특정 IdP와 연결하는 production identity adapter 완료를 뜻하지 않는다.
@@ -157,5 +160,7 @@ trusted_credential_claims = token_provider.credential
 - token request의 resource·verifier·redirect 결합
 - token endpoint redirect와 audience/actor/scope mismatch 차단
 - access token 비노출과 `CredentialClaims.exchanged=True`
+
+`tests/test_oauth_introspection.py`, `tests/test_mcp_jwt.py`, `tests/test_oauth_consent.py`는 introspection client-auth·claim mapping·one-time store, JWKS 서명과 알고리즘 혼동 거부, loopback callback one-time·timeout을 추가 검증한다. `tests/test_l1_matrix.py`는 M5 scope broadening/state replay와 M6 private redirect/safe consent 경로를 L1 추적 ID로 실행한다.
 
 기준 명세는 [MCP Authorization 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices), [RFC 9728 OAuth Protected Resource Metadata](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8707 Resource Indicators](https://www.rfc-editor.org/rfc/rfc8707), [RFC 7636 PKCE](https://www.rfc-editor.org/rfc/rfc7636)다.

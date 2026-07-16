@@ -1,19 +1,21 @@
 """docs/05 L1-SIM-M1..M9 validation matrix, automated as SIMULATION cases.
 
 Each test maps to a docs/05 test ID. Attack rows expect a blocking/quarantine
-verdict with downstream receipt 0; control rows expect ALLOW. Rows that need a
-whole new subsystem (runtime network egress, config-modification guard) or that
-are already covered by the transport/OAuth suites are recorded as explicit
+verdict with downstream receipt 0; control rows expect ALLOW. Rows that still
+need a new admission or runtime-network subsystem are recorded as explicit
 skips so the 34-ID matrix stays fully accounted for.
 """
 
 from __future__ import annotations
 
+import http.client
 import unittest
 from dataclasses import replace
+from urllib.parse import urlencode, urlsplit
 
 from agent_interlock import (
     ArgumentBindingError,
+    AuthorizationServerMetadata,
     ConfigGuard,
     ConfigGuardError,
     ConfigPrincipal,
@@ -25,15 +27,29 @@ from agent_interlock import (
     FakeExternalReceiptStore,
     FakeExternalSinkConnector,
     InMemoryConfigStore,
+    InMemoryLedger,
     InMemoryRuntimeConfigProbe,
     InvocationBlocked,
     InvocationIntent,
     LinkPolicy,
+    LoopbackCallbackReceiver,
+    MCPAuthorizationCodeFlow,
+    MCPAuthorizationDiscovery,
+    MCPHTTPError,
+    MCPOAuthError,
+    MCPProtectedResourceDiscovery,
+    MCPStreamableHTTPClient,
+    MCPStreamableHTTPClientConfig,
     MCPToolGateway,
+    OAuthSecurityProfile,
     PolicyMode,
+    ProtectedResourceMetadata,
     SideEffect,
+    run_consent,
 )
 from agent_interlock.security import canonical_destination, validate_authorization_url
+from mcp_http_fixture import AdversarialMCPHTTPServer
+from mcp_oauth_fixture import AdversarialOAuthServer
 
 from l1_harness import (
     ALLOWED_TEST_IDENTIFIER,
@@ -63,6 +79,36 @@ def _mail_connector(store: FakeExternalReceiptStore) -> FakeExternalSinkConnecto
         side_effect=SideEffect.EXTERNAL_WRITE,
         destination_resolver=lambda arguments: [arguments["to"]],
         result_factory=lambda arguments, receipt: {"status": "sent", "detail": receipt.transaction_id},
+    )
+
+
+def _oauth_code_flow(redirect_uri: str) -> MCPAuthorizationCodeFlow:
+    discovery = MCPAuthorizationDiscovery(
+        protected_resource=ProtectedResourceMetadata(
+            resource="https://mcp.example/mcp",
+            authorization_servers=("https://idp.example",),
+            scopes_supported=("mcp.read", "mcp.call"),
+        ),
+        authorization_server=AuthorizationServerMetadata(
+            issuer="https://idp.example",
+            authorization_endpoint="https://idp.example/authorize",
+            token_endpoint="https://idp.example/token",
+            code_challenge_methods_supported=("S256",),
+            scopes_supported=("mcp.read", "mcp.call"),
+        ),
+        required_scopes=("mcp.read",),
+    )
+    profile = OAuthSecurityProfile(
+        allowed_authorization_server_hosts=frozenset({"idp.example"}),
+        allowed_authorization_server_issuers=frozenset({"https://idp.example"}),
+        resolve_dns=False,
+    )
+    return MCPAuthorizationCodeFlow(
+        discovery,
+        profile,
+        client_id="registered-client",
+        registered_redirect_uris=frozenset({redirect_uri}),
+        allow_loopback_http=True,
     )
 
 
@@ -309,10 +355,25 @@ class M5ConfusedDeputyTests(unittest.TestCase):
         record_test_executed(gateway.ledger, test_id="L1-SIM-M5-003", verdict="ALLOW", passed=True)
 
     def test_l1_sim_m5_002_downscope_broaden(self):
-        self.skipTest("token-exchange scope broadening is exercised by tests/test_mcp_oauth.py")
+        redirect_uri = "http://127.0.0.1:8765/callback"
+        flow = _oauth_code_flow(redirect_uri)
+        with self.assertRaises(MCPOAuthError) as raised:
+            flow.begin(redirect_uri=redirect_uri, scopes=("mcp.read", "mcp.call"))
+        self.assertEqual(raised.exception.reason_code, "MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH")
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M5-002", verdict="BLOCK", passed=True)
 
     def test_l1_sim_m5_004_oauth_state_reuse(self):
-        self.skipTest("OAuth state/redirect replay is exercised by tests/test_mcp_oauth.py")
+        redirect_uri = "http://127.0.0.1:8765/callback"
+        flow = _oauth_code_flow(redirect_uri)
+        transaction = flow.begin(redirect_uri=redirect_uri)
+        callback = f"{redirect_uri}?{urlencode({'code': 'one-time-code', 'state': transaction.state})}"
+        self.assertEqual(flow.validate_callback(transaction, callback), "one-time-code")
+        with self.assertRaises(MCPOAuthError) as raised:
+            flow.validate_callback(transaction, callback)
+        self.assertEqual(raised.exception.reason_code, "MCP-OAUTH-CALLBACK-REPLAY")
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M5-004", verdict="BLOCK", passed=True)
 
 
 class M6ServerToClientTests(unittest.TestCase):
@@ -327,15 +388,100 @@ class M6ServerToClientTests(unittest.TestCase):
         self.assertTrue(validate_authorization_url("https://auth.example/oauth", allowed_hosts=allowed)[0])
         self.assertFalse(validate_authorization_url("javascript:alert(1)", allowed_hosts=allowed)[0])
         self.assertNotIn("://", shell_like.split("?")[1])  # query is inert data, not a command
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M6-001", verdict="BLOCK", passed=True)
 
     def test_l1_sim_m6_002_redirect_to_private_ip(self):
-        self.skipTest("SSRF redirect-to-private-IP is exercised by tests/test_mcp_oauth.py / test_mcp_http.py")
+        with AdversarialOAuthServer() as server:
+            server.metadata_redirect_location = "http://169.254.169.254/latest/meta-data"
+            challenge = f'Bearer resource_metadata="{server.base_url}/redirect-metadata"'
+            profile = OAuthSecurityProfile(
+                allowed_authorization_server_hosts=frozenset({"127.0.0.1"}),
+                allow_loopback_http=True,
+                resolve_dns=False,
+                timeout_seconds=1,
+                max_redirect_hops=1,
+            )
+            with self.assertRaises(MCPOAuthError) as raised:
+                MCPProtectedResourceDiscovery(server.endpoint, profile).discover(challenge)
+        self.assertEqual(raised.exception.reason_code, "MCP-OAUTH-URL-UNSAFE")
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M6-002", verdict="BLOCK", passed=True)
 
     def test_l1_sim_m6_003_oversized_malformed_result(self):
-        self.skipTest("oversized/malformed result quarantine is exercised by tests/test_mcp_http.py / test_mcp_transport.py")
+        gateway, revision, source, _ = build_gateway()
+        malformed = gateway.invoke(
+            tenant_id=TENANT,
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="reply"),
+            arguments=BENIGN_ARGS,
+            connector=lambda arguments: {
+                "content": [{"type": "resource", "uri": "file:///etc/passwd"}],
+                "structuredContent": {"status": ["not-a-string"]},
+                "isError": False,
+            },
+            idempotency_key="m6-003-malformed",
+        )
+        self.assertIn("SCHEMA_INVALID", malformed.labels)
+        self.assertTrue(malformed.value["isError"])
+        self.assertNotIn("file:///etc/passwd", repr(malformed.value))
+
+        with AdversarialMCPHTTPServer() as server:
+            client = MCPStreamableHTTPClient(
+                MCPStreamableHTTPClientConfig(
+                    endpoint=server.endpoint,
+                    allow_loopback_http=True,
+                    max_response_bytes=512,
+                ),
+                authorization_provider=lambda: "Bearer downstream-only",
+            )
+            client.initialize(client_name="l1-matrix", client_version="1.0.0")
+            server.oversized_response_bytes = 513
+            try:
+                with self.assertRaises(MCPHTTPError) as raised:
+                    client.call(
+                        {"jsonrpc": "2.0", "id": "m6-003", "method": "tools/list", "params": {}}
+                    )
+                self.assertEqual(raised.exception.reason_code, "MCP-HTTP-RESPONSE-TOO-LARGE")
+            finally:
+                server.oversized_response_bytes = 0
+                client.close_session()
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M6-003", verdict="QUARANTINE", passed=True)
 
     def test_l1_sim_m6_004_control_safe_url_open(self):
-        self.skipTest("safe URL open path belongs to the host browser adapter (idp-verifier consent workstream)")
+        with LoopbackCallbackReceiver() as receiver:
+            flow = _oauth_code_flow(receiver.redirect_uri)
+            transaction = flow.begin(redirect_uri=receiver.redirect_uri)
+            safe, reason = validate_authorization_url(
+                transaction.authorization_uri,
+                allowed_hosts=frozenset({"idp.example"}),
+            )
+            self.assertTrue(safe, reason)
+
+            def browser_opener(authorization_uri: str) -> None:
+                self.assertEqual(authorization_uri, transaction.authorization_uri)
+                target = urlsplit(receiver.redirect_uri)
+                connection = http.client.HTTPConnection(target.hostname, target.port, timeout=3)
+                try:
+                    query = urlencode({"code": "safe-code", "state": transaction.state})
+                    connection.request("GET", f"{target.path}?{query}")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    response.read()
+                finally:
+                    connection.close()
+
+            callback = run_consent(
+                transaction.authorization_uri,
+                receiver,
+                opener=browser_opener,
+                timeout=3,
+            )
+            self.assertEqual(flow.validate_callback(transaction, callback), "safe-code")
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M6-004", verdict="ALLOW", passed=True)
 
 
 class M8CredentialHarvestingTests(unittest.TestCase):

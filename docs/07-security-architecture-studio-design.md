@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock Security Architecture Studio 설계
-date: 2026-07-16
-version: 0.2.0
+date: 2026-07-17
+version: 0.2.1
 status: active
 ---
 
@@ -130,6 +130,7 @@ JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_i
 - Python compiler와 같은 `interlock.dev/v1alpha1` manifest 다운로드
 - Ledger·OTLP JSON import와 실제 Runtime Graph 생성
 - 미선언 관계, unobserved Design Edge, control bypass를 분리한 Drift 화면
+- CLI `architecture compile --shadow`의 CRITICAL review gate·전 Edge SHADOW 강제·안정적 bundle digest
 
 ```bash
 cd studio
@@ -141,9 +142,9 @@ npm run dev
 
 ## 8. 다음 단계
 
-1. manifest Git diff와 approval workflow
+1. manifest 저장소·Git diff·approval workflow와 remote deploy
 2. framework별 skeleton generator
-3. OTLP Collector receiver와 trace query API
+3. OTLP/gRPC Collector·Langfuse/LangSmith adapter와 trace 운영 저장소
 4. A2A Agent Card admission adapter
 5. Architecture manifest 기반 security fixture generator
-6. policy bundle 배포와 SHADOW simulation
+6. SHADOW bundle의 원격 배포·승격·rollback workflow
