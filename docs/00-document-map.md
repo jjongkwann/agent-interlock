@@ -23,6 +23,7 @@ status: active
 | 실행 trace와 설계 drift 분석 | [08 Runtime Telemetry](08-runtime-telemetry-reconciliation.md) | [07 Security Architecture Studio](07-security-architecture-studio-design.md) |
 | Architecture를 MCP 호출에 집행 | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) |
 | MCP OAuth discovery·token binding 구현 | [10 MCP OAuth Identity Guard](10-mcp-oauth-identity-guard.md) | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) |
+| 로컬 MCP process와 부작용 증거 구현 | [11 MCP stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md) | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) |
 
 ## 2. 문서별 책임
 
@@ -38,6 +39,7 @@ status: active
 | `08-runtime-telemetry-reconciliation.md` | Ledger·OTLP import, Interlock span 속성, drift와 신뢰 경계 | Collector·vendor adapter의 배포 설정 |
 | `09-mcp-transport-enforcement.md` | Architecture compile, MCP JSON-RPC와 Streamable HTTP 실집행 | OAuth·stdio sandbox·resumable SSE 운영 구현 |
 | `10-mcp-oauth-identity-guard.md` | OAuth metadata discovery, PKCE, redirect/SSRF, token claims binding | IdP별 서명 검증·browser UI·분산 token 저장소 |
+| `11-mcp-stdio-sandbox-receipts.md` | stdio process/JSONL 제한, OS sandbox attestation, fake receipt reconciliation | platform별 sandbox 설치·운영 정책 |
 
 ## 3. 추적 ID
 

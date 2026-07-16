@@ -46,27 +46,30 @@ status: active
 | Inbound MCP HTTP 보안 carrier | `MCPStreamableHTTPGatewayCarrier` | 실제 socket Origin·auth·token 분리 시험 |
 | OAuth Protected Resource·AS discovery | `mcp_oauth.py` | well-known 순서·resource/issuer mismatch 시험 |
 | PKCE·redirect·token resource binding | `MCPAuthorizationCodeFlow`, `MCPAuthorizationCodeTokenClient` | 실제 OAuth fixture·SSRF·replay·audience 시험 |
+| stdio JSONL·process lifecycle carrier | `MCPStdioClient` | 실제 subprocess lifecycle·noise·size·timeout·group kill 시험 |
+| stdio artifact·sandbox attestation binding | `StdioSandboxProfile`, `MCPStdioServerCaller` | digest mismatch·backend 누락·Architecture binding 시험 |
+| Fake external receipt·reconciliation | `FakeExternalReceiptStore`, contextual Connector | receipt 0/1·hidden egress·idempotency·compensation 시험 |
 
 ## 현재 자동화된 L1 범위
 
-`tests/test_core.py`는 M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 인수·결과 secret, M9 Unicode 목적지·미선언 부작용·사후 egress를 검증한다. 정상 호출, SHADOW 비집행, 승인 binding, idempotency도 함께 검증한다. `tests/test_architecture.py`는 Architecture compile, 보안 lint, Dynamic Edge와 runtime drift를 검증한다. `tests/test_mcp_transport.py`는 실제 MCP JSON-RPC D1/D3/D4 경계, exact digest binding, drift·삭제, trusted context와 dispatch 0을 검증한다. `tests/test_mcp_http.py`는 로컬 실제 HTTP socket으로 lifecycle, JSON/SSE, session, Origin, 인증, timeout, redirect와 token 분리를 검증한다. `tests/test_mcp_oauth.py`는 실제 OAuth HTTP fixture로 protected resource/AS discovery, PKCE, SSRF, redirect, callback replay와 token claim binding을 검증한다.
+`tests/test_core.py`는 M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 인수·결과 secret, M9 Unicode 목적지·미선언 부작용·사후 egress를 검증한다. 정상 호출, SHADOW 비집행, 승인 binding, idempotency도 함께 검증한다. `tests/test_architecture.py`는 Architecture compile, 보안 lint, Dynamic Edge와 runtime drift를 검증한다. `tests/test_mcp_transport.py`는 실제 MCP JSON-RPC D1/D3/D4 경계, exact digest binding, drift·삭제, trusted context와 dispatch 0을 검증한다. `tests/test_mcp_http.py`는 로컬 실제 HTTP socket으로 lifecycle, JSON/SSE, session, Origin, 인증, timeout, redirect와 token 분리를 검증한다. `tests/test_mcp_oauth.py`는 실제 OAuth HTTP fixture로 protected resource/AS discovery, PKCE, SSRF, redirect, callback replay와 token claim binding을 검증한다. `tests/test_mcp_stdio.py`와 `tests/test_receipts.py`는 실제 subprocess stdio 경계와 외부 전송 없는 transaction reconciliation을 검증한다.
 
 이는 [05 검증 계획](05-l1-security-validation-plan.md)의 전체 M1–M9 matrix 완료를 뜻하지 않는다. 특히 다음 항목은 통합 fixture가 필요하다.
 
 - inbound resumable GET SSE 송신과 multi-instance session/lifecycle store
 - IdP별 JWT/JWKS 또는 introspection verifier와 browser consent adapter
-- process/filesystem/network Connector sandbox
-- RAG/config/file canary corpus와 fake external receipt store
+- production OS sandbox backend와 서명된 attestation verifier
+- RAG/config/file canary corpus
 - PostgreSQL Ledger adapter와 CORE-SIM-TENANT 전체 CI
 - HTTP API, streaming OpenTelemetry Collector adapter, Incident/response service
 - Studio의 저장소·Git review·policy deployment 연동
 
 ## 다음 구현 순서
 
-1. stdio Connector sandbox와 fake external receipt store
-2. PostgreSQL Ledger adapter와 `/v1/events`, trace query API
-3. `05`의 M1–M9 전체 test ID 자동화
-4. Studio export → review → compile → SHADOW 배포 workflow
-5. OTLP Collector receiver와 signed Audit Sink evidence 검증
-6. inbound resumable SSE와 multi-instance session store
-7. production IdP verifier·browser consent·분산 OAuth transaction store
+1. PostgreSQL Ledger adapter와 `/v1/events`, trace query API
+2. `05`의 M1–M9 전체 test ID 자동화와 RAG/config/file canary corpus
+3. Studio export → review → compile → SHADOW 배포 workflow
+4. OTLP Collector receiver와 signed Audit Sink evidence 검증
+5. inbound resumable SSE와 multi-instance session store
+6. production IdP verifier·browser consent·분산 OAuth transaction store
+7. production OS sandbox backend와 signed attestation verifier

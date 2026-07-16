@@ -39,6 +39,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - [`docs/08-runtime-telemetry-reconciliation.md`](docs/08-runtime-telemetry-reconciliation.md): Ledger·OTLP 실행 trace와 Design/Runtime drift 계약
 - [`docs/09-mcp-transport-enforcement.md`](docs/09-mcp-transport-enforcement.md): Architecture manifest와 MCP JSON-RPC 집행을 연결하는 어댑터
 - [`docs/10-mcp-oauth-identity-guard.md`](docs/10-mcp-oauth-identity-guard.md): OAuth discovery, PKCE, SSRF/redirect와 token identity binding
+- [`docs/11-mcp-stdio-sandbox-receipts.md`](docs/11-mcp-stdio-sandbox-receipts.md): stdio process sandbox attestation과 fake external receipt reconciliation
 
 ## 기본 구현 전략
 
@@ -63,6 +64,8 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - MCP `tools/list`/`tools/call`/`notifications/tools/list_changed` JSON-RPC 집행과 Architecture digest binding
 - MCP 2025-11-25 Streamable HTTP JSON/SSE client, session binding, inbound Origin·auth·lifecycle carrier
 - MCP OAuth Protected Resource/Authorization Server discovery, PKCE S256, exact callback, resource-bound token exchange
+- MCP stdio JSONL client, artifact pin, sandbox attestation, timeout·process-group kill
+- contextual Connector와 외부 전송 없는 fake receipt·compensation reconciliation
 - 사후 downstream receipt reconciliation과 `REVOKE` 증거
 - 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
 - PostgreSQL partition, RLS, append-only migration
@@ -106,10 +109,12 @@ python3 -m pip install -e .
 | `tests/test_core.py` | L1 핵심 공격·정상 회귀 시험 |
 | `tests/test_mcp_http.py` | 실제 HTTP socket 기반 MCP lifecycle·JSON/SSE·보안 carrier 시험 |
 | `tests/test_mcp_oauth.py` | 실제 OAuth fixture 기반 discovery·PKCE·SSRF·token binding 시험 |
+| `tests/test_mcp_stdio.py` | 실제 subprocess 기반 stdio lifecycle·sandbox·timeout 시험 |
+| `tests/test_receipts.py` | fake external transaction·receipt 0/1·reconciliation 시험 |
 | `examples/secure_email.py` | 최소 실행 예제 |
 | `examples/secure_multi_agent_architecture.json` | Multi-Agent 보안 아키텍처 예제 |
 | `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |
 | `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
 | `studio/` | Actor 박스·관계 보안 편집 및 manifest export UI |
 
-현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·Streamable HTTP carrier, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·token binding을 포함한다. IdP별 서명 검증/browser adapter, stdio OS process/network sandbox, inbound resumable SSE store, PostgreSQL adapter와 운영 API는 다음 통합 단계다.
+현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·Streamable HTTP carrier, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·token binding, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 fail-closed process/receipt 경계를 포함한다. IdP별 서명 검증/browser adapter, platform별 production sandbox backend, inbound resumable SSE store, PostgreSQL adapter와 운영 API는 다음 통합 단계다.

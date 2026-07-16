@@ -143,6 +143,13 @@ class MCPTransportAdapter:
         profile: MCPServerProfile,
         call_server: ServerCaller,
     ) -> None:
+        if profile.transport == "stdio":
+            caller_digest = getattr(call_server, "artifact_set_digest", None)
+            caller_server_id = getattr(call_server, "server_id", None)
+            if caller_digest != profile.artifact_digest or caller_server_id != profile.server_id:
+                raise MCPArchitectureBindingError(
+                    "stdio caller must bind the approved server profile to its sandbox artifact set"
+                )
         self.gateway = gateway
         self.profile = profile
         self._call_server = call_server

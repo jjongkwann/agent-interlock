@@ -12,7 +12,8 @@ from .ledger import InMemoryLedger
 from .models import (
     ActionResult,
     ActorSpec,
-    Connector,
+    ConnectorExecutionContext,
+    ConnectorLike,
     ControlDecision,
     CredentialClaims,
     DataSource,
@@ -26,6 +27,7 @@ from .models import (
     ToolDefinition,
 )
 from .policy import EvaluationInput, evaluate
+from .receipts import FakeExternalReceiptStore
 from .registry import DefinitionRegistry, ToolRevision
 from .security import canonical_destination, destination_domain, sanitize_secrets, validate_schema
 
@@ -80,6 +82,7 @@ class MCPToolGateway:
         self._decisions: dict[str, _Pending] = {}
         self._approvals: dict[str, Approval] = {}
         self._idempotency: dict[tuple[str, str], tuple[str, InvocationResult]] = {}
+        self._execution_decisions: dict[str, str] = {}
 
     def register_actor(self, actor: ActorSpec, *, tool_id: str | None = None) -> None:
         self._actors[actor.id] = actor
@@ -222,7 +225,7 @@ class MCPToolGateway:
         self,
         decision_id: str,
         arguments: Mapping[str, Any],
-        connector: Connector,
+        connector: ConnectorLike,
         *,
         idempotency_key: str,
     ) -> InvocationResult:
@@ -249,8 +252,23 @@ class MCPToolGateway:
             raise InvocationBlocked(decision)
 
         execution_id = str(uuid.uuid4())
+        self._execution_decisions[execution_id] = decision.decision_id
+        connector_context = ConnectorExecutionContext(
+            connector_execution_id=execution_id,
+            tenant_id=pending.tenant_id,
+            decision_id=decision.decision_id,
+            interaction_id=decision.interaction_id,
+            trace_id=decision.trace_id,
+            arguments_hash=decision.arguments_hash,
+            expected_destinations=decision.canonical_destinations,
+        )
         try:
-            raw_result = connector(arguments)
+            contextual_execute = getattr(connector, "execute_with_context", None)
+            raw_result = (
+                contextual_execute(arguments, connector_context)
+                if callable(contextual_execute)
+                else connector(arguments)
+            )
         except Exception as error:
             self._append_action(pending, ActionResult.FAILED, execution_id, failure=str(error))
             self._append_outcome(pending, SecurityOutcome.UNKNOWN, execution_id)
@@ -267,7 +285,7 @@ class MCPToolGateway:
         self._idempotency[cache_key] = (request_fingerprint, result)
         return result
 
-    def invoke(self, *, connector: Connector, idempotency_key: str, **evaluation: Any) -> InvocationResult:
+    def invoke(self, *, connector: ConnectorLike, idempotency_key: str, **evaluation: Any) -> InvocationResult:
         cache_key = (evaluation["tenant_id"], idempotency_key)
         request_fingerprint = self._request_fingerprint(
             evaluation["source_actor_id"],
@@ -341,6 +359,8 @@ class MCPToolGateway:
         observed_destinations: tuple[str, ...],
         downstream_receipt_count: int,
         compensation_completed: bool = False,
+        downstream_byte_count: int = 0,
+        downstream_record_count: int = 0,
     ) -> SecurityOutcome:
         pending = self._decisions[decision_id]
         declared = observed_side_effect in {SideEffect.NONE, *pending.target.side_effects}
@@ -368,6 +388,8 @@ class MCPToolGateway:
                 "observedSideEffect": observed_side_effect.value,
                 "observedDestinations": observed_destinations,
                 "downstreamReceiptCount": downstream_receipt_count,
+                "downstreamByteCount": downstream_byte_count,
+                "downstreamRecordCount": downstream_record_count,
                 "response": "REVOKE",
                 "compensationCompleted": compensation_completed,
             },
@@ -396,8 +418,36 @@ class MCPToolGateway:
             None,
             downstream_receipt_count=downstream_receipt_count,
             compensation_completed=compensation_completed,
+            downstream_byte_count=downstream_byte_count,
+            downstream_record_count=downstream_record_count,
         )
         return outcome
+
+    def reconcile_receipt_store(
+        self,
+        decision_id: str,
+        connector_execution_id: str,
+        receipt_store: FakeExternalReceiptStore,
+    ) -> SecurityOutcome:
+        pending = self._decisions[decision_id]
+        if self._execution_decisions.get(connector_execution_id) != decision_id:
+            raise GatewayError("connector execution is not bound to the decision")
+        summary = receipt_store.summary(pending.tenant_id, connector_execution_id)
+        if summary.decision_id is not None and (
+            summary.decision_id != decision_id
+            or summary.interaction_id != pending.decision.interaction_id
+            or summary.arguments_hash != pending.decision.arguments_hash
+        ):
+            raise GatewayError("receipt binding does not match the approved invocation")
+        return self.reconcile_transaction(
+            decision_id,
+            observed_side_effect=summary.observed_side_effect,
+            observed_destinations=summary.observed_destinations,
+            downstream_receipt_count=summary.downstream_receipt_count,
+            compensation_completed=summary.compensation_completed,
+            downstream_byte_count=summary.byte_count,
+            downstream_record_count=summary.record_count,
+        )
 
     def _approval_valid(self, intent: InvocationIntent, tenant_id: str, arguments: Mapping[str, Any]) -> bool:
         if not intent.approval_id:

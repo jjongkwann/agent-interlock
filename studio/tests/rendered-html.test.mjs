@@ -55,6 +55,8 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /Runtime graph/);
   assert.match(page, /Import telemetry/);
   assert.match(page, /interlock\.control\.evaluated/);
+  assert.match(page, /stdio-process-sandbox/);
+  assert.match(page, /"SANDBOX"/);
   assert.match(layout, /Agent Interlock · Security Architecture Studio/);
   assert.match(packageJson, /"name": "agent-interlock-studio"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

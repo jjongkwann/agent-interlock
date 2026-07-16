@@ -9,6 +9,7 @@ from agent_interlock import (
     ArchitectureCompiler,
     ArchitectureGraph,
     ArchitectureLinter,
+    EnforcementPoint,
     FindingSeverity,
     InMemoryLedger,
     compare_runtime,
@@ -37,6 +38,11 @@ class ArchitectureModelTests(unittest.TestCase):
         self.assertTrue(delegation.dynamic)
         self.assertEqual(delegation.policy.max_delegation_depth, 2)
         self.assertEqual(delegation.target_selector.id_pattern, "agent.research*")
+        tool_edge = next(edge for edge in value.edges if edge.relationship_id == "REL-05")
+        self.assertIn(
+            EnforcementPoint.SANDBOX,
+            {control.enforcement_point for control in tool_edge.controls},
+        )
 
     def test_compiler_produces_actor_and_link_contracts(self):
         compiled = ArchitectureCompiler().compile(graph())

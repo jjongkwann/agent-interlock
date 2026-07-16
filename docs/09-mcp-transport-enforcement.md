@@ -184,13 +184,11 @@ Tool 승인 절차는 `tools/list → observed digest 확인 → reviewed manife
 
 현재 carrier를 production 운영과 나머지 실행 경계로 확장하려면 다음이 필요하다.
 
-1. OAuth protected resource metadata, audience/resource 검증, hop별 token exchange provider
-2. authorization redirect-hop allowlist, PKCE와 scope challenge
-3. stdio carrier: process allowlist, argument-array 실행, filesystem/network sandbox, timeout과 kill
-4. persistent Definition Registry·PostgreSQL Ledger와 OTLP Collector export
-5. inbound GET SSE 송신, resumable event store와 multi-instance lifecycle/session store
-6. server-initiated request, 비동기 task, cancellation/replay 정책
+1. platform별 production OS sandbox backend와 signed attestation verifier
+2. persistent Definition Registry·PostgreSQL Ledger와 OTLP Collector export
+3. inbound GET SSE 송신, resumable event store와 multi-instance lifecycle/session store
+4. server-initiated request, 비동기 task, cancellation/replay 정책
 
-공식 [MCP Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)과 [Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)가 금지하는 token passthrough를 carrier에서도 방지해야 한다. 현재 carrier는 inbound와 downstream credential provider를 분리하지만 OAuth discovery·token exchange 자체는 아직 구현하지 않았다.
+공식 [MCP Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)과 [Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)가 금지하는 token passthrough는 [10 OAuth Identity Guard](10-mcp-oauth-identity-guard.md)가 discovery·token exchange 단계부터 차단한다. stdio process와 sandbox attestation은 [11 stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md)를 따른다.
 
 downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 동기 JSON 응답만 반환하고 GET SSE에는 405를 반환한다. 이는 명세가 허용하는 non-listening endpoint 동작이지만 server push가 필요한 배포는 resumable SSE event store를 추가해야 한다. server-initiated JSON-RPC request는 현재 fail closed한다.

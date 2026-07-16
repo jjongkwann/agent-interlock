@@ -207,6 +207,14 @@
             "assurance": "ENFORCED"
           },
           {
+            "id": "stdio-process-sandbox",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "SANDBOX",
+            "assurance": "ENFORCED",
+            "description": "Pinned process profile with filesystem, network, and child-process isolation attestation"
+          },
+          {
             "id": "mcp-audit",
             "objective": "EVIDENCE",
             "timing": "POST_EXECUTION",

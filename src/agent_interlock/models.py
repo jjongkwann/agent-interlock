@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Protocol
 
 
 class ActorType(StrEnum):
@@ -241,4 +241,24 @@ class InvocationResult:
     labels: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class ConnectorExecutionContext:
+    connector_execution_id: str
+    tenant_id: str
+    decision_id: str
+    interaction_id: str
+    trace_id: str
+    arguments_hash: str
+    expected_destinations: tuple[str, ...] = ()
+
+
+class ContextualConnector(Protocol):
+    def execute_with_context(
+        self,
+        arguments: Mapping[str, Any],
+        context: ConnectorExecutionContext,
+    ) -> Any: ...
+
+
 Connector = Callable[[Mapping[str, Any]], Any]
+ConnectorLike = Connector | ContextualConnector

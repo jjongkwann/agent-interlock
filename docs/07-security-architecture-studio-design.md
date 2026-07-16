@@ -57,6 +57,10 @@ assurance: ENFORCED
 
 Canvas는 assurance를 색과 배지로 표시한다. `DECLARED`를 `ENFORCED`처럼 보이게 표시해서는 안 된다.
 
+### 3.3 Enforcement Point
+
+`SANDBOX`는 REL-05 로컬 Tool의 filesystem·network·child-process 격리 profile과 attestation을 조작하는 집행점이다. `MCP_GATEWAY`의 definition/call 정책과 별도 Control로 두어 프로토콜 허용과 OS process 격리를 각각 표시한다.
+
 ## 4. Dynamic Edge Contract
 
 Sub-Agent가 실행 중 생성되면 모든 instance ID를 설계 시점에 알 수 없다. Dynamic Edge는 허용되는 target 집합을 계약으로 선언한다.
