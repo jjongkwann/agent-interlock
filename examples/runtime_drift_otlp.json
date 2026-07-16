@@ -1,0 +1,68 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "customer-support-agents"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {"name": "agent-interlock", "version": "0.1.0"},
+          "spans": [
+            {
+              "traceId": "4cf80000000000000000000000000001",
+              "spanId": "0000000000000001",
+              "name": "invoke_agent Research Sub-Agent",
+              "kind": 1,
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+                {"key": "gen_ai.agent.id", "value": {"stringValue": "agent.research.runtime-42"}},
+                {"key": "gen_ai.agent.name", "value": {"stringValue": "Research Sub-Agent"}},
+                {"key": "interlock.source.actor.id", "value": {"stringValue": "agent.support"}},
+                {"key": "interlock.target.actor.id", "value": {"stringValue": "agent.research.runtime-42"}},
+                {"key": "interlock.relationship.id", "value": {"stringValue": "REL-06"}},
+                {"key": "interlock.relationship.type", "value": {"stringValue": "DELEGATES"}},
+                {"key": "interlock.interaction.id", "value": {"stringValue": "interaction-delegation-42"}},
+                {"key": "interlock.control.evaluated", "value": {"boolValue": true}}
+              ]
+            },
+            {
+              "traceId": "4cf80000000000000000000000000001",
+              "spanId": "0000000000000002",
+              "parentSpanId": "0000000000000001",
+              "name": "tools/call send-email",
+              "kind": 3,
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
+                {"key": "gen_ai.tool.name", "value": {"stringValue": "send-email"}},
+                {"key": "mcp.method.name", "value": {"stringValue": "tools/call"}},
+                {"key": "interlock.source.actor.id", "value": {"stringValue": "agent.support"}},
+                {"key": "interlock.target.actor.id", "value": {"stringValue": "tool.send-email"}},
+                {"key": "interlock.relationship.id", "value": {"stringValue": "REL-05"}},
+                {"key": "interlock.relationship.type", "value": {"stringValue": "INVOKES"}},
+                {"key": "interlock.interaction.id", "value": {"stringValue": "interaction-email-42"}},
+                {"key": "interlock.control.evaluated", "value": {"boolValue": true}}
+              ]
+            },
+            {
+              "traceId": "4cf80000000000000000000000000001",
+              "spanId": "0000000000000003",
+              "parentSpanId": "0000000000000001",
+              "name": "unauthorized external send",
+              "kind": 3,
+              "attributes": [
+                {"key": "interlock.source.actor.id", "value": {"stringValue": "agent.research.runtime-42"}},
+                {"key": "interlock.target.actor.id", "value": {"stringValue": "external.unknown"}},
+                {"key": "interlock.relationship.id", "value": {"stringValue": "REL-07"}},
+                {"key": "interlock.relationship.type", "value": {"stringValue": "SENDS"}},
+                {"key": "interlock.interaction.id", "value": {"stringValue": "interaction-bypass-42"}},
+                {"key": "interlock.control.evaluated", "value": {"boolValue": false}}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

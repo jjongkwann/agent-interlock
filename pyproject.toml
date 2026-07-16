@@ -12,6 +12,9 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Agent Interlock contributors" }]
 dependencies = []
 
+[project.scripts]
+interlock = "agent_interlock.__main__:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
@@ -21,4 +24,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-

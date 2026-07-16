@@ -1,5 +1,26 @@
 """Public API for the Agent Interlock reference implementation."""
 
+from .architecture import (
+    ArchitectureCompileError,
+    ArchitectureCompiler,
+    ArchitectureEdge,
+    ArchitectureFinding,
+    ArchitectureGraph,
+    ArchitectureLinter,
+    ArchitectureNode,
+    AssuranceLevel,
+    CompiledArchitecture,
+    ControlTiming,
+    DynamicTargetSelector,
+    EnforcementPoint,
+    FindingSeverity,
+    ObservedEdge,
+    RuntimeGraphDiff,
+    SecurityControl,
+    SecurityObjective,
+    compare_observed_runtime,
+    compare_runtime,
+)
 from .canonical import canonical_digest, canonical_json, raw_digest
 from .gateway import (
     ArgumentBindingError,
@@ -8,6 +29,26 @@ from .gateway import (
     MCPToolGateway,
 )
 from .ledger import Event, InMemoryLedger
+from .mcp_http import (
+    MCPHTTPError,
+    MCPHTTPGatewayConfig,
+    MCPHTTPPrincipal,
+    MCPHTTPRequest,
+    MCPHTTPResponse,
+    MCPHTTPSessionExpired,
+    MCPHTTPStatusError,
+    MCPStreamableHTTPClient,
+    MCPStreamableHTTPClientConfig,
+    MCPStreamableHTTPGatewayCarrier,
+    create_mcp_http_server,
+)
+from .mcp_transport import (
+    MCPArchitectureBindingError,
+    MCPInvocationContext,
+    MCPServerProfile,
+    MCPTransportAdapter,
+    MCPTransportError,
+)
 from .models import (
     ActionResult,
     ActorSpec,
@@ -27,21 +68,35 @@ from .models import (
 )
 from .registry import DefinitionRegistry, InvalidStateTransition, ToolRevision
 from .sdk import Actor, Interlock
+from .telemetry import RuntimeTelemetryImport, TelemetryImportIssue, import_runtime_telemetry
 
 __all__ = [
     "ActionResult",
     "Actor",
     "ActorSpec",
     "ActorType",
+    "ArchitectureCompileError",
+    "ArchitectureCompiler",
+    "ArchitectureEdge",
+    "ArchitectureFinding",
+    "ArchitectureGraph",
+    "ArchitectureLinter",
+    "ArchitectureNode",
     "ArgumentBindingError",
+    "AssuranceLevel",
+    "CompiledArchitecture",
     "ControlDecision",
+    "ControlTiming",
+    "DynamicTargetSelector",
     "CredentialClaims",
     "DataSource",
     "DefinitionRegistry",
     "DefinitionState",
     "Environment",
+    "EnforcementPoint",
     "Event",
     "FailureMode",
+    "FindingSeverity",
     "GatewayError",
     "InMemoryLedger",
     "Interlock",
@@ -50,13 +105,37 @@ __all__ = [
     "InvocationIntent",
     "LinkPolicy",
     "MCPToolGateway",
+    "MCPHTTPError",
+    "MCPHTTPGatewayConfig",
+    "MCPHTTPPrincipal",
+    "MCPHTTPRequest",
+    "MCPHTTPResponse",
+    "MCPHTTPSessionExpired",
+    "MCPHTTPStatusError",
+    "MCPStreamableHTTPClient",
+    "MCPStreamableHTTPClientConfig",
+    "MCPStreamableHTTPGatewayCarrier",
+    "MCPArchitectureBindingError",
+    "MCPInvocationContext",
+    "MCPServerProfile",
+    "MCPTransportAdapter",
+    "MCPTransportError",
+    "ObservedEdge",
     "PolicyMode",
+    "RuntimeGraphDiff",
+    "RuntimeTelemetryImport",
+    "SecurityControl",
     "SecurityOutcome",
+    "SecurityObjective",
     "SideEffect",
     "ToolDefinition",
     "ToolRevision",
+    "TelemetryImportIssue",
     "canonical_digest",
     "canonical_json",
+    "compare_observed_runtime",
+    "compare_runtime",
+    "create_mcp_http_server",
+    "import_runtime_telemetry",
     "raw_digest",
 ]
-

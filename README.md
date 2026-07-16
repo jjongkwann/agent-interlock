@@ -34,6 +34,10 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - [`docs/03-l1-mcp-tool-security-profile.md`](docs/03-l1-mcp-tool-security-profile.md): L1 M1–M9의 데이터 흐름, 공격 예시, 관측·통제 매핑
 - [`docs/04-mcp-tool-gateway-spec.md`](docs/04-mcp-tool-gateway-spec.md): MCP Tool Gateway의 컴포넌트, 상태, 정책, 이벤트, API 계약
 - [`docs/05-l1-security-validation-plan.md`](docs/05-l1-security-validation-plan.md): M1–M9 공격 재현, 기대 판정, 증거, 운영 승격 기준
+- [`docs/06-implementation-status.md`](docs/06-implementation-status.md): 설계 계약과 현재 코드·시험 추적표
+- [`docs/07-security-architecture-studio-design.md`](docs/07-security-architecture-studio-design.md): 박스 기반 Architecture-as-Code와 Studio 사용법
+- [`docs/08-runtime-telemetry-reconciliation.md`](docs/08-runtime-telemetry-reconciliation.md): Ledger·OTLP 실행 trace와 Design/Runtime drift 계약
+- [`docs/09-mcp-transport-enforcement.md`](docs/09-mcp-transport-enforcement.md): Architecture manifest와 MCP JSON-RPC 집행을 연결하는 어댑터
 
 ## 기본 구현 전략
 
@@ -55,9 +59,15 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - hash·목적지에 결합된 승인과 hash-bound connector 실행
 - `OBSERVE`, `SHADOW`, `ENFORCE` 모드
 - Tool result secret 정제, `UNTRUSTED_TOOL_RESULT` taint, schema 격리
+- MCP `tools/list`/`tools/call`/`notifications/tools/list_changed` JSON-RPC 집행과 Architecture digest binding
+- MCP 2025-11-25 Streamable HTTP JSON/SSE client, session binding, inbound Origin·auth·lifecycle carrier
 - 사후 downstream receipt reconciliation과 `REVOKE` 증거
 - 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
 - PostgreSQL partition, RLS, append-only migration
+- 박스/연결선 기반 `ArchitectureGraph`와 실행 가능한 JSON Schema
+- PREVENT·DETECT·RESPOND·EVIDENCE 및 DECLARED·OBSERVED·ENFORCED·RECONCILED 보장 수준
+- Multi-Agent Dynamic Edge Contract와 설계/런타임 drift 비교
+- Ledger·OTLP JSON runtime import와 미선언 관계·통제 우회 분석
 
 ```bash
 # 별도 설치 없이 테스트
@@ -65,6 +75,19 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 # 안전한 email Tool 호출 예제
 PYTHONPATH=src python3 examples/secure_email.py
+
+# Architecture → MCP transport → Ledger 수직 슬라이스
+PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
+
+# 보안 아키텍처 lint·compile
+PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
+PYTHONPATH=src python3 -m agent_interlock architecture compile examples/secure_multi_agent_architecture.json
+PYTHONPATH=src python3 -m agent_interlock architecture runtime-diff examples/secure_multi_agent_architecture.json examples/runtime_drift_otlp.json
+
+# 박스 기반 Security Architecture Studio
+cd studio
+npm install
+npm run dev
 
 # editable install을 원하는 경우
 python3 -m pip install -e .
@@ -76,8 +99,14 @@ python3 -m pip install -e .
 |---|---|
 | `src/agent_interlock/` | SDK, Registry, 정책, Gateway, Ledger |
 | `schemas/` | Actor와 Event Envelope JSON Schema |
+| `schemas/architecture.schema.json` | Canvas와 compiler가 공유하는 Architecture 계약 |
 | `migrations/postgresql/` | PostgreSQL 초기 schema와 partition helper |
 | `tests/test_core.py` | L1 핵심 공격·정상 회귀 시험 |
+| `tests/test_mcp_http.py` | 실제 HTTP socket 기반 MCP lifecycle·JSON/SSE·보안 carrier 시험 |
 | `examples/secure_email.py` | 최소 실행 예제 |
+| `examples/secure_multi_agent_architecture.json` | Multi-Agent 보안 아키텍처 예제 |
+| `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |
+| `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
+| `studio/` | Actor 박스·관계 보안 편집 및 manifest export UI |
 
-현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 1–2단계와 결과 검사·reconciliation의 reference implementation이다. 실제 MCP transport proxy, OAuth token exchange provider, OS process/network sandbox, PostgreSQL adapter와 HTTP API는 다음 통합 단계다.
+현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어와 [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·Streamable HTTP carrier를 포함한다. OAuth discovery/token exchange, stdio OS process/network sandbox, inbound resumable SSE store, PostgreSQL adapter와 운영 API는 다음 통합 단계다.

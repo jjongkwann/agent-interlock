@@ -288,13 +288,31 @@ class MCPToolGateway:
         self, pending: _Pending, connector_execution_id: str, raw_result: Any
     ) -> tuple[Any, tuple[str, ...]]:
         clean, secret_detected = sanitize_secrets(raw_result)
-        schema_errors = validate_schema(clean, pending.revision.definition.output_schema)
+        schema_value = (
+            clean["structuredContent"]
+            if isinstance(clean, Mapping) and "structuredContent" in clean
+            else clean
+        )
+        schema_errors = validate_schema(schema_value, pending.revision.definition.output_schema)
         labels = ["UNTRUSTED_TOOL_RESULT"]
         if secret_detected:
             labels.append("D5_REDACTED")
         if schema_errors:
             labels.append("SCHEMA_INVALID")
-            clean = {"quarantined": True, "reason": "result schema validation failed"}
+            if isinstance(clean, Mapping) and any(
+                key in clean for key in ("content", "structuredContent", "isError")
+            ):
+                clean = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Tool result quarantined by Agent Interlock.",
+                        }
+                    ],
+                    "isError": True,
+                }
+            else:
+                clean = {"quarantined": True, "reason": "result schema validation failed"}
         self.ledger.append(
             "INTERACTION_COMPLETED",
             tenant_id=pending.tenant_id,

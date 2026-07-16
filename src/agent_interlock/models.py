@@ -159,6 +159,7 @@ class ToolDefinition:
     input_schema: Mapping[str, Any]
     output_schema: Mapping[str, Any] = field(default_factory=dict)
     annotations: Mapping[str, Any] = field(default_factory=dict)
+    protocol_extensions: Mapping[str, Any] = field(default_factory=dict)
     endpoint: str = ""
     transport: str = "streamable-http"
     publisher: str = ""
@@ -177,6 +178,7 @@ class ToolDefinition:
             "inputSchema": dict(self.input_schema),
             "outputSchema": dict(self.output_schema),
             "annotations": dict(self.annotations),
+            "protocolExtensions": dict(self.protocol_extensions),
             "endpoint": self.endpoint,
             "transport": self.transport,
             "publisher": self.publisher,

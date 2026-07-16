@@ -19,6 +19,9 @@ status: active
 | 정책·Gateway 구현 | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) | [01 프로젝트 기획](01-project-plan.md#11-정책-판정과-집행) |
 | 보안 시험과 운영 승격 | [05 L1 검증 계획](05-l1-security-validation-plan.md) | [03 L1 보안 프로파일](03-l1-mcp-tool-security-profile.md) |
 | 설계 대비 현재 구현 확인 | [06 구현 상태](06-implementation-status.md) | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) |
+| 박스 기반 보안 아키텍처 설계 | [07 Security Architecture Studio](07-security-architecture-studio-design.md) | [02 개발자 프레임워크](02-developer-framework-design.md) |
+| 실행 trace와 설계 drift 분석 | [08 Runtime Telemetry](08-runtime-telemetry-reconciliation.md) | [07 Security Architecture Studio](07-security-architecture-studio-design.md) |
+| Architecture를 MCP 호출에 집행 | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) |
 
 ## 2. 문서별 책임
 
@@ -30,6 +33,9 @@ status: active
 | `04-mcp-tool-gateway-spec.md` | MCP Gateway의 입력·출력·상태·정책·이벤트 계약 | 모든 L2/L3 관계의 구현 |
 | `05-l1-security-validation-plan.md` | M1–M9 시험 절차, 기대 결과, 필수 증거, 승격 기준 | 프로덕션 Incident 대응 전 과정 |
 | `06-implementation-status.md` | 설계 계약과 코드·시험의 현재 추적 상태 | 미구현 항목의 상세 설계 |
+| `07-security-architecture-studio-design.md` | Architecture-as-Code, 보안 통제 보장 수준, Dynamic Edge, Canvas MVP | 운영 배포·승인 workflow의 세부 구현 |
+| `08-runtime-telemetry-reconciliation.md` | Ledger·OTLP import, Interlock span 속성, drift와 신뢰 경계 | Collector·vendor adapter의 배포 설정 |
+| `09-mcp-transport-enforcement.md` | Architecture compile, MCP JSON-RPC와 Streamable HTTP 실집행 | OAuth·stdio sandbox·resumable SSE 운영 구현 |
 
 ## 3. 추적 ID
 

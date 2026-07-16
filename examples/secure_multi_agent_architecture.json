@@ -1,0 +1,279 @@
+{
+  "apiVersion": "interlock.dev/v1alpha1",
+  "kind": "Architecture",
+  "metadata": {
+    "id": "customer-support-multi-agent",
+    "version": "1.0.0"
+  },
+  "spec": {
+    "nodes": [
+      {
+        "id": "user.customer",
+        "type": "USER",
+        "owner": "customer-platform",
+        "identity": "oidc://customer",
+        "capabilities": ["SUPPORT_REQUEST"],
+        "dataAccess": ["D2", "D3"],
+        "position": {"x": 0, "y": 120}
+      },
+      {
+        "id": "agent.support",
+        "type": "AGENT",
+        "owner": "customer-platform",
+        "identity": "spiffe://prod.example/agent/support",
+        "capabilities": ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"],
+        "dataAccess": ["D2", "D3", "D7"],
+        "maxDelegationDepth": 2,
+        "position": {"x": 220, "y": 120}
+      },
+      {
+        "id": "agent.research",
+        "type": "SUBAGENT",
+        "owner": "customer-platform",
+        "identity": "spiffe://prod.example/agent/research",
+        "capabilities": ["KNOWLEDGE_SEARCH"],
+        "dataAccess": ["D2", "D3", "D7"],
+        "maxDelegationDepth": 0,
+        "position": {"x": 460, "y": 20}
+      },
+      {
+        "id": "rag.support-knowledge",
+        "type": "RAG",
+        "owner": "knowledge-platform",
+        "identity": "spiffe://prod.example/rag/support",
+        "capabilities": ["TENANT_RETRIEVAL"],
+        "dataAccess": ["D2", "D3", "D7"],
+        "sideEffects": ["READ"],
+        "position": {"x": 700, "y": 20}
+      },
+      {
+        "id": "tool.send-email",
+        "type": "TOOL",
+        "owner": "messaging-platform",
+        "identity": "spiffe://prod.example/tool/send-email",
+        "capabilities": ["EMAIL_SEND"],
+        "dataAccess": ["D2", "D3", "D7"],
+        "sideEffects": ["EXTERNAL_WRITE"],
+        "definitionDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "position": {"x": 460, "y": 220}
+      },
+      {
+        "id": "external.customer-email",
+        "type": "EXTERNAL",
+        "owner": "messaging-platform",
+        "identity": "dns://customer.example",
+        "allowedDomains": ["customer.example"],
+        "position": {"x": 700, "y": 220}
+      },
+      {
+        "id": "external.audit-ledger",
+        "type": "EXTERNAL",
+        "owner": "security-platform",
+        "identity": "spiffe://prod.example/interlock/ledger",
+        "position": {"x": 460, "y": 360}
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge.user-support",
+        "relationshipId": "REL-01",
+        "source": "user.customer",
+        "target": "agent.support",
+        "relationship": "REQUESTS",
+        "policy": {
+          "id": "customer-support-input",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["SUPPORT_REQUEST"],
+          "allowedDataClasses": ["D2", "D3"],
+          "deniedDataClasses": ["D5", "D8"],
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "input-identity-and-taint",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "INPUT_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "input-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.support-research",
+        "relationshipId": "REL-06",
+        "source": "agent.support",
+        "target": "agent.research",
+        "relationship": "DELEGATES",
+        "dynamic": true,
+        "targetSelector": {
+          "types": ["SUBAGENT"],
+          "requiredCapabilities": ["KNOWLEDGE_SEARCH"],
+          "idPattern": "agent.research*",
+          "sameTenant": true
+        },
+        "policy": {
+          "id": "support-research-delegation",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["SUPPORT_RESEARCH"],
+          "allowedDataClasses": ["D2", "D3", "D7"],
+          "deniedDataClasses": ["D5", "D8"],
+          "requireAudience": true,
+          "requireResource": true,
+          "requireActorBinding": true,
+          "maxDelegationDepth": 2,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "delegation-binding",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "A2A_BROKER",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "delegation-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.research-rag",
+        "relationshipId": "REL-03",
+        "source": "agent.research",
+        "target": "rag.support-knowledge",
+        "relationship": "READS",
+        "policy": {
+          "id": "tenant-rag-read",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["SUPPORT_RESEARCH"],
+          "allowedDataClasses": ["D2", "D3", "D7"],
+          "deniedDataClasses": ["D5", "D8"],
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "rag-tenant-acl-and-secret-scan",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "RAG_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "rag-provenance-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.support-email-tool",
+        "relationshipId": "REL-05",
+        "source": "agent.support",
+        "target": "tool.send-email",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "support-email-invoke",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["SUPPORT_REPLY"],
+          "allowedDataClasses": ["D2", "D3", "D7"],
+          "deniedDataClasses": ["D5", "D8"],
+          "requireActiveDefinition": true,
+          "requireDigestPin": true,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "mcp-definition-and-call-guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "mcp-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.email-customer",
+        "relationshipId": "REL-07",
+        "source": "tool.send-email",
+        "target": "external.customer-email",
+        "relationship": "SENDS",
+        "policy": {
+          "id": "customer-email-egress",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["SUPPORT_REPLY"],
+          "allowedDataClasses": ["D3", "D7"],
+          "deniedDataClasses": ["D5", "D8"],
+          "requireExplicitDestination": true,
+          "newDestinationAction": "HOLD",
+          "externalWriteRequiresApproval": true,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "egress-dlp-and-destination",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "EGRESS_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "egress-receipt-reconciliation",
+            "objective": "DETECT",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "RECONCILED"
+          }
+        ]
+      },
+      {
+        "id": "edge.support-audit",
+        "relationshipId": "REL-12",
+        "source": "agent.support",
+        "target": "external.audit-ledger",
+        "relationship": "LOGS_TO",
+        "policy": {
+          "id": "mandatory-audit",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedDataClasses": ["D2", "D3", "D7"],
+          "deniedDataClasses": ["D5", "D8"],
+          "failureMode": "DEGRADE_READ_ONLY"
+        },
+        "controls": [
+          {
+            "id": "append-only-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "RECONCILED"
+          }
+        ]
+      }
+    ]
+  }
+}
