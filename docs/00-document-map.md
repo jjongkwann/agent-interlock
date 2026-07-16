@@ -22,6 +22,7 @@ status: active
 | 박스 기반 보안 아키텍처 설계 | [07 Security Architecture Studio](07-security-architecture-studio-design.md) | [02 개발자 프레임워크](02-developer-framework-design.md) |
 | 실행 trace와 설계 drift 분석 | [08 Runtime Telemetry](08-runtime-telemetry-reconciliation.md) | [07 Security Architecture Studio](07-security-architecture-studio-design.md) |
 | Architecture를 MCP 호출에 집행 | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) |
+| MCP OAuth discovery·token binding 구현 | [10 MCP OAuth Identity Guard](10-mcp-oauth-identity-guard.md) | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) |
 
 ## 2. 문서별 책임
 
@@ -36,6 +37,7 @@ status: active
 | `07-security-architecture-studio-design.md` | Architecture-as-Code, 보안 통제 보장 수준, Dynamic Edge, Canvas MVP | 운영 배포·승인 workflow의 세부 구현 |
 | `08-runtime-telemetry-reconciliation.md` | Ledger·OTLP import, Interlock span 속성, drift와 신뢰 경계 | Collector·vendor adapter의 배포 설정 |
 | `09-mcp-transport-enforcement.md` | Architecture compile, MCP JSON-RPC와 Streamable HTTP 실집행 | OAuth·stdio sandbox·resumable SSE 운영 구현 |
+| `10-mcp-oauth-identity-guard.md` | OAuth metadata discovery, PKCE, redirect/SSRF, token claims binding | IdP별 서명 검증·browser UI·분산 token 저장소 |
 
 ## 3. 추적 ID
 
