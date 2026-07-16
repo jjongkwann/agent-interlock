@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 문서 맵
 date: 2026-07-17
-version: 1.2
+version: 1.3
 status: active
 ---
 
@@ -38,9 +38,9 @@ status: active
 | `06-implementation-status.md` | 설계 계약과 코드·시험의 현재 추적 상태 | 미구현 항목의 상세 설계 |
 | `07-security-architecture-studio-design.md` | Architecture-as-Code, 보안 통제 보장 수준, Dynamic Edge, Canvas MVP | 운영 배포·승인 workflow의 세부 구현 |
 | `08-runtime-telemetry-reconciliation.md` | Ledger·OTLP import/HTTP receiver, Interlock span 속성, drift와 signed evidence 신뢰 경계 | OTLP gRPC Collector·vendor adapter의 배포 설정 |
-| `09-mcp-transport-enforcement.md` | Architecture compile, MCP JSON-RPC, Streamable HTTP와 resumable SSE 실집행 | 분산 session backend·고급 비동기 MCP 운영 구현 |
+| `09-mcp-transport-enforcement.md` | Architecture compile, MCP JSON-RPC, Streamable HTTP, resumable SSE와 publisher provenance admission | 분산 session backend·고급 비동기 MCP 운영 구현 |
 | `10-mcp-oauth-identity-guard.md` | OAuth discovery, PKCE, redirect/SSRF, introspection/JWKS, loopback consent와 token binding | IdP별 key/cache·UI·분산 transaction 저장소 운영 |
-| `11-mcp-stdio-sandbox-receipts.md` | stdio 제한, 서명 attestation, Bubblewrap reference, fake receipt reconciliation | platform별 live sandbox·seccomp 설치·운영 정책 |
+| `11-mcp-stdio-sandbox-receipts.md` | stdio 제한, 서명 attestation, Bubblewrap, Architecture-bound egress와 fake receipt reference | platform별 live sandbox·seccomp·egress proxy 설치·운영 정책 |
 | `12-postgresql-ledger-api.md` | PostgreSQL adapter, RLS·append-only migration, `/v1/events`·trace API와 signed audit reference | HA proxy·pool·partition scheduler·외부 KMS/mTLS/WORM 운영 |
 
 ## 3. 추적 ID

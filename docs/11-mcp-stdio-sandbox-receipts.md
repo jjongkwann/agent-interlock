@@ -1,7 +1,7 @@
 ---
 title: MCP stdio Sandbox와 External Receipt
 date: 2026-07-17
-version: 1.1.0
+version: 1.2.0
 status: active
 ---
 
@@ -47,6 +47,8 @@ status: active
 ```
 
 Architecture 예제의 REL-05에는 `MCP_GATEWAY`와 `SANDBOX` PREVENT control이 함께 있다. Studio에서도 `SANDBOX` enforcement point와 `DECLARED`–`RECONCILED` assurance를 선택할 수 있다. 실제 stdio artifact set digest는 `MCPServerProfile.artifact_digest`와 `MCPStdioServerCaller`에서 일치해야 하므로, 박스에서 승인한 Tool definition과 실행 프로세스가 다른 artifact를 가리키면 adapter 생성 전에 실패한다.
+
+REL-07의 source Tool, External 박스 `allowedDomains`와 LinkPolicy는 `compile_destination_egress_policy`로 tenant·workload·artifact·publisher provenance·sandbox profile에 결합된 exact HTTPS origin allowlist가 된다. `DestinationEgressGuard`는 비허용 origin을 backend 호출 전에 차단하고 workload 종료 결과와 socket count 0 receipt를 남긴다. 허용 경로만 backend receipt 1개를 반환한다.
 
 ## 2. stdio profile 통제
 
@@ -165,6 +167,8 @@ outcome = gateway.reconcile_receipt_store(
 
 `tests/test_receipts.py`는 정상 receipt 1, 정책 차단 receipt 0, idempotent transaction 1, hidden egress의 `PARTIALLY_EXECUTED`/`REVOKE`, compensation과 cross-decision binding을 검증한다.
 
+`tests/test_supply_chain.py`와 `tests/test_egress.py`는 publisher/repository/revision/build/artifact 서명, MCP profile admission, Architecture REL-07 compile, tenant/workload/artifact/provenance/sandbox binding, 차단 socket 0·종료와 정상 receipt 1을 검증한다. `InMemoryNetworkEgressBackend`는 실제 socket을 열지 않는 SIMULATION backend다.
+
 기준 문서는 [MCP Transports 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)와 [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)다.
 
 ## 6. 남은 운영 경계
@@ -176,4 +180,4 @@ reference core에는 서명 attestation verifier와 Linux Bubblewrap launch-plan
 - macOS App Sandbox처럼 platform에서 지원하는 격리 프로파일
 - Kubernetes workload sandbox와 deny-by-default NetworkPolicy
 
-추가로 seccomp 기반 child-process 강제, 목적지별 network egress, immutable artifact mount/FD execution으로 digest 검사와 exec 사이 TOCTOU 제거, macOS backend, 장기 process supervisor와 운영 sandbox health telemetry가 필요하다. reference의 symmetric signing key는 운영에서 KMS/HSM 발급·회전·폐기 체계로 교체해야 한다.
+추가로 seccomp 기반 child-process 강제, 실제 egress proxy/sidecar와 DNS·연결 IP pinning, immutable artifact mount/FD execution으로 digest 검사와 exec 사이 TOCTOU 제거, macOS backend, 장기 process supervisor와 운영 sandbox health telemetry가 필요하다. reference의 publisher/attestation symmetric key는 운영에서 Sigstore 또는 KMS/HSM 발급·회전·폐기 체계로 교체해야 한다.

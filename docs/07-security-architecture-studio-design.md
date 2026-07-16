@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock Security Architecture Studio 설계
 date: 2026-07-17
-version: 0.2.1
+version: 0.2.2
 status: active
 ---
 
@@ -131,6 +131,7 @@ JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_i
 - Ledger·OTLP JSON import와 실제 Runtime Graph 생성
 - 미선언 관계, unobserved Design Edge, control bypass를 분리한 Drift 화면
 - CLI `architecture compile --shadow`의 CRITICAL review gate·전 Edge SHADOW 강제·안정적 bundle digest
+- REL-07의 source Tool·External `allowedDomains`·LinkPolicy를 tenant/artifact/provenance/sandbox-bound egress 정책으로 compile하는 runtime adapter
 
 ```bash
 cd studio

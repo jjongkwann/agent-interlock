@@ -41,6 +41,17 @@ from .architecture import (
     compare_runtime,
 )
 from .canonical import canonical_digest, canonical_json, raw_digest
+from .egress import (
+    DestinationEgressGuard,
+    DestinationEgressPolicy,
+    EgressReceipt,
+    EgressRequest,
+    InMemoryNetworkEgressBackend,
+    NetworkConnectionEvidence,
+    NetworkEgressBackend,
+    canonical_network_destination,
+    compile_destination_egress_policy,
+)
 from .gateway import (
     ArgumentBindingError,
     GatewayError,
@@ -125,6 +136,7 @@ from .mcp_stdio import (
 from .mcp_transport import (
     MCPArchitectureBindingError,
     MCPInvocationContext,
+    MCPServerAdmissionError,
     MCPServerProfile,
     MCPTransportAdapter,
     MCPTransportError,
@@ -164,6 +176,13 @@ from .receipts import (
 )
 from .sdk import Actor, Interlock
 from .signing import ALGORITHM as SIGNING_ALGORITHM, sign_canonical, verify_canonical
+from .supply_chain import (
+    ArtifactAdmissionDecision,
+    ArtifactAdmissionPolicy,
+    ArtifactProvenance,
+    ArtifactSignature,
+    sign_artifact_provenance,
+)
 from .telemetry import RuntimeTelemetryImport, TelemetryImportIssue, import_runtime_telemetry
 
 __all__ = [
@@ -179,6 +198,10 @@ __all__ = [
     "ArchitectureLinter",
     "ArchitectureNode",
     "ArgumentBindingError",
+    "ArtifactAdmissionDecision",
+    "ArtifactAdmissionPolicy",
+    "ArtifactProvenance",
+    "ArtifactSignature",
     "AssuranceLevel",
     "AttestationVerifier",
     "AttestedExternalSandboxBackend",
@@ -209,6 +232,10 @@ __all__ = [
     "DefinitionState",
     "DenyUnisolatedSandboxBackend",
     "DirectTestSandboxBackend",
+    "DestinationEgressGuard",
+    "DestinationEgressPolicy",
+    "EgressReceipt",
+    "EgressRequest",
     "Environment",
     "EnforcementPoint",
     "Event",
@@ -221,6 +248,7 @@ __all__ = [
     "GatewayError",
     "InMemoryConfigStore",
     "InMemoryLedger",
+    "InMemoryNetworkEgressBackend",
     "InMemoryOAuthTransactionStore",
     "InMemoryRuntimeConfigProbe",
     "InMemorySessionStore",
@@ -267,9 +295,12 @@ __all__ = [
     "MCPStreamableHTTPGatewayCarrier",
     "MCPArchitectureBindingError",
     "MCPInvocationContext",
+    "MCPServerAdmissionError",
     "MCPServerProfile",
     "MCPTransportAdapter",
     "MCPTransportError",
+    "NetworkConnectionEvidence",
+    "NetworkEgressBackend",
     "ObservedEdge",
     "OAuthAuthorizationTransaction",
     "OAuthConsentError",
@@ -304,6 +335,8 @@ __all__ = [
     "VerifiedAccessTokenClaims",
     "canonical_digest",
     "canonical_json",
+    "canonical_network_destination",
+    "compile_destination_egress_policy",
     "config_approval_statement",
     "build_event",
     "compare_observed_runtime",
@@ -318,6 +351,7 @@ __all__ = [
     "run_consent",
     "sha256_file",
     "sign_attestation",
+    "sign_artifact_provenance",
     "sign_canonical",
     "validate_oauth_url",
     "verify_canonical",

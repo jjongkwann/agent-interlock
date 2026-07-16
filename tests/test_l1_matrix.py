@@ -1,9 +1,9 @@
 """docs/05 L1-SIM-M1..M9 validation matrix, automated as SIMULATION cases.
 
 Each test maps to a docs/05 test ID. Attack rows expect a blocking/quarantine
-verdict with downstream receipt 0; control rows expect ALLOW. Rows that still
-need a new admission or runtime-network subsystem are recorded as explicit
-skips so the 34-ID matrix stays fully accounted for.
+verdict with downstream receipt 0; control rows expect ALLOW. M4 rows use the
+reference publisher-admission and destination-egress broker contracts, so all
+34 IDs execute in the default SIMULATION suite.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from urllib.parse import urlencode, urlsplit
 
 from agent_interlock import (
     ArgumentBindingError,
+    ArtifactAdmissionPolicy,
+    ArtifactProvenance,
     AuthorizationServerMetadata,
     ConfigGuard,
     ConfigGuardError,
@@ -24,10 +26,14 @@ from agent_interlock import (
     ControlDecision,
     CredentialClaims,
     DefinitionState,
+    DestinationEgressGuard,
+    DestinationEgressPolicy,
+    EgressRequest,
     FakeExternalReceiptStore,
     FakeExternalSinkConnector,
     InMemoryConfigStore,
     InMemoryLedger,
+    InMemoryNetworkEgressBackend,
     InMemoryRuntimeConfigProbe,
     InvocationBlocked,
     InvocationIntent,
@@ -46,6 +52,7 @@ from agent_interlock import (
     ProtectedResourceMetadata,
     SideEffect,
     run_consent,
+    sign_artifact_provenance,
 )
 from agent_interlock.security import canonical_destination, validate_authorization_url
 from mcp_http_fixture import AdversarialMCPHTTPServer
@@ -71,6 +78,10 @@ from l1_harness import (
 )
 
 BENIGN_ARGS = {"to": "user@customer.example", "body": "Your ticket is resolved."}
+M4_PUBLISHER_KEY = b"l1-m4-platform-publisher-key-v1"
+M4_ARTIFACT_DIGEST = "sha256:" + "a" * 64
+M4_SANDBOX_PROFILE_DIGEST = "sha256:" + "c" * 64
+M4_REPOSITORY = "https://github.example/platform/trusted-mail"
 
 
 def _mail_connector(store: FakeExternalReceiptStore) -> FakeExternalSinkConnector:
@@ -109,6 +120,36 @@ def _oauth_code_flow(redirect_uri: str) -> MCPAuthorizationCodeFlow:
         client_id="registered-client",
         registered_redirect_uris=frozenset({redirect_uri}),
         allow_loopback_http=True,
+    )
+
+
+def _m4_provenance(*, publisher: str = "platform-team") -> ArtifactProvenance:
+    return ArtifactProvenance(
+        server_id="tenant-a/prod/trusted-mail",
+        publisher=publisher,
+        artifact_digest=M4_ARTIFACT_DIGEST,
+        source_repository=M4_REPOSITORY,
+        source_revision="commit-8f41d9a",
+        build_id="l1-m4-build-001",
+    )
+
+
+def _m4_admission_policy() -> ArtifactAdmissionPolicy:
+    return ArtifactAdmissionPolicy(
+        {"platform-team": {"publisher-key-v1": M4_PUBLISHER_KEY}},
+        allowed_repositories={"platform-team": frozenset({M4_REPOSITORY})},
+    )
+
+
+def _m4_egress_policy(provenance: ArtifactProvenance) -> DestinationEgressPolicy:
+    return DestinationEgressPolicy(
+        policy_id="l1-m4-trusted-mail-egress",
+        tenant_id=TENANT,
+        allowed_workload_ids=frozenset({"stdio-mail-tool"}),
+        allowed_destinations=frozenset({"https://mail-api.example"}),
+        allowed_artifact_digests=frozenset({provenance.artifact_digest}),
+        allowed_provenance_digests=frozenset({provenance.digest}),
+        allowed_sandbox_profile_digests=frozenset({M4_SANDBOX_PROFILE_DIGEST}),
     )
 
 
@@ -703,13 +744,90 @@ class M9DataExfiltrationTests(unittest.TestCase):
 
 class M4PoisonedPublishTests(unittest.TestCase):
     def test_l1_sim_m4_001_unapproved_publisher_admission(self):
-        self.skipTest("artifact-digest admission is exercised by tests/test_mcp_stdio.py; publisher-signature admission is a follow-up")
+        item = _m4_provenance(publisher="unapproved-publisher")
+        decision = _m4_admission_policy().admit(item, None)
+        self.assertEqual(decision.decision, ControlDecision.QUARANTINE)
+        self.assertIn("L1-M4-UNTRUSTED-PUBLISHER", decision.reason_codes)
+        self.assertEqual(decision.evidence["publisher"], "unapproved-publisher")
+        self.assertEqual(decision.evidence["artifactDigest"], M4_ARTIFACT_DIGEST)
+        self.assertFalse(decision.evidence["signatureVerified"])
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M4-001", verdict="QUARANTINE", passed=True)
 
     def test_l1_sim_m4_002_runtime_network_egress_blocked(self):
-        self.skipTest("runtime outbound-network sandboxing is the os-sandbox workstream (no socket allowlist yet)")
+        item = _m4_provenance()
+        signature = sign_artifact_provenance(
+            item,
+            key_id="publisher-key-v1",
+            key=M4_PUBLISHER_KEY,
+        )
+        self.assertTrue(_m4_admission_policy().admit(item, signature).admitted)
+
+        backend = InMemoryNetworkEgressBackend()
+        terminated: list[str] = []
+
+        def terminate(workload_id: str) -> bool:
+            terminated.append(workload_id)
+            return True
+
+        guard = DestinationEgressGuard(
+            _m4_egress_policy(item),
+            backend,
+            terminate_workload=terminate,
+        )
+        receipt = guard.execute(
+            EgressRequest(
+                tenant_id=TENANT,
+                workload_id="stdio-mail-tool",
+                destination="https://exfil.attacker.example",
+                artifact_digest=item.artifact_digest,
+                provenance_digest=item.digest,
+                sandbox_profile_digest=M4_SANDBOX_PROFILE_DIGEST,
+            )
+        )
+        self.assertEqual(receipt.decision, ControlDecision.BLOCK)
+        self.assertIn("L1-M4-EGRESS-DENIED", receipt.reason_codes)
+        self.assertEqual(receipt.socket_count, 0)
+        self.assertTrue(receipt.process_terminated)
+        self.assertEqual(backend.connections, ())
+        self.assertEqual(terminated, ["stdio-mail-tool"])
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M4-002", verdict="BLOCK", passed=True)
 
     def test_l1_sim_m4_003_control_allowed_network(self):
-        self.skipTest("allowed-network receipt depends on the os-sandbox egress backend")
+        item = _m4_provenance()
+        signature = sign_artifact_provenance(
+            item,
+            key_id="publisher-key-v1",
+            key=M4_PUBLISHER_KEY,
+        )
+        admission = _m4_admission_policy().admit(item, signature)
+        self.assertTrue(admission.admitted)
+        self.assertTrue(admission.evidence["signatureVerified"])
+
+        backend = InMemoryNetworkEgressBackend()
+        guard = DestinationEgressGuard(
+            _m4_egress_policy(item),
+            backend,
+            terminate_workload=lambda workload_id: False,
+        )
+        receipt = guard.execute(
+            EgressRequest(
+                tenant_id=TENANT,
+                workload_id="stdio-mail-tool",
+                destination="https://mail-api.example:443",
+                artifact_digest=item.artifact_digest,
+                provenance_digest=item.digest,
+                sandbox_profile_digest=M4_SANDBOX_PROFILE_DIGEST,
+            )
+        )
+        self.assertEqual(receipt.decision, ControlDecision.ALLOW)
+        self.assertEqual(receipt.socket_count, 1)
+        self.assertEqual(receipt.provenance_digest, admission.evidence["provenanceDigest"])
+        self.assertEqual(receipt.canonical_destination, "https://mail-api.example:443")
+        self.assertEqual(len(backend.connections), 1)
+        ledger = InMemoryLedger()
+        record_test_executed(ledger, test_id="L1-SIM-M4-003", verdict="ALLOW", passed=True)
 
 
 class M7ConfigDiscoveryTests(unittest.TestCase):

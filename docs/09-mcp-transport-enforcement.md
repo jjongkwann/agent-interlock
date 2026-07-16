@@ -2,7 +2,7 @@
 title: Agent Interlock MCP Transport 집행 어댑터
 tags: [agent-interlock, mcp, architecture, enforcement, json-rpc]
 date: 2026-07-17
-version: 1.2
+version: 1.3
 status: implemented-reference
 ---
 
@@ -24,6 +24,8 @@ Architecture JSON
 ```
 
 `MCPTransportAdapter`는 HTTP 프레임워크나 subprocess 구현에 종속되지 않는다. 실제 wire 경계는 `MCPStreamableHTTPClient`와 `MCPStreamableHTTPGatewayCarrier`가 연결한다. Client는 downstream JSON·SSE 응답과 session을 처리하고, Gateway Carrier는 inbound HTTP 보안과 MCP lifecycle을 종료한 뒤 Tool 메시지만 Adapter로 전달한다.
+
+`ArtifactAdmissionPolicy`를 Adapter에 주입하면 MCP Server profile은 publisher, artifact digest, source repository/revision과 build ID 전체의 서명 검증을 통과해야 한다. 누락·불일치 시 Adapter 생성 단계에서 `MCPServerAdmissionError`로 격리되어 Server request는 0회다.
 
 ```text
 MCP Host
@@ -181,6 +183,7 @@ Tool 승인 절차는 `tools/list → observed digest 확인 → reviewed manife
 - authenticated principal과 trusted invocation context 결합
 - inbound/downstream bearer 분리와 token passthrough 0
 - 실제 HTTP 경로에서 Tool drift dispatch 0
+- publisher provenance profile exact binding과 admission 실패 시 server call 0
 
 ## 7. 남은 운영 경계
 

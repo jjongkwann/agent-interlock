@@ -25,6 +25,12 @@ from .models import (
 )
 from .registry import ToolRevision
 from .security import contains_secret, sanitize_secrets
+from .supply_chain import (
+    ArtifactAdmissionDecision,
+    ArtifactAdmissionPolicy,
+    ArtifactProvenance,
+    ArtifactSignature,
+)
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
@@ -62,6 +68,14 @@ class MCPArchitectureBindingError(GatewayError):
     """The compiled architecture cannot safely bind to an observed MCP Tool."""
 
 
+class MCPServerAdmissionError(GatewayError):
+    """The MCP Server artifact failed publisher/provenance admission."""
+
+    def __init__(self, decision: ArtifactAdmissionDecision) -> None:
+        super().__init__(f"MCP Server admission failed: {', '.join(decision.reason_codes)}")
+        self.decision = decision
+
+
 class _DownstreamCallError(GatewayError):
     def __init__(self, response_error: Mapping[str, Any]):
         code = response_error.get("code", _INTERLOCK_DOWNSTREAM_ERROR)
@@ -82,6 +96,8 @@ class MCPServerProfile:
     max_tools_per_page: int = 256
     max_list_pages: int = 32
     allowed_request_meta_keys: frozenset[str] = frozenset()
+    artifact_provenance: ArtifactProvenance | None = None
+    artifact_signature: ArtifactSignature | None = None
 
     def __post_init__(self) -> None:
         if not self.tenant_id or not self.server_id or not self.endpoint:
@@ -94,6 +110,14 @@ class MCPServerProfile:
             raise ValueError("MCP transport limits must be positive")
         if any(not isinstance(key, str) or not key for key in self.allowed_request_meta_keys):
             raise ValueError("allowed_request_meta_keys must contain non-empty strings")
+        if (self.artifact_provenance is None) != (self.artifact_signature is None):
+            raise ValueError("artifact provenance and signature must be configured together")
+        if self.artifact_provenance is not None and (
+            self.artifact_provenance.server_id != self.server_id
+            or self.artifact_provenance.publisher != self.publisher
+            or self.artifact_provenance.artifact_digest != self.artifact_digest
+        ):
+            raise ValueError("artifact provenance must exactly match the MCP Server profile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +166,8 @@ class MCPTransportAdapter:
         gateway: MCPToolGateway,
         profile: MCPServerProfile,
         call_server: ServerCaller,
+        *,
+        artifact_admission_policy: ArtifactAdmissionPolicy | None = None,
     ) -> None:
         if profile.transport == "stdio":
             caller_digest = getattr(call_server, "artifact_set_digest", None)
@@ -150,6 +176,14 @@ class MCPTransportAdapter:
                 raise MCPArchitectureBindingError(
                     "stdio caller must bind the approved server profile to its sandbox artifact set"
                 )
+        self.artifact_admission_decision: ArtifactAdmissionDecision | None = None
+        if artifact_admission_policy is not None:
+            self.artifact_admission_decision = artifact_admission_policy.admit(
+                profile.artifact_provenance,
+                profile.artifact_signature,
+            )
+            if not self.artifact_admission_decision.admitted:
+                raise MCPServerAdmissionError(self.artifact_admission_decision)
         self.gateway = gateway
         self.profile = profile
         self._call_server = call_server

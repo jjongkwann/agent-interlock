@@ -1,8 +1,8 @@
 ---
 title: Agent Interlock MCP Tool Gateway 기술 명세
 tags: [agent-interlock, mcp, gateway, policy, event-contract]
-date: 2026-07-15
-version: 1.1
+date: 2026-07-17
+version: 1.2
 status: proposed
 ---
 
@@ -302,6 +302,11 @@ payload:
 | `L1-M2-DEFINITION-DRIFT` | observed와 approved digest 불일치 | `QUARANTINE` |
 | `L1-M3-CROSS-SERVER-REFERENCE` | D1이 다른 namespace Tool을 조종 | `BLOCK` |
 | `L1-M4-UNTRUSTED-PUBLISHER` | provenance/signature 정책 실패 | `QUARANTINE` |
+| `L1-M4-SIGNATURE-INVALID` | trusted publisher의 provenance 서명 누락·불일치 | `QUARANTINE` |
+| `L1-M4-PROVENANCE-DENIED` | repository·revision·build provenance 정책 실패 | `QUARANTINE` |
+| `L1-M4-EGRESS-DENIED` | runtime 목적지가 exact egress allowlist 밖 | `BLOCK`+workload 종료 |
+| `L1-M4-EGRESS-BINDING-MISMATCH` | tenant·workload·artifact·provenance·sandbox profile 불일치 | `BLOCK`+workload 종료 |
+| `L1-M4-PROCESS-TERMINATION-FAILED` | egress 차단 뒤 workload 종료 확인 실패 | `BLOCK`+Incident |
 | `L1-M5-TOKEN-AUDIENCE-MISMATCH` | token audience/resource 불일치 | `BLOCK` |
 | `L1-M5-TOKEN-PASSTHROUGH` | 교환 없는 downstream 전달 | `BLOCK` |
 | `L1-M6-UNSAFE-AUTH-URL` | scheme/host/redirect/IP 정책 실패 | `BLOCK` |

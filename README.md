@@ -68,6 +68,8 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - MCP OAuth discovery, PKCE S256, exact callback, resource-bound token exchange, RFC 7662 introspection
 - optional JWKS/JWT verifier와 loopback OAuth consent·one-time transaction store
 - MCP stdio JSONL client, artifact pin, 서명 sandbox attestation, Bubblewrap launch plan, timeout·process-group kill
+- publisher·repository·revision·build·artifact digest를 결합한 서명 provenance admission
+- Architecture REL-07/External allowed domain을 compile하는 목적지별 egress guard와 SIMULATION receipt backend
 - contextual Connector와 외부 전송 없는 fake receipt·compensation reconciliation
 - 사후 downstream receipt reconciliation과 `REVOKE` 증거
 - 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
@@ -122,6 +124,8 @@ python3 -m pip install -e '.[postgres]'
 | `tests/test_mcp_http.py` | 실제 HTTP socket 기반 MCP lifecycle·JSON/SSE·보안 carrier 시험 |
 | `tests/test_mcp_oauth.py` | 실제 OAuth fixture 기반 discovery·PKCE·SSRF·token binding 시험 |
 | `tests/test_mcp_stdio.py` | 실제 subprocess 기반 stdio lifecycle·sandbox·timeout 시험 |
+| `tests/test_supply_chain.py` | publisher 서명·provenance·MCP profile admission binding 시험 |
+| `tests/test_egress.py` | Architecture-bound 목적지별 egress·socket/종료 receipt 시험 |
 | `tests/test_l1_matrix.py` | L1-SIM M1–M9의 34개 추적 ID와 canary·receipt 불변식 시험 |
 | `tests/test_config_guard.py` | M7 config 최소 권한·2인 승인·CAS·runtime drift 시험 |
 | `tests/test_otlp_receiver.py` | 인증된 OTLP/HTTP JSON receiver 시험 |
@@ -135,4 +139,4 @@ python3 -m pip install -e '.[postgres]'
 | `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
 | `studio/` | Actor 박스·관계 보안 편집 및 manifest export UI |
 
-현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·resumable Streamable HTTP carrier, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·introspection/JWKS·loopback consent, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 서명 attestation·Bubblewrap reference 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md)의 tenant별 저장·조회와 signed audit reference를 포함한다. 프로덕션 완료를 위해서는 persistent Definition Registry와 분산 store, Linux live sandbox·seccomp 및 목적지별 egress, IdP별 key/cache 운영, OTLP gRPC·vendor adapter, 외부 KMS/mTLS/WORM Audit Sink, Studio Git review·remote deploy 연동이 남아 있다.
+현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·resumable Streamable HTTP carrier와 publisher admission, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·introspection/JWKS·loopback consent, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 서명 attestation·Bubblewrap·목적지 egress reference 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md)의 tenant별 저장·조회와 signed audit reference를 포함한다. 프로덕션 완료를 위해서는 persistent Definition Registry와 분산 store, Linux live sandbox·seccomp, 실제 egress proxy·DNS/IP pinning, Sigstore/KMS publisher key 운영, IdP별 key/cache 운영, OTLP gRPC·vendor adapter, 외부 KMS/mTLS/WORM Audit Sink, Studio Git review·remote deploy 연동이 남아 있다.
