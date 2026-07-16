@@ -1,0 +1,192 @@
+"""Small define/connect/wrap SDK for protecting existing Python callables."""
+
+from __future__ import annotations
+
+import functools
+import uuid
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping
+
+from .canonical import canonical_digest
+from .gateway import GatewayError
+from .ledger import InMemoryLedger
+from .models import ActorSpec, ControlDecision, DataSource, Environment, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
+from .security import validate_schema
+
+
+class UndeclaredRelationship(GatewayError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Actor:
+    spec: ActorSpec
+    _interlock: "Interlock"
+
+    def connect(self, target: "Actor", policy: LinkPolicy) -> None:
+        self._interlock.connect(self, target, policy)
+
+    def wrap(self, function: Callable[[Mapping[str, Any]], Any]) -> Callable[..., Any]:
+        @functools.wraps(function)
+        def guarded(
+            arguments: Mapping[str, Any],
+            *,
+            source: Actor,
+            tenant_id: str,
+            intent: InvocationIntent,
+            trace_id: str | None = None,
+        ) -> Any:
+            return self._interlock._invoke(
+                source=source,
+                target=self,
+                function=function,
+                arguments=arguments,
+                tenant_id=tenant_id,
+                intent=intent,
+                trace_id=trace_id,
+            )
+
+        return guarded
+
+
+class Interlock:
+    def __init__(self, ledger: InMemoryLedger | None = None) -> None:
+        self.ledger = ledger or InMemoryLedger()
+        self._actors: dict[str, Actor] = {}
+        self._links: dict[tuple[str, str], LinkPolicy] = {}
+
+    def define_actor(self, spec: ActorSpec) -> Actor:
+        if spec.id in self._actors:
+            raise ValueError(f"actor already defined: {spec.id}")
+        actor = Actor(spec, self)
+        self._actors[spec.id] = actor
+        return actor
+
+    def connect(self, source: Actor, target: Actor, policy: LinkPolicy) -> None:
+        if source.spec.id not in self._actors or target.spec.id not in self._actors:
+            raise ValueError("actors must belong to this Interlock instance")
+        self._links[(source.spec.id, target.spec.id)] = policy
+
+    def design_graph(self) -> dict[str, Any]:
+        return {
+            "nodes": [
+                {"id": actor.spec.id, "type": actor.spec.type.value, "owner": actor.spec.owner}
+                for actor in self._actors.values()
+            ],
+            "edges": [
+                {
+                    "source": source,
+                    "target": target,
+                    "relationship": policy.relationship,
+                    "policyId": policy.id,
+                    "mode": policy.mode.value,
+                }
+                for (source, target), policy in self._links.items()
+            ],
+        }
+
+    def runtime_graph(self, tenant_id: str, trace_id: str) -> dict[str, Any]:
+        events = self.ledger.trace(tenant_id, trace_id)
+        nodes = sorted({item for event in events for item in (event.source_actor_id, event.target_actor_id) if item})
+        return {
+            "traceId": trace_id,
+            "nodes": [{"id": item} for item in nodes],
+            "events": [
+                {
+                    "eventId": event.event_id,
+                    "type": event.event_type,
+                    "source": event.source_actor_id,
+                    "target": event.target_actor_id,
+                    "payload": event.payload,
+                }
+                for event in events
+            ],
+        }
+
+    def _invoke(
+        self,
+        *,
+        source: Actor,
+        target: Actor,
+        function: Callable[[Mapping[str, Any]], Any],
+        arguments: Mapping[str, Any],
+        tenant_id: str,
+        intent: InvocationIntent,
+        trace_id: str | None,
+    ) -> Any:
+        policy = self._links.get((source.spec.id, target.spec.id))
+        if not policy:
+            raise UndeclaredRelationship(f"undeclared relationship: {source.spec.id} -> {target.spec.id}")
+        trace = trace_id or f"trace-{uuid.uuid4()}"
+        span = f"span-{uuid.uuid4()}"
+        interaction = str(uuid.uuid4())
+        common = dict(
+            tenant_id=tenant_id,
+            trace_id=trace,
+            span_id=span,
+            interaction_id=interaction,
+            source_actor_id=source.spec.id,
+            target_actor_id=target.spec.id,
+            relationship_type=policy.relationship,
+        )
+        self.ledger.append(
+            "INTERACTION_REQUESTED",
+            payload={"argumentsHash": canonical_digest(arguments), "purpose": intent.purpose},
+            **common,
+        )
+        self.ledger.append(
+            "DATA_FLOW_OBSERVED",
+            payload={
+                "dataClasses": sorted(intent.data_classes),
+                "destinations": list(intent.destinations),
+                "taintLabels": sorted(intent.taint_labels),
+                "contentHash": canonical_digest(arguments),
+            },
+            **common,
+        )
+        reasons: list[str] = []
+        if validate_schema(arguments, target.spec.input_schema):
+            reasons.append("INTERLOCK-INPUT-SCHEMA-INVALID")
+        if intent.data_classes - target.spec.data_access:
+            reasons.append("INTERLOCK-DATA-CLASS-DENIED")
+        if intent.estimated_side_effect not in {SideEffect.NONE, *target.spec.side_effects}:
+            reasons.append("L1-UNDECLARED-SIDE-EFFECT")
+        if intent.taint_labels and intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE:
+            reasons.append("INTERLOCK-TAINTED-EXTERNAL-WRITE")
+        decision = ControlDecision.BLOCK if reasons else ControlDecision.ALLOW
+        enforced = policy.mode == PolicyMode.ENFORCE
+        self.ledger.append(
+            "CONTROL_EVALUATED",
+            payload={
+                "policyId": policy.id,
+                "policyVersion": policy.version,
+                "mode": policy.mode.value,
+                "decision": decision.value,
+                "reasonCodes": reasons,
+                "actualEnforced": enforced,
+            },
+            severity="HIGH" if reasons else "INFO",
+            **common,
+        )
+        if reasons and enforced:
+            self.ledger.append("ACTION_EXECUTED", payload={"result": "COMPLETED", "connectorExecutionId": None}, **common)
+            self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
+            raise GatewayError(f"actor invocation blocked: {', '.join(reasons)}")
+        try:
+            result = function(arguments)
+        except Exception as error:
+            self.ledger.append("ACTION_EXECUTED", payload={"result": "FAILED", "failure": str(error)}, **common)
+            raise
+        self.ledger.append("ACTION_EXECUTED", payload={"result": "COMPLETED"}, **common)
+        output_errors = validate_schema(result, target.spec.output_schema)
+        self.ledger.append(
+            "INTERACTION_COMPLETED",
+            payload={"resultHash": canonical_digest(result), "schemaErrors": output_errors},
+            **common,
+        )
+        self.ledger.append(
+            "SECURITY_OUTCOME_SET",
+            payload={"securityOutcome": "SUCCEEDED" if reasons else "UNKNOWN"},
+            **common,
+        )
+        return result

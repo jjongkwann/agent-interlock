@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://interlock.dev/schemas/actor.schema.json",
+  "title": "Agent Interlock Actor Manifest",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"enum": ["interlock.dev/v1", "interlock.dev/v1alpha1"]},
+    "kind": {"const": "Actor"},
+    "metadata": {
+      "type": "object",
+      "required": ["id", "owner"],
+      "properties": {"id": {"type": "string"}, "owner": {"type": "string"}, "tenant": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "required": ["type", "identity", "capabilities", "dataAccess", "sideEffects", "tenantMode", "failureMode"],
+      "properties": {
+        "type": {"enum": ["USER", "AGENT", "SUBAGENT", "TOOL", "RAG", "MEMORY", "SCHEDULER", "EXTERNAL"]},
+        "identity": {"type": "string"},
+        "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "dataAccess": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "sideEffects": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "tenantMode": {"enum": ["REQUIRED", "OPTIONAL", "GLOBAL"]},
+        "failureMode": {"enum": ["FAIL_OPEN", "FAIL_CLOSED", "DEGRADE_READ_ONLY"]},
+        "destinations": {"type": "object"},
+        "schemas": {"type": "object"},
+        "mcp": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

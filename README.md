@@ -43,3 +43,41 @@ InterlockGraph  설계·실행·공격 경로 그래프
 4. ActorSpec·LinkPolicy를 코드와 manifest로 지원
 5. 정적 설계 그래프와 런타임 trace 그래프 제공
 6. A2A·Memory·Scheduler·Sandbox로 확장
+
+## 현재 구현
+
+문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. 외부 런타임 의존성 없이 다음 기능을 실행할 수 있다.
+
+- `ActorSpec`, `LinkPolicy`, `define_actor()`, `connect()`, `wrap()` SDK
+- MCP Tool 정의 canonical/raw digest와 `DISCOVERED` → `APPROVED` → `ACTIVE` 상태 전이
+- definition drift, metadata instruction, cross-server reference 격리
+- 호출 인수 schema, 데이터 등급, secret, 목적지, token binding, 선언 부작용 정책
+- hash·목적지에 결합된 승인과 hash-bound connector 실행
+- `OBSERVE`, `SHADOW`, `ENFORCE` 모드
+- Tool result secret 정제, `UNTRUSTED_TOOL_RESULT` taint, schema 격리
+- 사후 downstream receipt reconciliation과 `REVOKE` 증거
+- 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
+- PostgreSQL partition, RLS, append-only migration
+
+```bash
+# 별도 설치 없이 테스트
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+# 안전한 email Tool 호출 예제
+PYTHONPATH=src python3 examples/secure_email.py
+
+# editable install을 원하는 경우
+python3 -m pip install -e .
+```
+
+주요 경로는 다음과 같다.
+
+| 경로 | 내용 |
+|---|---|
+| `src/agent_interlock/` | SDK, Registry, 정책, Gateway, Ledger |
+| `schemas/` | Actor와 Event Envelope JSON Schema |
+| `migrations/postgresql/` | PostgreSQL 초기 schema와 partition helper |
+| `tests/test_core.py` | L1 핵심 공격·정상 회귀 시험 |
+| `examples/secure_email.py` | 최소 실행 예제 |
+
+현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 1–2단계와 결과 검사·reconciliation의 reference implementation이다. 실제 MCP transport proxy, OAuth token exchange provider, OS process/network sandbox, PostgreSQL adapter와 HTTP API는 다음 통합 단계다.

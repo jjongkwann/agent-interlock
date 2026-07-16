@@ -18,6 +18,7 @@ status: active
 | L1 위협과 공격 흐름 이해 | [03 L1 보안 프로파일](03-l1-mcp-tool-security-profile.md) | [05 L1 검증 계획](05-l1-security-validation-plan.md) |
 | 정책·Gateway 구현 | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) | [01 프로젝트 기획](01-project-plan.md#11-정책-판정과-집행) |
 | 보안 시험과 운영 승격 | [05 L1 검증 계획](05-l1-security-validation-plan.md) | [03 L1 보안 프로파일](03-l1-mcp-tool-security-profile.md) |
+| 설계 대비 현재 구현 확인 | [06 구현 상태](06-implementation-status.md) | [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.md) |
 
 ## 2. 문서별 책임
 
@@ -28,6 +29,7 @@ status: active
 | `03-l1-mcp-tool-security-profile.md` | M1–M9의 경계·데이터·공격·통제와 제품 매핑 | API 세부 구현과 테스트 실행법 |
 | `04-mcp-tool-gateway-spec.md` | MCP Gateway의 입력·출력·상태·정책·이벤트 계약 | 모든 L2/L3 관계의 구현 |
 | `05-l1-security-validation-plan.md` | M1–M9 시험 절차, 기대 결과, 필수 증거, 승격 기준 | 프로덕션 Incident 대응 전 과정 |
+| `06-implementation-status.md` | 설계 계약과 코드·시험의 현재 추적 상태 | 미구현 항목의 상세 설계 |
 
 ## 3. 추적 ID
 
