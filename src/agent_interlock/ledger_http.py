@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .ledger import Ledger, LedgerError, LedgerIdempotencyConflict
 from .models import DataSource, Environment
 from .postgres_ledger import LedgerTenantMismatch
+from .telemetry import import_runtime_telemetry
 
 
 _EVENT_TYPES = frozenset(
@@ -164,6 +165,12 @@ class LedgerHTTPAPI:
                 self._require_scope(principal, "events:write")
                 self._post_event(handler, principal)
                 return
+            if handler.command == "POST" and parts.path == "/v1/traces":
+                if parts.query:
+                    raise LedgerAPIError(400, "LEDGER-QUERY-UNEXPECTED", "query parameters are not allowed")
+                self._require_scope(principal, "telemetry:write")
+                self._post_traces(handler)
+                return
             match = _TRACE_ROUTE.fullmatch(parts.path)
             if handler.command == "GET" and match is not None:
                 self._require_scope(principal, "events:read")
@@ -292,6 +299,43 @@ class LedgerHTTPAPI:
             idempotency_key=idempotency_key,
         )
         self._send_json(handler, 201, {"event": event.to_dict()})
+
+    def _post_traces(self, handler: BaseHTTPRequestHandler) -> None:
+        """Receive an OTLP/HTTP JSON export and return decoded runtime observations.
+
+        Identity comes from the authenticated principal, not the agent-sent spans,
+        so a caller cannot forge the relationship topology's owner. The decoded
+        observations feed design/runtime drift analysis; no event is written here.
+        """
+        value = self._read_json(handler)
+        if not isinstance(value, Mapping) or "resourceSpans" not in value:
+            raise LedgerAPIError(400, "LEDGER-OTLP-INVALID", "OTLP resourceSpans payload is required")
+        try:
+            imported = import_runtime_telemetry(value)
+        except (ValueError, RecursionError) as error:
+            raise LedgerAPIError(400, "LEDGER-OTLP-INVALID", "OTLP payload is invalid") from error
+        self._send_json(
+            handler,
+            200,
+            {
+                "format": imported.format,
+                "observations": [
+                    {
+                        "source_actor_id": edge.source,
+                        "target_actor_id": edge.target,
+                        "relationship_type": edge.relationship,
+                        "relationship_id": edge.relationship_id,
+                        "interaction_id": edge.interaction_id,
+                    }
+                    for edge in imported.observations
+                ],
+                "control_evaluated_interactions": sorted(imported.control_evaluated_interactions),
+                "issues": [
+                    {"code": issue.code, "message": issue.message, "span_id": issue.span_id}
+                    for issue in imported.issues
+                ],
+            },
+        )
 
     def _get_trace(
         self,

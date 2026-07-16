@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from .canonical import canonical_digest
 from .mcp_transport import MCP_PROTOCOL_VERSION, MCPServerProfile
 from .security import contains_secret, sanitize_secrets
+from .signing import sign_canonical, verify_canonical
 
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -164,6 +165,46 @@ class SandboxAttestation:
     filesystem_restricted: bool
     network_restricted: bool
     child_process_restricted: bool
+    signature: str = ""
+
+
+def _attestation_body(attestation: SandboxAttestation) -> dict[str, Any]:
+    """Canonical fields a signature covers (everything except the signature)."""
+    return {
+        "backendId": attestation.backend_id,
+        "evidenceReference": attestation.evidence_reference,
+        "profileDigest": attestation.profile_digest,
+        "artifactSetDigest": attestation.artifact_set_digest,
+        "filesystemRestricted": attestation.filesystem_restricted,
+        "networkRestricted": attestation.network_restricted,
+        "childProcessRestricted": attestation.child_process_restricted,
+    }
+
+
+def sign_attestation(attestation: SandboxAttestation, key: bytes) -> SandboxAttestation:
+    """Return a copy of the attestation carrying a keyed signature over its claims."""
+    return replace(attestation, signature=sign_canonical(_attestation_body(attestation), key))
+
+
+class AttestationVerifier:
+    """Trusts a backend's self-asserted restriction bits only under a valid signature.
+
+    Keys are held per backend id: an attestation is trusted only if its named
+    backend has a configured key and the signature over the claims verifies.
+    """
+
+    __slots__ = ("_keys",)
+
+    def __init__(self, keys: Mapping[str, bytes]) -> None:
+        self._keys = {backend_id: key for backend_id, key in keys.items() if key}
+        if not self._keys:
+            raise ValueError("at least one trusted backend key is required")
+
+    def verify(self, attestation: SandboxAttestation) -> bool:
+        key = self._keys.get(attestation.backend_id)
+        if not key or not attestation.signature:
+            return False
+        return verify_canonical(_attestation_body(attestation), attestation.signature, key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +258,7 @@ class AttestedExternalSandboxBackend:
     filesystem_restricted: bool
     network_restricted: bool
     child_process_restricted: bool
+    signing_key: bytes | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.backend_id or not self.evidence_reference:
@@ -232,20 +274,98 @@ class AttestedExternalSandboxBackend:
                 "MCP-STDIO-SANDBOX-PROFILE-MISMATCH",
                 "sandbox backend is not approved for this profile",
             )
+        attestation = SandboxAttestation(
+            backend_id=self.backend_id,
+            evidence_reference=self.evidence_reference,
+            profile_digest=profile.profile_digest,
+            artifact_set_digest=profile.artifact_set_digest,
+            filesystem_restricted=self.filesystem_restricted,
+            network_restricted=self.network_restricted,
+            child_process_restricted=self.child_process_restricted,
+        )
+        if self.signing_key:
+            attestation = sign_attestation(attestation, self.signing_key)
         return SandboxLaunchPlan(
             argv=(self.launcher.path, *self.fixed_arguments, "--", *profile.command),
             environment=profile.environment,
             working_directory=profile.working_directory,
-            attestation=SandboxAttestation(
-                backend_id=self.backend_id,
-                evidence_reference=self.evidence_reference,
-                profile_digest=profile.profile_digest,
-                artifact_set_digest=profile.artifact_set_digest,
-                filesystem_restricted=self.filesystem_restricted,
-                network_restricted=self.network_restricted,
-                child_process_restricted=self.child_process_restricted,
-            ),
+            attestation=attestation,
         )
+
+
+_UNSAFE_SANDBOX_MOUNTS = frozenset({"/", "/proc", "/dev", "/sys", "/run", "/tmp", "/home"})
+
+
+@dataclass(frozen=True, slots=True)
+class BubblewrapSandboxBackend:
+    """Linux bubblewrap backend that attests only what its argv actually enforces.
+
+    Enforces a private empty root with deny-by-default bind mounts (filesystem)
+    and an isolated network namespace (network). It does NOT prevent the target
+    from forking/exec'ing children — bwrap cannot without a seccomp filter, which
+    the current launch contract can't carry — so it attests child_process as
+    False and REFUSES a profile that denies child processes rather than sign a
+    false claim. The pinned bwrap launcher is re-verified before each plan.
+    """
+
+    launcher: StdioArtifactPin
+    signing_key: bytes = field(repr=False)
+    disable_userns: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.signing_key:
+            raise ValueError("bubblewrap sandbox backend requires a non-empty signing key")
+
+    def prepare(self, profile: StdioSandboxProfile) -> SandboxLaunchPlan:
+        _verify_artifact(self.launcher)
+        if not profile.allow_child_processes:
+            raise MCPStdioSandboxUnavailable(
+                "bubblewrap cannot honestly restrict child processes; profile must allow_child_processes"
+            )
+        for path in (*profile.read_only_paths, *profile.writable_paths):
+            if (path.rstrip("/") or "/") in _UNSAFE_SANDBOX_MOUNTS:
+                raise MCPStdioError(
+                    "MCP-STDIO-SANDBOX-UNSAFE-MOUNT",
+                    f"path {path} is too broad to bind into the sandbox",
+                )
+        attestation = SandboxAttestation(
+            backend_id="linux-bubblewrap-v1",
+            evidence_reference=f"bubblewrap-policy:v1;launcher={self.launcher.digest}",
+            profile_digest=profile.profile_digest,
+            artifact_set_digest=profile.artifact_set_digest,
+            filesystem_restricted=True,
+            network_restricted=not profile.allow_network,
+            child_process_restricted=False,
+        )
+        return SandboxLaunchPlan(
+            argv=self._argv(profile),
+            environment=profile.environment,
+            working_directory=profile.working_directory,
+            attestation=sign_attestation(attestation, self.signing_key),
+        )
+
+    def _argv(self, profile: StdioSandboxProfile) -> tuple[str, ...]:
+        argv: list[str] = [self.launcher.path, "--unshare-all", "--unshare-user"]
+        if profile.allow_network:
+            argv.append("--share-net")
+        if self.disable_userns:
+            argv.append("--disable-userns")
+        argv += ["--cap-drop", "ALL", "--die-with-parent", "--new-session", "--clearenv"]
+        for key in sorted(profile.environment):
+            argv += ["--setenv", key, profile.environment[key]]
+        argv += ["--proc", "/proc", "--dev", "/dev", "--perms", "1777", "--tmpfs", "/tmp", "--dir", profile.working_directory]
+        for path in profile.writable_paths:
+            argv += ["--bind", path, path]
+        for path in profile.read_only_paths:
+            argv += ["--ro-bind", path, path]
+        seen = {profile.executable.path}
+        argv += ["--ro-bind", profile.executable.path, profile.executable.path]
+        for artifact in profile.additional_artifacts:
+            if artifact.path not in seen:
+                argv += ["--ro-bind", artifact.path, artifact.path]
+                seen.add(artifact.path)
+        argv += ["--remount-ro", "/", "--chdir", profile.working_directory, "--", *profile.command]
+        return tuple(argv)
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,10 +406,12 @@ class MCPStdioClient:
         config: MCPStdioClientConfig,
         *,
         sandbox_backend: StdioSandboxBackend | None = None,
+        attestation_verifier: AttestationVerifier | None = None,
         server_message_handler=None,  # noqa: ANN001
     ) -> None:
         self.config = config
         self._sandbox_backend = sandbox_backend or DenyUnisolatedSandboxBackend()
+        self._attestation_verifier = attestation_verifier
         self._server_message_handler = server_message_handler
         self._process: subprocess.Popen[bytes] | None = None
         self._stdout_thread: threading.Thread | None = None
@@ -666,6 +788,12 @@ class MCPStdioClient:
                 "MCP-STDIO-SANDBOX-ATTESTATION-INVALID",
                 "partial sandbox attestation cannot use the test-only exception",
             )
+        if self._attestation_verifier is not None and not profile.allow_unenforced_test_mode:
+            if not self._attestation_verifier.verify(attestation):
+                raise MCPStdioError(
+                    "MCP-STDIO-SANDBOX-ATTESTATION-UNSIGNED",
+                    "sandbox attestation is not signed by a trusted backend key",
+                )
 
     def _set_reader_failure(self, reason_code: str, message: str) -> None:
         with self._reader_lock:

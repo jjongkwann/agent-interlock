@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
 date: 2026-07-16
-version: 0.3.0
+version: 0.4.0
 status: active
 ---
 
@@ -51,26 +51,38 @@ status: active
 | stdio JSONL·process lifecycle carrier | `MCPStdioClient` | 실제 subprocess lifecycle·noise·size·timeout·group kill 시험 |
 | stdio artifact·sandbox attestation binding | `StdioSandboxProfile`, `MCPStdioServerCaller` | digest mismatch·backend 누락·Architecture binding 시험 |
 | Fake external receipt·reconciliation | `FakeExternalReceiptStore`, contextual Connector | receipt 0/1·hidden egress·idempotency·compensation 시험 |
+| L1-SIM M1–M9 matrix·canary corpus·불변식 runner | `tests/test_l1_matrix.py`, `tests/l1_harness.py` | 34 test ID(22 구현·12 명시적 skip), TEST_EXECUTED SIMULATION |
+| M9 volume/DLP 사전 차단 | `policy.py` `max_export_records`/`max_export_bytes` | `L1-SIM-M9-003` 사전 BLOCK 시험 |
+| Canonical keyed 서명 helper | `signing.py` `sign_canonical`/`verify_canonical` | round-trip·tamper·wrong-key 시험 |
+| Signed Audit Sink evidence | `audit_sink.py` `SignedAuditSink` | seal·verify·integrity·swap 거부 시험 |
+| OTLP/HTTP JSON receiver | `ledger_http.py` `POST /v1/traces` | 실제 socket OTLP decode·context 누락·scope 시험 |
+| 서명 sandbox attestation verifier | `mcp_stdio.py` `sign_attestation`·`AttestationVerifier` | 서명·wrong-key·미서명·tamper·client 강제 시험 |
+| Inbound resumable SSE·SessionStore | `mcp_http.py` `SessionStore`·`InMemorySessionStore` | 세션 발급·READY·Last-Event-ID replay·multi-instance·DELETE 시험 |
+| RFC7662 introspection verifier·OAuth TransactionStore | `mcp_oauth.py` `MCPTokenIntrospectionVerifier`·`InMemoryOAuthTransactionStore` | active/claim 매핑·client-auth·SSRF·one-time consume 시험 |
+| Studio compile → SHADOW 배포 번들 | `__main__.py` `architecture compile --shadow` | golden 라운드트립·SHADOW 강제·digest·CRITICAL 리뷰 게이트 시험 |
+| M7 agent-config guard (read·deploy·drift) | `config_guard.py` `ConfigGuard`·`InMemoryConfigStore`·`RuntimeConfigProbe` | role 최소화·2인 서명 배포·CAS·drift·M7-001..004 매트릭스 시험 |
+| JWKS/JWT 서명 verifier (optional `jwt` extra) | `mcp_jwt.py` `MCPJWKSVerifier` | RS256/ES256/EdDSA 검증·alg 혼동 거부·kid·exp/nbf/iss 시험 |
+| Loopback OAuth consent | `oauth_consent.py` `LoopbackCallbackReceiver`·`run_consent` | 콜백 캡처·one-time·timeout·loopback-only 시험 |
+| Bubblewrap OS sandbox backend | `mcp_stdio.py` `BubblewrapSandboxBackend` | argv 구성·정직한 attestation 비트(fs/net True, child False)·child-거부 fail-closed·unsafe mount 거부·서명 시험 |
 
 ## 현재 자동화된 L1 범위
 
 `tests/test_core.py`는 M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 인수·결과 secret, M9 Unicode 목적지·미선언 부작용·사후 egress를 검증한다. 정상 호출, SHADOW 비집행, 승인 binding, idempotency도 함께 검증한다. `tests/test_architecture.py`는 Architecture compile, 보안 lint, Dynamic Edge와 runtime drift를 검증한다. `tests/test_mcp_transport.py`는 실제 MCP JSON-RPC D1/D3/D4 경계, exact digest binding, drift·삭제, trusted context와 dispatch 0을 검증한다. `tests/test_mcp_http.py`는 로컬 실제 HTTP socket으로 lifecycle, JSON/SSE, session, Origin, 인증, timeout, redirect와 token 분리를 검증한다. `tests/test_mcp_oauth.py`는 실제 OAuth HTTP fixture로 protected resource/AS discovery, PKCE, SSRF, redirect, callback replay와 token claim binding을 검증한다. `tests/test_mcp_stdio.py`와 `tests/test_receipts.py`는 실제 subprocess stdio 경계와 외부 전송 없는 transaction reconciliation을 검증한다. `tests/test_ledger_http.py`와 `tests/test_postgres_ledger.py`는 event/trace API와 DB role tenant binding을 검증하며, PostgreSQL 16 live 시험은 DSN이 있는 CI에서 실행된다.
 
-이는 [05 검증 계획](05-l1-security-validation-plan.md)의 전체 M1–M9 matrix 완료를 뜻하지 않는다. 특히 다음 항목은 통합 fixture가 필요하다.
+`tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 SIMULATION으로 자동화한다(22개 구현, 12개는 담당 workstream으로 명시적 skip). 전체 matrix 완료는 아니며, 다음 항목은 아직 통합 fixture나 신규 서브시스템이 필요하다.
 
-- inbound resumable GET SSE 송신과 multi-instance session/lifecycle store
-- IdP별 JWT/JWKS 또는 introspection verifier와 browser consent adapter
-- production OS sandbox backend와 서명된 attestation verifier
-- RAG/config/file canary corpus
+- BubblewrapSandboxBackend live 실행 시험(Linux+bwrap+런타임 클로저 필요, argv·attestation은 단위 검증됨)과 seccomp 기반 child-process 강제(현재는 정직하게 child=False, `allow_child_processes=False` 프로파일 거부)
+- M4 per-destination network egress allowlist(bwrap는 network namespace 전체 격리라 all-or-nothing)과 M5-002 downscope·M5-004 state replay의 matrix 편입
 - PostgreSQL CORE-SIM-TENANT 전체 CI와 자동 partition/retention 운영
-- streaming OpenTelemetry Collector adapter, Incident/response service
+- streaming OTLP gRPC(:4317)와 vendor(Langfuse/LangSmith) trace adapter, Incident/response service
 - Studio의 저장소·Git review·policy deployment 연동
 
 ## 다음 구현 순서
 
-1. `05`의 M1–M9 전체 test ID 자동화와 RAG/config/file canary corpus
-2. Studio export → review → compile → SHADOW 배포 workflow
-3. OTLP Collector receiver와 signed Audit Sink evidence 검증
-4. inbound resumable SSE와 multi-instance session store
-5. production IdP verifier·browser consent·분산 OAuth transaction store
-6. production OS sandbox backend와 signed attestation verifier
+doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M9 test ID 자동화와 canary corpus, (b) canonical 서명 helper, (c) OTLP/HTTP JSON receiver와 signed Audit Sink, (d) 서명 sandbox attestation verifier, (e) inbound resumable SSE와 SessionStore, (f) RFC7662 introspection verifier와 OAuth TransactionStore, (g) Studio `compile --shadow`, (h) M7 agent-config guard, (i) JWKS/JWT verifier(optional `jwt` extra)와 loopback consent, (j) Bubblewrap OS sandbox backend.
+
+남은 것은 프로덕션 인프라·플랫폼 연동이다.
+
+1. 분산 SessionStore/OAuth TransactionStore/ConfigStore backend(Redis/Postgres)와 studio 저장소·Git review·remote deploy 연동
+2. BubblewrapSandboxBackend Linux live 시험과 seccomp child-process 강제, macOS Seatbelt backend
+3. optional gateway config-guard preflight(기본 비활성)과 M4 per-destination egress·M5-002/004 matrix 편입

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -13,6 +14,8 @@ from .architecture import (
     FindingSeverity,
     compare_observed_runtime,
 )
+from .canonical import canonical_digest
+from .models import PolicyMode
 from .telemetry import import_runtime_telemetry
 
 
@@ -32,14 +35,72 @@ def _finding_value(finding) -> dict[str, str | None]:
     }
 
 
+def _compile_shadow(graph, compiler, findings) -> int:  # noqa: ANN001
+    """Review gate + SHADOW deploy: block on critical findings, else emit a SHADOW bundle."""
+    if any(item.severity == FindingSeverity.CRITICAL for item in findings):
+        print(
+            json.dumps(
+                {
+                    "architectureId": graph.id,
+                    "version": graph.version,
+                    "mode": "SHADOW",
+                    "deployable": False,
+                    "findings": [_finding_value(item) for item in findings],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
+    compiled = compiler.compile(graph, reject_critical=False)
+    links = [
+        {
+            "edgeId": edge.id,
+            "policyId": replace(compiled.links[edge.id], mode=PolicyMode.SHADOW).id,
+            "source": edge.source,
+            "target": edge.target,
+            "relationship": edge.relationship,
+            "mode": PolicyMode.SHADOW.value,
+        }
+        for edge in graph.edges
+    ]
+    body = {
+        "architectureId": graph.id,
+        "version": graph.version,
+        "actors": sorted(compiled.actors),
+        "links": links,
+    }
+    print(
+        json.dumps(
+            {
+                **body,
+                "mode": "SHADOW",
+                "deployable": True,
+                "bundleDigest": canonical_digest(body),
+                "findings": [_finding_value(item) for item in findings],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="interlock")
     commands = parser.add_subparsers(dest="command", required=True)
     architecture = commands.add_parser("architecture", help="work with Architecture manifests")
     actions = architecture.add_subparsers(dest="action", required=True)
-    for name in ("lint", "compile", "graph"):
+    for name in ("lint", "graph"):
         command = actions.add_parser(name)
         command.add_argument("manifest")
+    compile_command = actions.add_parser("compile")
+    compile_command.add_argument("manifest")
+    compile_command.add_argument(
+        "--shadow",
+        action="store_true",
+        help="gate on critical findings, force every edge to SHADOW, and emit a deployable bundle",
+    )
     runtime_diff = actions.add_parser("runtime-diff")
     runtime_diff.add_argument("manifest")
     runtime_diff.add_argument("telemetry")
@@ -104,6 +165,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.action == "graph":
         print(json.dumps(graph.to_design_graph(), ensure_ascii=False, indent=2))
         return 0
+
+    if getattr(args, "shadow", False):
+        return _compile_shadow(graph, compiler, findings)
 
     compiled = compiler.compile(graph)
     print(

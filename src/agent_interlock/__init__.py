@@ -1,5 +1,24 @@
 """Public API for the Agent Interlock reference implementation."""
 
+from .audit_sink import AuditSinkError, SignedAuditRecord, SignedAuditSink
+from .config_guard import (
+    AgentConfig,
+    ConfigApproval,
+    ConfigDecision,
+    ConfigGuard,
+    ConfigGuardError,
+    ConfigPrincipal,
+    ConfigRevision,
+    ConfigRevisionState,
+    ConfigRole,
+    ConfigStore,
+    ConfigStoreStale,
+    ConfiguredTool,
+    InMemoryConfigStore,
+    InMemoryRuntimeConfigProbe,
+    RuntimeConfigProbe,
+    config_approval_statement,
+)
 from .architecture import (
     ArchitectureCompileError,
     ArchitectureCompiler,
@@ -57,8 +76,12 @@ from .mcp_http import (
     MCPStreamableHTTPClient,
     MCPStreamableHTTPClientConfig,
     MCPStreamableHTTPGatewayCarrier,
+    InMemorySessionStore,
+    SessionStore,
     create_mcp_http_server,
 )
+from .mcp_jwt import MCPJWKSVerifier
+from .oauth_consent import LoopbackCallbackReceiver, OAuthConsentError, run_consent
 from .mcp_oauth import (
     AuthorizationServerMetadata,
     BearerChallenge,
@@ -69,8 +92,11 @@ from .mcp_oauth import (
     MCPOAuthError,
     MCPOAuthHTTPStatusError,
     MCPProtectedResourceDiscovery,
+    MCPTokenIntrospectionVerifier,
+    InMemoryOAuthTransactionStore,
     OAuthAuthorizationTransaction,
     OAuthSecurityProfile,
+    OAuthTransactionStore,
     ProtectedResourceMetadata,
     VerifiedAccessTokenClaims,
     generate_pkce_verifier,
@@ -79,7 +105,9 @@ from .mcp_oauth import (
     validate_oauth_url,
 )
 from .mcp_stdio import (
+    AttestationVerifier,
     AttestedExternalSandboxBackend,
+    BubblewrapSandboxBackend,
     DenyUnisolatedSandboxBackend,
     DirectTestSandboxBackend,
     MCPStdioClient,
@@ -92,6 +120,7 @@ from .mcp_stdio import (
     StdioArtifactPin,
     StdioSandboxProfile,
     sha256_file,
+    sign_attestation,
 )
 from .mcp_transport import (
     MCPArchitectureBindingError,
@@ -134,6 +163,7 @@ from .receipts import (
     ReceiptSummary,
 )
 from .sdk import Actor, Interlock
+from .signing import ALGORITHM as SIGNING_ALGORITHM, sign_canonical, verify_canonical
 from .telemetry import RuntimeTelemetryImport, TelemetryImportIssue, import_runtime_telemetry
 
 __all__ = [
@@ -150,10 +180,25 @@ __all__ = [
     "ArchitectureNode",
     "ArgumentBindingError",
     "AssuranceLevel",
+    "AttestationVerifier",
     "AttestedExternalSandboxBackend",
+    "AuditSinkError",
+    "BubblewrapSandboxBackend",
     "AuthorizationServerMetadata",
     "BearerChallenge",
+    "AgentConfig",
     "CompiledArchitecture",
+    "ConfigApproval",
+    "ConfigDecision",
+    "ConfigGuard",
+    "ConfigGuardError",
+    "ConfigPrincipal",
+    "ConfigRevision",
+    "ConfigRevisionState",
+    "ConfigRole",
+    "ConfigStore",
+    "ConfigStoreStale",
+    "ConfiguredTool",
     "ControlDecision",
     "ControlTiming",
     "ConnectorExecutionContext",
@@ -174,7 +219,11 @@ __all__ = [
     "FakeExternalSinkConnector",
     "FindingSeverity",
     "GatewayError",
+    "InMemoryConfigStore",
     "InMemoryLedger",
+    "InMemoryOAuthTransactionStore",
+    "InMemoryRuntimeConfigProbe",
+    "InMemorySessionStore",
     "Interlock",
     "InvalidStateTransition",
     "InvocationBlocked",
@@ -190,6 +239,8 @@ __all__ = [
     "LedgerIntegrityError",
     "LedgerQueryLimitExceeded",
     "LedgerTenantMismatch",
+    "LoopbackCallbackReceiver",
+    "MCPJWKSVerifier",
     "MCPToolGateway",
     "MCPHTTPError",
     "MCPHTTPGatewayConfig",
@@ -205,6 +256,7 @@ __all__ = [
     "MCPOAuthError",
     "MCPOAuthHTTPStatusError",
     "MCPProtectedResourceDiscovery",
+    "MCPTokenIntrospectionVerifier",
     "MCPStdioClient",
     "MCPStdioClientConfig",
     "MCPStdioError",
@@ -220,7 +272,9 @@ __all__ = [
     "MCPTransportError",
     "ObservedEdge",
     "OAuthAuthorizationTransaction",
+    "OAuthConsentError",
     "OAuthSecurityProfile",
+    "OAuthTransactionStore",
     "PolicyMode",
     "PostgreSQLDriverUnavailable",
     "PostgreSQLLedger",
@@ -228,6 +282,7 @@ __all__ = [
     "ReceiptError",
     "ReceiptStatus",
     "ReceiptSummary",
+    "RuntimeConfigProbe",
     "RuntimeGraphDiff",
     "RuntimeTelemetryImport",
     "SandboxAttestation",
@@ -235,7 +290,11 @@ __all__ = [
     "SecurityControl",
     "SecurityOutcome",
     "SecurityObjective",
+    "SessionStore",
+    "SIGNING_ALGORITHM",
     "SideEffect",
+    "SignedAuditRecord",
+    "SignedAuditSink",
     "StdioArtifactPin",
     "StdioSandboxProfile",
     "StaticBearerAuthenticator",
@@ -245,6 +304,7 @@ __all__ = [
     "VerifiedAccessTokenClaims",
     "canonical_digest",
     "canonical_json",
+    "config_approval_statement",
     "build_event",
     "compare_observed_runtime",
     "compare_runtime",
@@ -255,6 +315,10 @@ __all__ = [
     "parse_bearer_challenge",
     "pkce_s256_challenge",
     "raw_digest",
+    "run_consent",
     "sha256_file",
+    "sign_attestation",
+    "sign_canonical",
     "validate_oauth_url",
+    "verify_canonical",
 ]

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import secrets
 import ssl
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import (
@@ -461,6 +462,98 @@ InvocationContextResolver = Callable[
     [MCPHTTPPrincipal, Mapping[str, Any]], MCPInvocationContext | None
 ]
 
+_PrincipalKey = tuple[str, str, str]
+
+
+class SessionStore(Protocol):
+    """Session lifecycle + resumable SSE event buffer, keyed by MCP-Session-Id.
+
+    An implementation makes the inbound lifecycle and server-push replay survive
+    across gateway instances. The in-process reference below is single-node; a
+    Redis/Postgres backend implements the same contract for multi-instance.
+    """
+
+    def create(self, session_id: str, principal_key: _PrincipalKey) -> None: ...
+
+    def mark_ready(self, session_id: str, principal_key: _PrincipalKey) -> bool: ...
+
+    def state(self, session_id: str, principal_key: _PrincipalKey) -> str | None: ...
+
+    def append(self, session_id: str, principal_key: _PrincipalKey, message: Mapping[str, Any]) -> int: ...
+
+    def replay(
+        self, session_id: str, principal_key: _PrincipalKey, after: int | None
+    ) -> tuple[tuple[int, Mapping[str, Any]], ...]: ...
+
+    def delete(self, session_id: str, principal_key: _PrincipalKey) -> bool: ...
+
+
+@dataclass(slots=True)
+class _StoredSession:
+    principal_key: _PrincipalKey
+    state: str
+    sequence: int
+    events: list[tuple[int, Mapping[str, Any]]]
+
+
+class InMemorySessionStore:
+    """Reference single-node SessionStore. Distributed backends mirror this contract."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, _StoredSession] = {}
+        self._lock = threading.RLock()
+
+    def _bound(self, session_id: str, principal_key: _PrincipalKey) -> _StoredSession | None:
+        session = self._sessions.get(session_id)
+        if session is None or session.principal_key != principal_key:
+            return None
+        return session
+
+    def create(self, session_id: str, principal_key: _PrincipalKey) -> None:
+        with self._lock:
+            if session_id in self._sessions:
+                raise MCPHTTPError("MCP-HTTP-SESSION-DUPLICATE", "session id already exists")
+            self._sessions[session_id] = _StoredSession(principal_key, "INITIALIZING", 0, [])
+
+    def mark_ready(self, session_id: str, principal_key: _PrincipalKey) -> bool:
+        with self._lock:
+            session = self._bound(session_id, principal_key)
+            if session is None or session.state != "INITIALIZING":
+                return False
+            session.state = "READY"
+            return True
+
+    def state(self, session_id: str, principal_key: _PrincipalKey) -> str | None:
+        with self._lock:
+            session = self._bound(session_id, principal_key)
+            return session.state if session else None
+
+    def append(self, session_id: str, principal_key: _PrincipalKey, message: Mapping[str, Any]) -> int:
+        with self._lock:
+            session = self._bound(session_id, principal_key)
+            if session is None:
+                raise MCPHTTPError("MCP-HTTP-SESSION-NOT-FOUND", "session not found")
+            session.sequence += 1
+            session.events.append((session.sequence, dict(message)))
+            return session.sequence
+
+    def replay(
+        self, session_id: str, principal_key: _PrincipalKey, after: int | None
+    ) -> tuple[tuple[int, Mapping[str, Any]], ...]:
+        with self._lock:
+            session = self._bound(session_id, principal_key)
+            if session is None:
+                return ()
+            floor = after or 0
+            return tuple((seq, message) for seq, message in session.events if seq > floor)
+
+    def delete(self, session_id: str, principal_key: _PrincipalKey) -> bool:
+        with self._lock:
+            if self._bound(session_id, principal_key) is None:
+                return False
+            del self._sessions[session_id]
+            return True
+
 
 class MCPStreamableHTTPGatewayCarrier:
     """Inbound Streamable HTTP endpoint that terminates lifecycle and enforces Tool policy."""
@@ -472,11 +565,13 @@ class MCPStreamableHTTPGatewayCarrier:
         *,
         authenticator: InboundAuthenticator,
         context_resolver: InvocationContextResolver,
+        session_store: SessionStore | None = None,
     ) -> None:
         self.adapter = adapter
         self.config = config
         self._authenticator = authenticator
         self._context_resolver = context_resolver
+        self._session_store = session_store
         self._allowed_origins = {_canonical_origin(item) for item in config.allowed_origins}
         self._allowed_hosts = {_canonical_host(item) for item in config.allowed_hosts}
         self._lifecycle: dict[tuple[str, str, str], str] = {}
@@ -496,9 +591,13 @@ class MCPStreamableHTTPGatewayCarrier:
             principal = self._authenticate(headers)
             method = request.method.upper()
             if method == "GET":
-                return MCPHTTPResponse(405, {**base_headers, "Allow": "POST, DELETE"})
+                if self._session_store is None:
+                    return MCPHTTPResponse(405, {**base_headers, "Allow": "POST, DELETE"})
+                return self._handle_get_sse(headers, principal, base_headers)
             if method == "DELETE":
-                return MCPHTTPResponse(405, {**base_headers, "Allow": "POST"})
+                if self._session_store is None:
+                    return MCPHTTPResponse(405, {**base_headers, "Allow": "POST"})
+                return self._handle_delete_session(headers, principal, base_headers)
             if method != "POST":
                 return MCPHTTPResponse(405, {**base_headers, "Allow": "POST"})
             self._validate_post_headers(headers, len(request.body))
@@ -526,7 +625,7 @@ class MCPStreamableHTTPGatewayCarrier:
             protocol_error = self._validate_protocol(message, headers)
             if protocol_error is not None:
                 return protocol_error
-            lifecycle = self._handle_lifecycle(message, principal, base_headers)
+            lifecycle = self._handle_lifecycle(message, principal, headers, base_headers)
             if lifecycle is not None:
                 return lifecycle
             method_name = message.get("method")
@@ -541,7 +640,7 @@ class MCPStreamableHTTPGatewayCarrier:
                     "MCP-METHOD-NOT-SUPPORTED",
                     base_headers,
                 )
-            if not self._ready(principal):
+            if not self._ready(principal, headers):
                 return _jsonrpc_http_response(
                     400,
                     message.get("id"),
@@ -657,9 +756,11 @@ class MCPStreamableHTTPGatewayCarrier:
         self,
         message: Mapping[str, Any],
         principal: MCPHTTPPrincipal,
+        headers: Mapping[str, str],
         base_headers: Mapping[str, str],
     ) -> MCPHTTPResponse | None:
         method = message.get("method")
+        key = self._principal_key(principal)
         if method == "initialize":
             if "id" not in message:
                 return _jsonrpc_http_response(
@@ -670,8 +771,14 @@ class MCPStreamableHTTPGatewayCarrier:
                     "MCP-LIFECYCLE-INITIALIZE-ID-MISSING",
                     base_headers,
                 )
-            with self._lifecycle_lock:
-                self._lifecycle[self._principal_key(principal)] = "INITIALIZING"
+            result_headers = {**base_headers, "Content-Type": "application/json"}
+            if self._session_store is not None:
+                session_id = _new_session_id()
+                self._session_store.create(session_id, key)
+                result_headers["MCP-Session-Id"] = session_id
+            else:
+                with self._lifecycle_lock:
+                    self._lifecycle[key] = "INITIALIZING"
             result = {
                 "protocolVersion": self.config.protocol_version,
                 "capabilities": {"tools": {"listChanged": True}},
@@ -679,7 +786,7 @@ class MCPStreamableHTTPGatewayCarrier:
             }
             return MCPHTTPResponse(
                 200,
-                {**base_headers, "Content-Type": "application/json"},
+                result_headers,
                 _json_bytes({"jsonrpc": "2.0", "id": message.get("id"), "result": result}),
             )
         if method == "notifications/initialized":
@@ -692,8 +799,19 @@ class MCPStreamableHTTPGatewayCarrier:
                     "MCP-LIFECYCLE-INITIALIZED-ID-PRESENT",
                     base_headers,
                 )
+            if self._session_store is not None:
+                session_id = self._session_id_from_headers(headers)
+                if session_id is None or not self._session_store.mark_ready(session_id, key):
+                    return _jsonrpc_http_response(
+                        400,
+                        None,
+                        _JSONRPC_INVALID_REQUEST,
+                        "initialized notification has no matching initialize request",
+                        "MCP-LIFECYCLE-ORDER-INVALID",
+                        base_headers,
+                    )
+                return MCPHTTPResponse(202, base_headers)
             with self._lifecycle_lock:
-                key = self._principal_key(principal)
                 if self._lifecycle.get(key) != "INITIALIZING":
                     return _jsonrpc_http_response(
                         400,
@@ -715,9 +833,66 @@ class MCPStreamableHTTPGatewayCarrier:
             )
         return None
 
-    def _ready(self, principal: MCPHTTPPrincipal) -> bool:
+    def _ready(self, principal: MCPHTTPPrincipal, headers: Mapping[str, str]) -> bool:
+        key = self._principal_key(principal)
+        if self._session_store is not None:
+            session_id = self._session_id_from_headers(headers)
+            return session_id is not None and self._session_store.state(session_id, key) == "READY"
         with self._lifecycle_lock:
-            return self._lifecycle.get(self._principal_key(principal)) == "READY"
+            return self._lifecycle.get(key) == "READY"
+
+    def _handle_get_sse(
+        self,
+        headers: Mapping[str, str],
+        principal: MCPHTTPPrincipal,
+        base_headers: Mapping[str, str],
+    ) -> MCPHTTPResponse:
+        assert self._session_store is not None
+        session_id = self._session_id_from_headers(headers)
+        if session_id is None:
+            raise _InboundHTTPError(400)
+        key = self._principal_key(principal)
+        if self._session_store.state(session_id, key) is None:
+            raise _InboundHTTPError(404)
+        after = _parse_last_event_id(headers.get("last-event-id"))
+        events = self._session_store.replay(session_id, key, after)
+        body = b"".join(_sse_frame(sequence, message) for sequence, message in events)
+        return MCPHTTPResponse(200, {**base_headers, "Content-Type": "text/event-stream"}, body)
+
+    def _handle_delete_session(
+        self,
+        headers: Mapping[str, str],
+        principal: MCPHTTPPrincipal,
+        base_headers: Mapping[str, str],
+    ) -> MCPHTTPResponse:
+        assert self._session_store is not None
+        session_id = self._session_id_from_headers(headers)
+        if session_id is None:
+            raise _InboundHTTPError(400)
+        self._session_store.delete(session_id, self._principal_key(principal))
+        return MCPHTTPResponse(200, base_headers)
+
+    def enqueue_server_notification(
+        self,
+        session_id: str,
+        principal: MCPHTTPPrincipal,
+        message: Mapping[str, Any],
+    ) -> int:
+        """Buffer a server->client JSON-RPC notification for resumable SSE replay."""
+        if self._session_store is None:
+            raise MCPHTTPError("MCP-HTTP-SESSION-STORE-DISABLED", "server push requires a session store")
+        if "id" in message or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+            raise MCPHTTPError("MCP-SSE-SERVER-MESSAGE-INVALID", "server push must be a JSON-RPC notification")
+        return self._session_store.append(session_id, self._principal_key(principal), dict(message))
+
+    def _session_id_from_headers(self, headers: Mapping[str, str]) -> str | None:
+        raw = headers.get("mcp-session-id")
+        if raw is None:
+            return None
+        try:
+            return _validated_session_id(raw)
+        except MCPHTTPError:
+            return None
 
     @staticmethod
     def _principal_key(principal: MCPHTTPPrincipal) -> tuple[str, str, str]:
@@ -867,6 +1042,23 @@ def _validated_session_id(value: str) -> str:
     if len(value) > 1024 or not _visible_ascii(value):
         raise MCPHTTPError("MCP-HTTP-SESSION-ID-INVALID", "MCP session id must be visible ASCII")
     return value
+
+
+def _new_session_id() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def _sse_frame(event_id: int, message: Mapping[str, Any]) -> bytes:
+    data = json.dumps(message, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    return f"id: {event_id}\ndata: {data}\n\n".encode("utf-8")
+
+
+def _parse_last_event_id(value: str | None) -> int | None:
+    if value is None:
+        return None
+    if not value.isascii() or not value.isdigit():
+        raise _InboundHTTPError(400)
+    return int(value)
 
 
 def _visible_ascii(value: str) -> bool:

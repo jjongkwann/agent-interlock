@@ -137,6 +137,9 @@ class LinkPolicy:
     allow_cross_server_references: bool = False
     require_explicit_destination: bool = True
     new_destination_action: ControlDecision = ControlDecision.HOLD
+    max_export_records: int = 0
+    max_export_bytes: int = 0
+    volume_action: ControlDecision = ControlDecision.BLOCK
     token_passthrough: bool = False
     require_audience: bool = True
     require_resource: bool = True
@@ -210,6 +213,8 @@ class InvocationIntent:
     approval_id: str | None = None
     expected_audience: str = ""
     expected_resource: str = ""
+    estimated_record_count: int = 1
+    estimated_byte_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

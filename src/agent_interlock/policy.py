@@ -85,6 +85,11 @@ def evaluate(policy: LinkPolicy, value: EvaluationInput) -> PolicyDecisionRecord
     if policy.require_explicit_destination and value.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE and not canonical_destinations:
         reasons.append("L1-M9-NEW-DESTINATION")
         decisions.append(policy.new_destination_action)
+    if (policy.max_export_records and value.intent.estimated_record_count > policy.max_export_records) or (
+        policy.max_export_bytes and value.intent.estimated_byte_count > policy.max_export_bytes
+    ):
+        reasons.append("L1-M9-VOLUME-EXCEEDED")
+        decisions.append(policy.volume_action)
 
     if value.intent.estimated_side_effect not in {SideEffect.NONE, *value.target.side_effects}:
         reasons.append("L1-UNDECLARED-SIDE-EFFECT")

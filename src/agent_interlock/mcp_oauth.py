@@ -15,10 +15,11 @@ import re
 import secrets
 import socket
 import ssl
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import (
     parse_qsl,
@@ -694,28 +695,7 @@ class MCPAuthorizationCodeTokenClient:
             "Cache-Control": "no-store",
             "Content-Type": "application/x-www-form-urlencoded",
         }
-        if self._client_authentication_provider is not None:
-            try:
-                client_headers = self._client_authentication_provider()
-            except Exception:
-                raise MCPOAuthError(
-                    "MCP-OAUTH-CLIENT-AUTH-FAILED",
-                    "client authentication provider failed",
-                ) from None
-            if not isinstance(client_headers, Mapping):
-                raise MCPOAuthError(
-                    "MCP-OAUTH-CLIENT-AUTH-INVALID",
-                    "client authentication provider must return headers",
-                )
-            for key, value in client_headers.items():
-                if key.casefold() != "authorization":
-                    raise MCPOAuthError(
-                        "MCP-OAUTH-CLIENT-AUTH-INVALID",
-                        "client authentication provider returned an unsupported header",
-                    )
-                if not _safe_header_value(value):
-                    raise MCPOAuthError("MCP-OAUTH-CLIENT-AUTH-INVALID", "client authentication header is invalid")
-                headers[key] = value
+        _apply_client_authentication(headers, self._client_authentication_provider)
         request = Request(token_endpoint, data=body, method="POST", headers=headers)
         try:
             response = self._opener.open(request, timeout=self.profile.timeout_seconds)
@@ -800,6 +780,184 @@ class MCPAuthorizationCodeTokenClient:
         requested = set(transaction.scopes)
         if not requested.issubset(verified.scopes) or set(response_scopes) != set(verified.scopes):
             raise MCPOAuthError("MCP-OAUTH-TOKEN-SCOPE-MISMATCH", "verified token scopes do not match")
+
+
+class MCPTokenIntrospectionVerifier:
+    """RFC 7662 token introspection presented as a TokenClaimsVerifier.
+
+    The access token is sent to a client-authenticated introspection endpoint;
+    the standard introspection response is mapped to VerifiedAccessTokenClaims.
+    This never decodes an unsigned token — it trusts only what the authorization
+    server asserts over an SSRF-guarded channel. Audience/actor/scope *matching*
+    stays the token client's job; this only maps and validates presence.
+    """
+
+    def __init__(
+        self,
+        introspection_endpoint: str,
+        profile: OAuthSecurityProfile,
+        *,
+        client_authentication_provider: ClientAuthenticationProvider | None = None,
+        ssl_context: ssl.SSLContext | None = None,
+    ) -> None:
+        self.profile = profile
+        self.introspection_endpoint = validate_oauth_url(
+            introspection_endpoint,
+            allowed_hosts=profile.allowed_authorization_server_hosts,
+            profile=profile,
+            allow_query=True,
+        )
+        self._client_authentication_provider = client_authentication_provider
+        handlers: list[Any] = [_NoRedirectHandler()]
+        if ssl_context is not None:
+            handlers.append(HTTPSHandler(context=ssl_context))
+        self._opener = build_opener(*handlers)
+
+    def __call__(self, access_token: str) -> VerifiedAccessTokenClaims:
+        if not isinstance(access_token, str) or not access_token or "\r" in access_token or "\n" in access_token:
+            raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-TOKEN-INVALID", "access token is invalid")
+        body = urlencode({"token": access_token, "token_type_hint": "access_token"}).encode("ascii")
+        headers = {
+            "Accept": "application/json",
+            "Cache-Control": "no-store",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        _apply_client_authentication(headers, self._client_authentication_provider)
+        request = Request(self.introspection_endpoint, data=body, method="POST", headers=headers)
+        try:
+            response = self._opener.open(request, timeout=self.profile.timeout_seconds)
+        except HTTPError as error:
+            status = error.code
+            error.close()
+            if status in _REDIRECT_STATUSES:
+                raise MCPOAuthError(
+                    "MCP-OAUTH-INTROSPECTION-REDIRECT-DENIED",
+                    "token introspection redirect is forbidden",
+                ) from None
+            raise MCPOAuthHTTPStatusError(status, reason_code="MCP-OAUTH-INTROSPECTION-STATUS") from None
+        except (URLError, TimeoutError, OSError):
+            raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-CONNECTION-FAILED", "token introspection failed") from None
+        try:
+            if response.status != 200:
+                raise MCPOAuthHTTPStatusError(response.status, reason_code="MCP-OAUTH-INTROSPECTION-STATUS")
+            if _media_type(response.headers.get("Content-Type")) != "application/json":
+                raise MCPOAuthError("MCP-OAUTH-CONTENT-TYPE-INVALID", "introspection response must be JSON")
+            payload = response.read(self.profile.max_response_bytes + 1)
+            if len(payload) > self.profile.max_response_bytes:
+                raise MCPOAuthError("MCP-OAUTH-RESPONSE-TOO-LARGE", "introspection response is too large")
+        finally:
+            response.close()
+        return _map_introspection_claims(_json_mapping(payload))
+
+
+class OAuthTransactionStore(Protocol):
+    """One-time-consume store for pending OAuth authorization transactions.
+
+    A distributed implementation makes state/code callbacks single-use across
+    gateway instances, so a callback cannot be replayed on a different node.
+    """
+
+    def put(self, transaction: OAuthAuthorizationTransaction) -> None: ...
+
+    def consume(self, state: str) -> OAuthAuthorizationTransaction | None: ...
+
+    def delete(self, state: str) -> None: ...
+
+
+class InMemoryOAuthTransactionStore:
+    """Reference single-node transaction store. Distributed backends mirror this contract."""
+
+    def __init__(self) -> None:
+        self._by_state: dict[str, OAuthAuthorizationTransaction] = {}
+        self._lock = threading.RLock()
+
+    def put(self, transaction: OAuthAuthorizationTransaction) -> None:
+        with self._lock:
+            if transaction.state in self._by_state:
+                raise MCPOAuthError("MCP-OAUTH-STATE-DUPLICATE", "OAuth state is already pending")
+            self._by_state[transaction.state] = transaction
+
+    def consume(self, state: str) -> OAuthAuthorizationTransaction | None:
+        # One-time: the transaction is removed on consume, so a replayed callback
+        # arriving on any instance finds nothing.
+        with self._lock:
+            return self._by_state.pop(state, None)
+
+    def delete(self, state: str) -> None:
+        with self._lock:
+            self._by_state.pop(state, None)
+
+
+def _apply_client_authentication(
+    headers: dict[str, str],
+    provider: ClientAuthenticationProvider | None,
+) -> None:
+    if provider is None:
+        return
+    try:
+        client_headers = provider()
+    except Exception:
+        raise MCPOAuthError("MCP-OAUTH-CLIENT-AUTH-FAILED", "client authentication provider failed") from None
+    if not isinstance(client_headers, Mapping):
+        raise MCPOAuthError("MCP-OAUTH-CLIENT-AUTH-INVALID", "client authentication provider must return headers")
+    for key, value in client_headers.items():
+        if key.casefold() != "authorization":
+            raise MCPOAuthError(
+                "MCP-OAUTH-CLIENT-AUTH-INVALID",
+                "client authentication provider returned an unsupported header",
+            )
+        if not _safe_header_value(value):
+            raise MCPOAuthError("MCP-OAUTH-CLIENT-AUTH-INVALID", "client authentication header is invalid")
+        headers[key] = value
+
+
+def _map_introspection_claims(value: Mapping[str, Any]) -> VerifiedAccessTokenClaims:
+    if value.get("active") is not True:
+        raise MCPOAuthError("MCP-OAUTH-TOKEN-INACTIVE", "introspected token is not active")
+    issuer = _required_string(value, "iss", "MCP-OAUTH-INTROSPECTION-INVALID")
+    subject = _required_string(value, "sub", "MCP-OAUTH-INTROSPECTION-INVALID")
+    audience = _single_audience(value.get("aud"))
+    resource_value = value.get("resource")
+    if resource_value is None:
+        resource = audience
+    elif isinstance(resource_value, str) and resource_value:
+        resource = resource_value
+    else:
+        raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-INVALID", "introspection resource is invalid")
+    scope_value = value.get("scope", "")
+    scopes = frozenset(_parse_scope(scope_value)) if scope_value else frozenset()
+    expires = value.get("exp")
+    if not isinstance(expires, int) or isinstance(expires, bool) or expires <= 0:
+        raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-INVALID", "introspection exp is invalid")
+    return VerifiedAccessTokenClaims(
+        issuer=issuer,
+        subject=subject,
+        actor=_introspection_actor(value, subject),
+        audience=audience,
+        resource=resource,
+        scopes=scopes,
+        expires_at_epoch=float(expires),
+    )
+
+
+def _single_audience(value: Any) -> str:
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str) and value[0]:
+        return value[0]
+    raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-INVALID", "introspection aud is invalid")
+
+
+def _introspection_actor(value: Mapping[str, Any], subject: str) -> str:
+    act = value.get("act")
+    if act is None:
+        return subject
+    if not isinstance(act, Mapping):
+        raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-INVALID", "introspection act claim is invalid")
+    actor = act.get("sub")
+    if not isinstance(actor, str) or not actor:
+        raise MCPOAuthError("MCP-OAUTH-INTROSPECTION-INVALID", "introspection act.sub is invalid")
+    return actor
 
 
 def validate_oauth_url(
