@@ -153,6 +153,7 @@ from .postgres_ledger import (
 from .postgres_stores import (
     PostgreSQLConfigStore,
     PostgreSQLOAuthTransactionStore,
+    PostgreSQLRevisionStore,
     PostgreSQLSessionStore,
 )
 from .models import (
@@ -173,7 +174,13 @@ from .models import (
     SideEffect,
     ToolDefinition,
 )
-from .registry import DefinitionRegistry, InvalidStateTransition, ToolRevision
+from .registry import (
+    DefinitionRegistry,
+    InMemoryRevisionStore,
+    InvalidStateTransition,
+    RevisionStore,
+    ToolRevision,
+)
 from .receipts import (
     FakeExternalReceipt,
     FakeExternalReceiptStore,
@@ -275,6 +282,8 @@ __all__ = [
     "GatewayError",
     "InMemoryConfigStore",
     "InMemoryLedger",
+    "InMemoryRevisionStore",
+    "RevisionStore",
     "InMemoryNetworkEgressBackend",
     "InMemoryOAuthTransactionStore",
     "InMemoryRuntimeConfigProbe",
@@ -339,6 +348,7 @@ __all__ = [
     "PostgreSQLDriverUnavailable",
     "PostgreSQLLedger",
     "PostgreSQLOAuthTransactionStore",
+    "PostgreSQLRevisionStore",
     "PostgreSQLSessionStore",
     "ProtectedResourceMetadata",
     "ReceiptError",

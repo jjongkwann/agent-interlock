@@ -306,10 +306,10 @@ class PostgreSQLStoresIntegrationTests(unittest.TestCase):
         cls.dsn_b = os.environ["INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"]
 
     def test_session_lifecycle_survives_instances_and_hides_other_tenants(self):
-        store_a = PostgreSQLSessionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant_a")
-        second_node = PostgreSQLSessionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant_a")
-        store_b = PostgreSQLSessionStore.from_dsn(self.dsn_b, bound_tenant_id="tenant_b")
-        principal = ("tenant_a", "agent-live", "subject-live")
+        store_a = PostgreSQLSessionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a")
+        second_node = PostgreSQLSessionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a")
+        store_b = PostgreSQLSessionStore.from_dsn(self.dsn_b, bound_tenant_id="tenant-b")
+        principal = ("tenant-a", "agent-live", "subject-live")
         session_id = f"live-{uuid.uuid4()}"
         store_a.create(session_id, principal)
         try:
@@ -321,13 +321,13 @@ class PostgreSQLStoresIntegrationTests(unittest.TestCase):
             self.assertEqual((first, second), (1, 2))
             replayed = second_node.replay(session_id, principal, 1)
             self.assertEqual(replayed, ((2, {"jsonrpc": "2.0", "method": "b"}),))
-            self.assertIsNone(store_b.state(session_id, ("tenant_b", "agent-live", "subject-live")))
+            self.assertIsNone(store_b.state(session_id, ("tenant-b", "agent-live", "subject-live")))
         finally:
             self.assertTrue(store_a.delete(session_id, principal))
 
     def test_oauth_transaction_is_single_use_across_instances(self):
-        node_1 = PostgreSQLOAuthTransactionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant_a")
-        node_2 = PostgreSQLOAuthTransactionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant_a")
+        node_1 = PostgreSQLOAuthTransactionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a")
+        node_2 = PostgreSQLOAuthTransactionStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a")
         transaction = sample_transaction(state=f"live-{uuid.uuid4()}")
         node_1.put(transaction)
         with self.assertRaises(MCPOAuthError):
@@ -338,10 +338,10 @@ class PostgreSQLStoresIntegrationTests(unittest.TestCase):
         self.assertIsNone(node_1.consume(transaction.state))
 
     def test_config_cas_activation_is_database_enforced(self):
-        node_1 = PostgreSQLConfigStore.from_dsn(self.dsn_a, bound_tenant_id="tenant_a")
-        node_2 = PostgreSQLConfigStore.from_dsn(self.dsn_a, bound_tenant_id="tenant_a")
+        node_1 = PostgreSQLConfigStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a")
+        node_2 = PostgreSQLConfigStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a")
         config_id = f"live-{uuid.uuid4()}"
-        base_config = AgentConfig(tenant_id="tenant_a", config_id=config_id, agent_id="agent-live")
+        base_config = AgentConfig(tenant_id="tenant-a", config_id=config_id, agent_id="agent-live")
         base = ConfigRevision(
             revision_id=f"{config_id}@{base_config.digest}",
             config=base_config,
@@ -352,7 +352,7 @@ class PostgreSQLStoresIntegrationTests(unittest.TestCase):
         activated = node_1.activate(base, expected_active_digest=None)
         self.assertEqual(activated.state, ConfigRevisionState.ACTIVE)
         follow_config = AgentConfig(
-            tenant_id="tenant_a", config_id=config_id, agent_id="agent-live", trigger_refs=("t-1",)
+            tenant_id="tenant-a", config_id=config_id, agent_id="agent-live", trigger_refs=("t-1",)
         )
         follow = ConfigRevision(
             revision_id=f"{config_id}@{follow_config.digest}",
@@ -364,10 +364,10 @@ class PostgreSQLStoresIntegrationTests(unittest.TestCase):
         with self.assertRaises(ConfigStoreStale):
             node_2.activate(follow, expected_active_digest="sha256:" + "f" * 64)
         node_2.activate(follow, expected_active_digest=base_config.digest)
-        active = node_1.active("tenant_a", config_id)
+        active = node_1.active("tenant-a", config_id)
         self.assertIsNotNone(active)
         self.assertEqual(active.config_digest, follow_config.digest)
-        states = [revision.state for revision in node_1.revisions_for("tenant_a", config_id)]
+        states = [revision.state for revision in node_1.revisions_for("tenant-a", config_id)]
         self.assertEqual(states, [ConfigRevisionState.SUPERSEDED, ConfigRevisionState.ACTIVE])
 
 

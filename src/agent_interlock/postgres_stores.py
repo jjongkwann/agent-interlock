@@ -16,7 +16,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any, Iterator, Mapping
 
-from .canonical import canonical_json
+from .canonical import canonical_digest, canonical_json
 from .config_guard import (
     AgentConfig,
     ConfigApproval,
@@ -28,7 +28,8 @@ from .config_guard import (
 from .ledger import LedgerIntegrityError
 from .mcp_http import MCPHTTPError
 from .mcp_oauth import MCPOAuthError, OAuthAuthorizationTransaction
-from .models import ToolDefinition
+from .models import DefinitionState, ToolDefinition
+from .registry import ToolRevision
 from .postgres_ledger import (
     ConnectionFactory,
     LedgerTenantMismatch,
@@ -438,3 +439,122 @@ class PostgreSQLConfigStore(_PostgreSQLStoreBase):
             )
         self.write_count += 1
         return active_copy
+
+
+# --------------------------------------------------------------------------- #
+# RevisionStore (DefinitionRegistry persistence)
+# --------------------------------------------------------------------------- #
+
+_UPSERT_REVISION_RECORD = """
+INSERT INTO interlock.tool_revisions
+    (tenant_id, revision_id, tool_id, canonical_digest, state, revision)
+VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+ON CONFLICT (tenant_id, revision_id)
+    DO UPDATE SET state = EXCLUDED.state, revision = EXCLUDED.revision
+""".strip()
+
+_GET_REVISION = """
+SELECT revision::text FROM interlock.tool_revisions
+WHERE tenant_id = %s AND revision_id = %s
+""".strip()
+
+_REVISIONS_FOR_TOOL = """
+SELECT revision::text FROM interlock.tool_revisions
+WHERE tenant_id = %s AND tool_id = %s
+ORDER BY seq
+""".strip()
+
+_ACTIVE_FOR_TOOL = """
+SELECT revision::text FROM interlock.tool_revisions
+WHERE tenant_id = %s AND tool_id = %s AND state = 'ACTIVE'
+ORDER BY seq DESC
+LIMIT 1
+""".strip()
+
+
+def _revision_record_value(revision: ToolRevision) -> dict[str, Any]:
+    value = asdict(revision)
+    value["definition"] = revision.definition.canonical_value()
+    value["state"] = revision.state.value
+    value["reason_codes"] = list(revision.reason_codes)
+    value["observed_at"] = revision.observed_at.isoformat()
+    value["approved_at"] = revision.approved_at.isoformat() if revision.approved_at else None
+    return value
+
+
+def _tool_definition_from(value: Mapping[str, Any]) -> ToolDefinition:
+    return ToolDefinition(
+        server_id=value["serverId"],
+        tool_name=value["toolName"],
+        title=value["title"],
+        description=value["description"],
+        input_schema=value["inputSchema"],
+        output_schema=value["outputSchema"],
+        annotations=value["annotations"],
+        protocol_extensions=value["protocolExtensions"],
+        endpoint=value["endpoint"],
+        transport=value["transport"],
+        publisher=value["publisher"],
+        artifact_digest=value["artifactDigest"],
+    )
+
+
+def _revision_record_from(value: Mapping[str, Any]) -> ToolRevision:
+    definition = _tool_definition_from(value["definition"])
+    revision = ToolRevision(
+        revision_id=value["revision_id"],
+        tool_id=value["tool_id"],
+        definition=definition,
+        canonical_digest=value["canonical_digest"],
+        raw_digest=value["raw_digest"],
+        canonicalizer_version=value["canonicalizer_version"],
+        state=DefinitionState(value["state"]),
+        reason_codes=tuple(value["reason_codes"]),
+        observed_at=datetime.fromisoformat(value["observed_at"]),
+        approved_by=value["approved_by"],
+        approved_at=datetime.fromisoformat(value["approved_at"]) if value["approved_at"] else None,
+    )
+    if canonical_digest(definition.canonical_value()) != revision.canonical_digest:
+        raise LedgerIntegrityError("stored tool revision failed digest verification")
+    return revision
+
+
+class PostgreSQLRevisionStore(_PostgreSQLStoreBase):
+    """Tenant-bound RevisionStore backing DefinitionRegistry across nodes.
+
+    Wire it with ``DefinitionRegistry(store=PostgreSQLRevisionStore.from_dsn(...))``.
+    The stored definition digest is re-verified on every read.
+    """
+
+    _APPLICATION_NAME = "agent-interlock-revision-store"
+
+    def get(self, revision_id: str) -> ToolRevision | None:
+        with self._transaction() as connection:
+            row = self._execute(connection, _GET_REVISION, (self.bound_tenant_id, revision_id))
+        return None if row is None else _revision_record_from(json.loads(row[0]))
+
+    def save(self, revision: ToolRevision) -> ToolRevision:
+        with self._transaction() as connection:
+            self._execute_none(
+                connection,
+                _UPSERT_REVISION_RECORD,
+                (
+                    self.bound_tenant_id,
+                    revision.revision_id,
+                    revision.tool_id,
+                    revision.canonical_digest,
+                    revision.state.value,
+                    canonical_json(_revision_record_value(revision)).decode("utf-8"),
+                ),
+            )
+        return revision
+
+    def revisions_for(self, tool_id: str) -> tuple[ToolRevision, ...]:
+        with self._transaction() as connection:
+            rows = self._execute_all(connection, _REVISIONS_FOR_TOOL, (self.bound_tenant_id, tool_id))
+        return tuple(_revision_record_from(json.loads(row[0])) for row in rows)
+
+    def active_for(self, tool_id: str) -> ToolRevision | None:
+        with self._transaction() as connection:
+            row = self._execute(connection, _ACTIVE_FOR_TOOL, (self.bound_tenant_id, tool_id))
+        return None if row is None else _revision_record_from(json.loads(row[0]))

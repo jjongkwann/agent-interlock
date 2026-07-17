@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Iterable
+from typing import Iterable, Protocol
 
 from .canonical import CANONICALIZER_VERSION, canonical_digest, raw_digest
 from .models import DefinitionState, ToolDefinition
@@ -36,17 +37,69 @@ _METADATA_INSTRUCTION = re.compile(
 )
 
 
-class DefinitionRegistry:
-    """In-memory reference registry. Persistent adapters can mirror this contract."""
+class RevisionStore(Protocol):
+    """Persistence for tool revisions, keyed by revision id and tool id.
+
+    The state machine and inspection stay in :class:`DefinitionRegistry`; a
+    store only persists and loads records. ``save`` upserts by revision id and
+    preserves first-seen order per tool so ``active_for`` can break ties by
+    most-recent observation.
+    """
+
+    def get(self, revision_id: str) -> ToolRevision | None: ...
+
+    def save(self, revision: ToolRevision) -> ToolRevision: ...
+
+    def revisions_for(self, tool_id: str) -> tuple[ToolRevision, ...]: ...
+
+    def active_for(self, tool_id: str) -> ToolRevision | None: ...
+
+
+class InMemoryRevisionStore:
+    """Single-node reference store; the default backend for DefinitionRegistry."""
 
     def __init__(self) -> None:
         self._revisions: dict[str, ToolRevision] = {}
         self._by_tool: dict[str, list[str]] = {}
+        self._lock = threading.RLock()
+
+    def get(self, revision_id: str) -> ToolRevision | None:
+        with self._lock:
+            return self._revisions.get(revision_id)
+
+    def save(self, revision: ToolRevision) -> ToolRevision:
+        with self._lock:
+            if revision.revision_id not in self._revisions:
+                self._by_tool.setdefault(revision.tool_id, []).append(revision.revision_id)
+            self._revisions[revision.revision_id] = revision
+        return revision
+
+    def revisions_for(self, tool_id: str) -> tuple[ToolRevision, ...]:
+        with self._lock:
+            return tuple(self._revisions[item] for item in self._by_tool.get(tool_id, []))
+
+    def active_for(self, tool_id: str) -> ToolRevision | None:
+        with self._lock:
+            return next(
+                (
+                    self._revisions[item]
+                    for item in reversed(self._by_tool.get(tool_id, []))
+                    if self._revisions[item].state == DefinitionState.ACTIVE
+                ),
+                None,
+            )
+
+
+class DefinitionRegistry:
+    """Reference registry state machine over a pluggable :class:`RevisionStore`."""
+
+    def __init__(self, store: RevisionStore | None = None) -> None:
+        self._store = store or InMemoryRevisionStore()
 
     def observe(self, definition: ToolDefinition, raw_definition: bytes | str | object | None = None) -> ToolRevision:
         digest = canonical_digest(definition.canonical_value())
         revision_id = f"{definition.tool_id}@{digest}"
-        existing = self._revisions.get(revision_id)
+        existing = self._store.get(revision_id)
         if existing:
             return existing
 
@@ -71,9 +124,7 @@ class DefinitionRegistry:
             reason_codes=tuple(reasons),
             observed_at=datetime.now(UTC),
         )
-        self._revisions[revision_id] = revision
-        self._by_tool.setdefault(definition.tool_id, []).append(revision_id)
-        return revision
+        return self._store.save(revision)
 
     def approve(self, revision_id: str, approver: str) -> ToolRevision:
         revision = self.get(revision_id)
@@ -123,24 +174,19 @@ class DefinitionRegistry:
         return self._save(replace(revision, state=DefinitionState.REVOKED))
 
     def get(self, revision_id: str) -> ToolRevision:
-        try:
-            return self._revisions[revision_id]
-        except KeyError as error:
-            raise KeyError(f"unknown tool revision: {revision_id}") from error
+        revision = self._store.get(revision_id)
+        if revision is None:
+            raise KeyError(f"unknown tool revision: {revision_id}")
+        return revision
 
     def active_for(self, tool_id: str) -> ToolRevision | None:
-        return next(
-            (self._revisions[item] for item in reversed(self._by_tool.get(tool_id, []))
-             if self._revisions[item].state == DefinitionState.ACTIVE),
-            None,
-        )
+        return self._store.active_for(tool_id)
 
     def revisions_for(self, tool_id: str) -> tuple[ToolRevision, ...]:
-        return tuple(self._revisions[item] for item in self._by_tool.get(tool_id, []))
+        return self._store.revisions_for(tool_id)
 
     def _save(self, revision: ToolRevision) -> ToolRevision:
-        self._revisions[revision.revision_id] = revision
-        return revision
+        return self._store.save(revision)
 
     @staticmethod
     def _inspect(definition: ToolDefinition) -> Iterable[str]:
