@@ -18,7 +18,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
 
-from .canonical import canonical_digest
+from .canonical import canonical_digest, raw_digest
 from .mcp_transport import MCP_PROTOCOL_VERSION, MCPServerProfile
 from .security import contains_secret, sanitize_secrets
 from .signing import sign_canonical, verify_canonical
@@ -366,6 +366,138 @@ class BubblewrapSandboxBackend:
                 seen.add(artifact.path)
         argv += ["--remount-ro", "/", "--chdir", profile.working_directory, "--", *profile.command]
         return tuple(argv)
+
+
+# Roots that must never be granted as sandbox paths on macOS: OS code, system
+# configuration, and whole user-data volumes.
+_UNSAFE_SEATBELT_MOUNTS = _UNSAFE_SANDBOX_MOUNTS | frozenset(
+    {"/System", "/usr", "/Library", "/private", "/var", "/etc", "/Users", "/Volumes", "/Network", "/Applications"}
+)
+
+# User-data subtrees the generated Seatbelt policy makes unreadable unless a
+# descendant is explicitly declared by the profile (later allow rules win).
+_SEATBELT_DENIED_SUBTREES = (
+    "/Users",
+    "/Volumes",
+    "/Network",
+    "/tmp",
+    "/private/tmp",
+    "/private/var/tmp",
+    "/private/var/folders",
+    "/opt",
+    "/usr/local",
+    "/Library/Keychains",
+    "/Library/Application Support",
+)
+
+
+def _seatbelt_path(path: str) -> str:
+    """Quote a path for interpolation into an SBPL string literal."""
+    if any(character in path for character in ('"', "\\", "\n", "\r", ";")):
+        raise MCPStdioError(
+            "MCP-STDIO-SANDBOX-UNSAFE-MOUNT",
+            "sandbox path contains characters that cannot be safely quoted in a Seatbelt policy",
+        )
+    return f'"{path}"'
+
+
+@dataclass(frozen=True, slots=True)
+class SeatbeltSandboxBackend:
+    """macOS Seatbelt (sandbox-exec) backend that attests only what its
+    generated policy actually enforces.
+
+    The policy starts from ``(deny default)``: all writes are denied except the
+    declared writable paths, and the user-data subtrees in
+    ``_SEATBELT_DENIED_SUBTREES`` are unreadable except declared descendants.
+    OS runtime paths stay readable — a pure read allow-list is not portable
+    across macOS releases because dyld probes several shared-cache locations —
+    so ``filesystem_restricted`` claims exactly that write-deny + user-data-deny
+    model, and the evidence reference carries the policy digest a verifier can
+    review. Unlike bubblewrap, Seatbelt CAN deny process forking
+    (``(deny process-fork)`` covers fork and posix_spawn), so a profile with
+    ``allow_child_processes=False`` is honored and attested rather than
+    refused. The pinned sandbox-exec launcher is re-verified before each plan.
+    """
+
+    launcher: StdioArtifactPin
+    signing_key: bytes = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.signing_key:
+            raise ValueError("seatbelt sandbox backend requires a non-empty signing key")
+
+    def prepare(self, profile: StdioSandboxProfile) -> SandboxLaunchPlan:
+        _verify_artifact(self.launcher)
+        for path in (*profile.read_only_paths, *profile.writable_paths):
+            if (path.rstrip("/") or "/") in _UNSAFE_SEATBELT_MOUNTS:
+                raise MCPStdioError(
+                    "MCP-STDIO-SANDBOX-UNSAFE-MOUNT",
+                    f"path {path} is too broad to grant inside the sandbox",
+                )
+        policy = self._policy(profile)
+        attestation = SandboxAttestation(
+            backend_id="darwin-seatbelt-v1",
+            evidence_reference=(
+                f"seatbelt-policy:v1;launcher={self.launcher.digest};"
+                f"policy={raw_digest(policy.encode('utf-8'))}"
+            ),
+            profile_digest=profile.profile_digest,
+            artifact_set_digest=profile.artifact_set_digest,
+            filesystem_restricted=True,
+            network_restricted=not profile.allow_network,
+            child_process_restricted=not profile.allow_child_processes,
+        )
+        return SandboxLaunchPlan(
+            argv=(self.launcher.path, "-p", policy, *profile.command),
+            environment=profile.environment,
+            working_directory=profile.working_directory,
+            attestation=sign_attestation(attestation, self.signing_key),
+        )
+
+    def _policy(self, profile: StdioSandboxProfile) -> str:
+        declared: list[str] = []
+        seen: set[str] = set()
+        for path in (
+            profile.executable.path,
+            *(artifact.path for artifact in profile.additional_artifacts),
+            *profile.read_only_paths,
+            *profile.writable_paths,
+        ):
+            if path not in seen:
+                seen.add(path)
+                scheme = "subpath" if Path(path).is_dir() else "literal"
+                declared.append(f"({scheme} {_seatbelt_path(path)})")
+        lines = [
+            "(version 1)",
+            "(deny default)",
+            "(allow process-exec)",
+            "(allow file-read-metadata)",
+            "(allow file-read*)",
+            "(deny file-read* "
+            + " ".join(f"(subpath {_seatbelt_path(path)})" for path in _SEATBELT_DENIED_SUBTREES)
+            + ")",
+            "(allow file-read* " + " ".join(declared) + ")",
+        ]
+        if profile.writable_paths:
+            lines.append(
+                "(allow file-write* "
+                + " ".join(f"(subpath {_seatbelt_path(path)})" for path in profile.writable_paths)
+                + ")"
+            )
+        lines += [
+            '(allow file-ioctl (subpath "/dev"))',
+            "(allow sysctl-read)",
+            "(allow mach-lookup)",
+            "(allow process-info* (target self))",
+            "(allow signal (target self))",
+        ]
+        if profile.allow_network:
+            lines.append("(allow network*)")
+        if not profile.allow_child_processes:
+            lines.append("(deny process-fork)")
+        # One line: the client's argv validation forbids control delimiters,
+        # and SBPL needs no newlines.
+        return " ".join(lines)
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from .canonical import canonical_digest
+from .config_guard import ConfigDecision, ConfigGuard, ConfigPrincipal, ConfigRole, RuntimeConfigProbe
 from .ledger import InMemoryLedger, Ledger
 from .models import (
     ActionResult,
@@ -26,7 +27,7 @@ from .models import (
     SideEffect,
     ToolDefinition,
 )
-from .policy import EvaluationInput, evaluate
+from .policy import EvaluationInput, evaluate, _strongest
 from .receipts import FakeExternalReceiptStore
 from .registry import DefinitionRegistry, ToolRevision
 from .security import canonical_destination, destination_domain, sanitize_secrets, validate_schema
@@ -73,9 +74,20 @@ class _Pending:
 
 
 class MCPToolGateway:
-    def __init__(self, *, registry: DefinitionRegistry | None = None, ledger: Ledger | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        registry: DefinitionRegistry | None = None,
+        ledger: Ledger | None = None,
+        config_guard: ConfigGuard | None = None,
+        config_probe: RuntimeConfigProbe | None = None,
+        agent_config_ids: Mapping[str, str] | None = None,
+    ) -> None:
         self.registry = registry or DefinitionRegistry()
         self.ledger = ledger or InMemoryLedger()
+        self._config_guard = config_guard
+        self._config_probe = config_probe
+        self._agent_config_ids = dict(agent_config_ids or {})
         self._actors: dict[str, ActorSpec] = {}
         self._tool_actors: dict[str, ActorSpec] = {}
         self._policies: dict[tuple[str, str], LinkPolicy] = {}
@@ -215,11 +227,32 @@ class MCPToolGateway:
                 span_id=span,
             ),
         )
+        config_decision = self._config_preflight(tenant_id, source.id, trace)
+        if config_decision is not None:
+            decision = replace(
+                decision,
+                decision=_strongest([decision.decision, config_decision.decision]),
+                reason_codes=decision.reason_codes + config_decision.reason_codes,
+            )
         self._decisions[decision.decision_id] = _Pending(
             tenant_id, source, target, revision, intent, decision, environment, data_source
         )
         self._append_control(decision, credential)
         return decision
+
+    def _config_preflight(self, tenant_id: str, source_actor_id: str, trace_id: str) -> ConfigDecision | None:
+        """Opt-in M7 drift preflight; disabled unless guard, probe and a config
+        binding for the source actor were all provided."""
+        config_id = self._agent_config_ids.get(source_actor_id)
+        if self._config_guard is None or self._config_probe is None or config_id is None:
+            return None
+        result = self._config_guard.check_runtime(
+            ConfigPrincipal(tenant_id=tenant_id, actor_id=source_actor_id, role=ConfigRole.AGENT),
+            config_id,
+            self._config_probe,
+            trace_id=trace_id,
+        )
+        return None if result.decision == ControlDecision.ALLOW else result
 
     def execute_approved_call(
         self,

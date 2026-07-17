@@ -132,13 +132,16 @@ def build_gateway(
     side_effects: frozenset[SideEffect] = frozenset({SideEffect.EXTERNAL_WRITE}),
     allowed_domains: frozenset[str] = frozenset({"customer.example"}),
     policy: LinkPolicy | None = None,
+    gateway: MCPToolGateway | None = None,
 ):
     """Return (gateway, active_revision, source_actor, target_actor).
 
     Mirrors the trusted-mail setup used across the suite, but parametric so the
     matrix can vary policy mode, egress limits, side effects, and destinations.
+    Pass ``gateway`` to wire a pre-built gateway (e.g. with a config-guard
+    preflight) into the same actor/policy topology.
     """
-    gateway = MCPToolGateway()
+    gateway = gateway or MCPToolGateway()
     revision = gateway.observe_definition(definition or tool_definition(), tenant_id=TENANT)
     gateway.registry.approve(revision.revision_id, "security-reviewer")
     revision = gateway.registry.activate(revision.revision_id)

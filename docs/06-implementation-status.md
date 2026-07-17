@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
 date: 2026-07-17
-version: 0.5.0
+version: 0.6.0
 status: active
 ---
 
@@ -14,7 +14,7 @@ status: active
 - 언어: Python 3.11
 - 배포 형태: 외부 의존성이 없는 reference core + optional psycopg PostgreSQL adapter
 - 기준 명세: `03`–`05` version 1.1
-- 구현 모드: 메모리 Registry·Session/OAuth/Config Store, 메모리/PostgreSQL Ledger와 동기 Connector
+- 구현 모드: 메모리 Registry, 메모리/PostgreSQL Session·OAuth·Config Store, 메모리/PostgreSQL Ledger와 동기 Connector
 
 ## 계약 추적
 
@@ -66,6 +66,9 @@ status: active
 | Bubblewrap OS sandbox backend | `mcp_stdio.py` `BubblewrapSandboxBackend` | argv 구성·정직한 attestation 비트(fs/net True, child False)·child-거부 fail-closed·unsafe mount 거부·서명 시험 |
 | Publisher provenance admission | `supply_chain.py` `ArtifactAdmissionPolicy`·`MCPServerProfile` binding | untrusted/unsigned·repository·tamper 격리, server call 0, signed control 시험 |
 | 목적지별 egress broker | `egress.py` `DestinationEgressGuard`·`compile_destination_egress_policy` | tenant/workload/artifact/provenance/sandbox exact binding, deny socket 0·kill, allow receipt 1 시험 |
+| 분산 PostgreSQL Session/OAuth/Config store | `postgres_stores.py` `PostgreSQLSessionStore`·`PostgreSQLOAuthTransactionStore`·`PostgreSQLConfigStore`, `migrations/postgresql/0002` | RLS·revision 불변 trigger 계약, 직렬화 round-trip·tamper 거부, CAS stale, DSN 게이트 multi-instance live 시험 |
+| Gateway config-guard preflight (opt-in) | `gateway.py` `_config_preflight` | 기본 비활성, drift → QUARANTINE 합성, guard 자체 CONTROL_EVALUATED trace 시험 |
+| Seatbelt OS sandbox backend (macOS) | `mcp_stdio.py` `SeatbeltSandboxBackend` | policy 구성·정직 비트(fs/net/child 전부 집행 시 True)·unsafe path·SBPL 주입 거부·서명 + **macOS live 집행 시험**(홈/쓰기/fork/네트워크 차단) |
 
 ## 현재 자동화된 L1 범위
 
@@ -73,11 +76,11 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-17 기본 전체 회귀는 249개 test를 수집해 `OK (skipped=2)`다. skip은 DSN이 없을 때의 PostgreSQL live integration 2개뿐이며 L1 matrix는 34개 모두 실행된다.
+2026-07-17 기본 전체 회귀는 291개 test를 수집해 `OK (skipped=5)`다. skip은 DSN이 없을 때의 PostgreSQL live integration 5개(Ledger 2 + 분산 store 3)뿐이며 L1 matrix는 34개 모두 실행되고, Seatbelt live 집행 시험은 macOS 호스트에서 실제로 실행된다.
 
-- BubblewrapSandboxBackend live 실행 시험(Linux+bwrap+런타임 클로저 필요, argv·attestation은 단위 검증됨)과 seccomp 기반 child-process 강제(현재는 정직하게 child=False, `allow_child_processes=False` 프로파일 거부)
+- BubblewrapSandboxBackend live 실행 시험(Linux+bwrap+런타임 클로저 필요, argv·attestation은 단위 검증됨)과 seccomp 기반 child-process 강제(Linux에서는 여전히 child=False; macOS Seatbelt는 `(deny process-fork)`로 child=True를 정직하게 집행·attest함)
 - Sigstore/KMS publisher 검증과 실제 egress proxy/sidecar의 DNS·연결 IP pinning, socket·kill telemetry(reference는 HMAC과 무소켓 SIMULATION backend)
-- PostgreSQL CORE-SIM-TENANT 전체 CI와 자동 partition/retention 운영
+- PostgreSQL CORE-SIM-TENANT 전체 CI와 자동 partition/retention 운영(분산 store live 시험 포함: 0001+0002 migration이 적용된 DSN 필요)
 - streaming OTLP gRPC(:4317)와 vendor(Langfuse/LangSmith) trace adapter, Incident/response service
 - Studio의 저장소·Git review·policy deployment 연동
 
@@ -85,8 +88,11 @@ status: active
 
 doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M9 test ID 자동화와 canary corpus, (b) canonical 서명 helper, (c) OTLP/HTTP JSON receiver와 signed Audit Sink, (d) 서명 sandbox attestation verifier, (e) inbound resumable SSE와 SessionStore, (f) RFC7662 introspection verifier와 OAuth TransactionStore, (g) Studio `compile --shadow`, (h) M7 agent-config guard, (i) JWKS/JWT verifier(optional `jwt` extra)와 loopback consent, (j) Bubblewrap OS sandbox backend.
 
-남은 것은 프로덕션 인프라·플랫폼 연동이다.
+이후 분산 PostgreSQL store backend(Session/OAuth/Config, `0002_distributed_stores.sql`), opt-in gateway config-guard preflight, macOS Seatbelt sandbox backend(live 집행 시험 포함)를 추가로 구현했다.
 
-1. 분산 SessionStore/OAuth TransactionStore/ConfigStore backend(Redis/Postgres)와 studio 저장소·Git review·remote deploy 연동
-2. BubblewrapSandboxBackend Linux live 시험과 seccomp child-process 강제, macOS Seatbelt backend
-3. optional gateway config-guard preflight(기본 비활성), Sigstore/KMS publisher adapter와 실제 egress proxy/sidecar backend
+남은 것은 외부 인프라가 필요한 프로덕션 연동이다.
+
+1. BubblewrapSandboxBackend Linux CI live 시험과 seccomp child-process 강제(Linux)
+2. Sigstore/KMS publisher adapter와 실제 egress proxy/sidecar backend
+3. PostgreSQL live CI provisioning(0001+0002 migration·role 매핑)과 partition/retention 운영, OTLP gRPC·vendor adapter
+4. Studio 저장소·Git review·remote deploy 연동
