@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import queue
 import re
 import signal
@@ -371,13 +372,29 @@ class BubblewrapSandboxBackend:
 # Roots that must never be granted as sandbox paths on macOS: OS code, system
 # configuration, and whole user-data volumes.
 _UNSAFE_SEATBELT_MOUNTS = _UNSAFE_SANDBOX_MOUNTS | frozenset(
-    {"/System", "/usr", "/Library", "/private", "/var", "/etc", "/Users", "/Volumes", "/Network", "/Applications"}
+    {
+        "/System",
+        "/System/Volumes",
+        "/System/Volumes/Data",
+        "/usr",
+        "/Library",
+        "/private",
+        "/var",
+        "/etc",
+        "/Users",
+        "/Volumes",
+        "/Network",
+        "/Applications",
+    }
 )
 
 # User-data subtrees the generated Seatbelt policy makes unreadable unless a
 # descendant is explicitly declared by the profile (later allow rules win).
+# /System/Volumes/Data is the APFS data-volume firmlink alias of the user
+# roots — denied so an alias spelling cannot bypass the /Users denial.
 _SEATBELT_DENIED_SUBTREES = (
     "/Users",
+    "/System/Volumes/Data",
     "/Volumes",
     "/Network",
     "/tmp",
@@ -417,6 +434,14 @@ class SeatbeltSandboxBackend:
     (``(deny process-fork)`` covers fork and posix_spawn), so a profile with
     ``allow_child_processes=False`` is honored and attested rather than
     refused. The pinned sandbox-exec launcher is re-verified before each plan.
+
+    Known ceilings, carried in evidence semantics rather than the booleans:
+    global ``file-read-metadata`` remains a filesystem existence oracle, and
+    ``allow_network=True`` maps to ``(allow network*)`` which also opens local
+    IPC sockets — both bits are attested False/True accordingly, and the
+    evidence reference binds the exact policy digest plus the OS release the
+    plan was generated on. sandbox-exec is deprecated-but-functional; this is
+    a reference backend, not a VM/container equivalent.
     """
 
     launcher: StdioArtifactPin
@@ -439,7 +464,8 @@ class SeatbeltSandboxBackend:
             backend_id="darwin-seatbelt-v1",
             evidence_reference=(
                 f"seatbelt-policy:v1;launcher={self.launcher.digest};"
-                f"policy={raw_digest(policy.encode('utf-8'))}"
+                f"policy={raw_digest(policy.encode('utf-8'))};"
+                f"os={platform.system().lower()}-{platform.release()}"
             ),
             profile_digest=profile.profile_digest,
             artifact_set_digest=profile.artifact_set_digest,
@@ -484,15 +510,20 @@ class SeatbeltSandboxBackend:
                 + " ".join(f"(subpath {_seatbelt_path(path)})" for path in profile.writable_paths)
                 + ")"
             )
+        # No sysctl-read, no mach-lookup: a stdio JSON-RPC server does not need
+        # host information or Mach service brokers (empirically verified), and
+        # every broker allowed here would weaken the attested bits.
         lines += [
             '(allow file-ioctl (subpath "/dev"))',
-            "(allow sysctl-read)",
-            "(allow mach-lookup)",
             "(allow process-info* (target self))",
             "(allow signal (target self))",
         ]
         if profile.allow_network:
             lines.append("(allow network*)")
+        else:
+            # deny-default already covers these; the explicit lines make the
+            # hashed policy auditable on its own.
+            lines += ["(deny network*)", "(deny system-socket)"]
         if not profile.allow_child_processes:
             lines.append("(deny process-fork)")
         # One line: the client's argv validation forbids control delimiters,
