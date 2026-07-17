@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Reference core is zero-dependency: the base suite must pass on stdlib alone.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run the full suite (no extras, no services)
+        run: PYTHONPATH=src:tests python3 -m unittest discover -s tests
+
+  # Live PostgreSQL: distributed stores + ledger against a real postgres:16.
+  postgres-live:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: interlock_owner
+          POSTGRES_PASSWORD: owner_pw
+          POSTGRES_DB: interlock
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U interlock_owner -d interlock"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install psycopg + crypto extras
+        run: pip install "psycopg[binary]" "cryptography>=42,<47"
+      - name: Apply migrations + provisioning
+        env:
+          PGPASSWORD: owner_pw
+        run: |
+          OWNER="postgresql://interlock_owner:owner_pw@localhost:5432/interlock"
+          for f in 0001_interaction_ledger 0002_distributed_stores 0003_definition_registry; do
+            psql "$OWNER" -v ON_ERROR_STOP=1 -f "migrations/postgresql/$f.sql"
+          done
+          psql "$OWNER" -v ON_ERROR_STOP=1 -f ci/postgres_provision.sql
+      - name: Run suite with live PostgreSQL
+        env:
+          INTERLOCK_TEST_POSTGRES_DSN_TENANT_A: postgresql://tenant_a_app:tenant_a_pw@localhost:5432/interlock
+          INTERLOCK_TEST_POSTGRES_DSN_TENANT_B: postgresql://tenant_b_app:tenant_b_pw@localhost:5432/interlock
+        run: PYTHONPATH=src:tests python3 -m unittest discover -s tests
+
+  # Live sandbox: bubblewrap + seccomp child-process denial actually enforced.
+  sandbox-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Run sandbox live enforcement tests
+        run: |
+          PYTHONPATH=src:tests python3 -m unittest \
+            test_bwrap_seccomp test_bubblewrap_sandbox

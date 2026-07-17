@@ -214,6 +214,7 @@ class SandboxLaunchPlan:
     environment: Mapping[str, str]
     working_directory: str
     attestation: SandboxAttestation
+    seccomp_program: bytes = b""
 
 
 class StdioSandboxBackend(Protocol):
@@ -296,33 +297,131 @@ class AttestedExternalSandboxBackend:
 
 _UNSAFE_SANDBOX_MOUNTS = frozenset({"/", "/proc", "/dev", "/sys", "/run", "/tmp", "/home"})
 
+# --------------------------------------------------------------------------- #
+# seccomp BPF: deny new processes while still allowing threads
+# --------------------------------------------------------------------------- #
+
+# argv token the backend emits for the seccomp fd; the client substitutes the
+# real inherited fd number at spawn time (it isn't known when argv is built).
+_SECCOMP_FD_TOKEN = "__INTERLOCK_SECCOMP_FD__"
+
+# classic-BPF (struct sock_filter) opcodes
+_BPF_LD_ABS_W = 0x20
+_BPF_JEQ_K = 0x15
+_BPF_AND_K = 0x54
+_BPF_RET_K = 0x06
+
+# seccomp_data offsets (little-endian host)
+_OFF_NR = 0
+_OFF_ARCH = 4
+_OFF_ARG0_LO = 16
+
+# seccomp return actions
+_RET_KILL_PROCESS = 0x80000000
+_RET_ERRNO_EPERM = 0x00050001  # SECCOMP_RET_ERRNO | EPERM(1)
+_RET_ALLOW = 0x7FFF0000
+
+_AUDIT_ARCH_X86_64 = 0xC000003E
+_AUDIT_ARCH_AARCH64 = 0xC00000B7
+_CLONE_THREAD = 0x00010000
+
+# (always-deny process syscalls, flag-checked clone) per architecture.
+# clone3 is always denied — its args live behind a pointer seccomp can't read;
+# glibc thread creation uses clone (flag-checked), not clone3.
+_SECCOMP_ARCH_TABLE = {
+    "x86_64": (_AUDIT_ARCH_X86_64, (57, 58, 435), 56),   # fork, vfork, clone3 | clone
+    "aarch64": (_AUDIT_ARCH_AARCH64, (435,), 220),       # clone3 | clone
+    "arm64": (_AUDIT_ARCH_AARCH64, (435,), 220),
+}
+
+
+def _bpf(code: int, jt: int, jf: int, k: int) -> bytes:
+    import struct
+
+    return struct.pack("<HBBI", code, jt, jf, k)
+
+
+def build_no_subprocess_seccomp(machine: str) -> bytes:
+    """Return a classic-BPF seccomp program that denies new *processes*.
+
+    fork/vfork/clone3 return EPERM; ``clone`` is allowed only when the caller
+    sets ``CLONE_THREAD`` (i.e. real thread creation), so the target can still
+    spawn threads but cannot fork a child process. A syscall from an unexpected
+    architecture kills the process. Raises ``MCPStdioSandboxUnavailable`` for an
+    architecture this builder does not cover — the backend then fails closed
+    rather than claim an unenforced restriction.
+    """
+    entry = _SECCOMP_ARCH_TABLE.get(machine)
+    if entry is None:
+        raise MCPStdioSandboxUnavailable(f"no seccomp child-deny filter for architecture {machine!r}")
+    arch, deny_nrs, clone_nr = entry
+
+    # Layout: arch guard, load nr, clone→handler, always-deny checks, allow,
+    # clone handler (allow only CLONE_THREAD else EPERM).
+    handler = 4 + 1 + len(deny_nrs) + 1          # first instruction of the clone handler
+    deny_index = handler + 3                     # RET EPERM (shared deny target)
+    program = [
+        _bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARCH),
+        _bpf(_BPF_JEQ_K, 1, 0, arch),            # arch ok → skip kill
+        _bpf(_BPF_RET_K, 0, 0, _RET_KILL_PROCESS),
+        _bpf(_BPF_LD_ABS_W, 0, 0, _OFF_NR),
+    ]
+    program.append(_bpf(_BPF_JEQ_K, handler - 4 - 1, 0, clone_nr))  # index 4: clone → handler
+    for offset, nr in enumerate(deny_nrs):
+        index = 5 + offset
+        program.append(_bpf(_BPF_JEQ_K, deny_index - index - 1, 0, nr))  # match → EPERM
+    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))               # non-process syscall
+    # clone handler
+    program.append(_bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARG0_LO))          # index `handler`
+    program.append(_bpf(_BPF_AND_K, 0, 0, _CLONE_THREAD))
+    program.append(_bpf(_BPF_JEQ_K, 1, 0, _CLONE_THREAD))            # CLONE_THREAD → allow
+    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ERRNO_EPERM))         # index `deny_index`
+    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))
+    return b"".join(program)
+
 
 @dataclass(frozen=True, slots=True)
 class BubblewrapSandboxBackend:
     """Linux bubblewrap backend that attests only what its argv actually enforces.
 
     Enforces a private empty root with deny-by-default bind mounts (filesystem)
-    and an isolated network namespace (network). It does NOT prevent the target
-    from forking/exec'ing children — bwrap cannot without a seccomp filter, which
-    the current launch contract can't carry — so it attests child_process as
-    False and REFUSES a profile that denies child processes rather than sign a
-    false claim. The pinned bwrap launcher is re-verified before each plan.
+    and an isolated network namespace (network).
+
+    Child processes: bwrap alone cannot stop the target from forking, so by
+    default this backend still attests child_process as False and REFUSES a
+    profile that denies child processes. Setting ``seccomp_child_denial=True``
+    attaches a seccomp BPF filter (``build_no_subprocess_seccomp``) that denies
+    fork/vfork/clone3 and non-thread clone; only then is a child-denying profile
+    honored and child_process attested True. The filter's real enforcement is
+    proven by the Linux CI live tests — this backend runs on Linux only, and the
+    builder fails closed on an architecture it has no filter for. The pinned
+    bwrap launcher is re-verified before each plan.
     """
 
     launcher: StdioArtifactPin
     signing_key: bytes = field(repr=False)
     disable_userns: bool = True
+    seccomp_child_denial: bool = False
+    machine: str = ""
 
     def __post_init__(self) -> None:
         if not self.signing_key:
             raise ValueError("bubblewrap sandbox backend requires a non-empty signing key")
 
+    def _target_machine(self) -> str:
+        return self.machine or platform.machine()
+
     def prepare(self, profile: StdioSandboxProfile) -> SandboxLaunchPlan:
         _verify_artifact(self.launcher)
+        seccomp_program = b""
         if not profile.allow_child_processes:
-            raise MCPStdioSandboxUnavailable(
-                "bubblewrap cannot honestly restrict child processes; profile must allow_child_processes"
-            )
+            if not self.seccomp_child_denial:
+                raise MCPStdioSandboxUnavailable(
+                    "bubblewrap needs a seccomp filter to restrict child processes; "
+                    "enable seccomp_child_denial or set allow_child_processes"
+                )
+            # Raises fail-closed on an architecture without a filter.
+            seccomp_program = build_no_subprocess_seccomp(self._target_machine())
         for path in (*profile.read_only_paths, *profile.writable_paths):
             if (path.rstrip("/") or "/") in _UNSAFE_SANDBOX_MOUNTS:
                 raise MCPStdioError(
@@ -331,26 +430,32 @@ class BubblewrapSandboxBackend:
                 )
         attestation = SandboxAttestation(
             backend_id="linux-bubblewrap-v1",
-            evidence_reference=f"bubblewrap-policy:v1;launcher={self.launcher.digest}",
+            evidence_reference=(
+                f"bubblewrap-policy:v1;launcher={self.launcher.digest}"
+                + (f";seccomp={raw_digest(seccomp_program)}" if seccomp_program else "")
+            ),
             profile_digest=profile.profile_digest,
             artifact_set_digest=profile.artifact_set_digest,
             filesystem_restricted=True,
             network_restricted=not profile.allow_network,
-            child_process_restricted=False,
+            child_process_restricted=bool(seccomp_program),
         )
         return SandboxLaunchPlan(
-            argv=self._argv(profile),
+            argv=self._argv(profile, with_seccomp=bool(seccomp_program)),
             environment=profile.environment,
             working_directory=profile.working_directory,
             attestation=sign_attestation(attestation, self.signing_key),
+            seccomp_program=seccomp_program,
         )
 
-    def _argv(self, profile: StdioSandboxProfile) -> tuple[str, ...]:
+    def _argv(self, profile: StdioSandboxProfile, *, with_seccomp: bool = False) -> tuple[str, ...]:
         argv: list[str] = [self.launcher.path, "--unshare-all", "--unshare-user"]
         if profile.allow_network:
             argv.append("--share-net")
         if self.disable_userns:
             argv.append("--disable-userns")
+        if with_seccomp:
+            argv += ["--seccomp", _SECCOMP_FD_TOKEN]
         argv += ["--cap-drop", "ALL", "--die-with-parent", "--new-session", "--clearenv"]
         for key in sorted(profile.environment):
             argv += ["--setenv", key, profile.environment[key]]
@@ -642,8 +747,13 @@ class MCPStdioClient:
                 _verify_artifact(artifact)
             plan = self._sandbox_backend.prepare(profile)
             self._validate_launch_plan(plan)
+            argv = list(plan.argv)
+            seccomp_fd: int | None = None
+            if plan.seccomp_program:
+                seccomp_fd = self._open_seccomp_fd(plan.seccomp_program)
+                argv = [str(seccomp_fd) if token == _SECCOMP_FD_TOKEN else token for token in argv]
             popen_arguments: dict[str, Any] = {
-                "args": list(plan.argv),
+                "args": argv,
                 "stdin": subprocess.PIPE,
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
@@ -653,6 +763,8 @@ class MCPStdioClient:
                 "close_fds": True,
                 "bufsize": 0,
             }
+            if seccomp_fd is not None:
+                popen_arguments["pass_fds"] = (seccomp_fd,)
             if os.name == "posix":
                 popen_arguments["start_new_session"] = True
             elif os.name == "nt":
@@ -661,6 +773,9 @@ class MCPStdioClient:
                 process = subprocess.Popen(**popen_arguments)
             except OSError:
                 raise MCPStdioError("MCP-STDIO-SPAWN-FAILED", "stdio server process failed to start") from None
+            finally:
+                if seccomp_fd is not None:
+                    os.close(seccomp_fd)  # the child inherited its own copy
             self._process = process
             self._sandbox_attestation = plan.attestation
             self._reader_failure = None
@@ -825,6 +940,24 @@ class MCPStdioClient:
             process.stdin.flush()
         except (BrokenPipeError, OSError):
             raise MCPStdioError("MCP-STDIO-WRITE-FAILED", "failed to write to stdio server") from None
+
+    @staticmethod
+    def _open_seccomp_fd(program: bytes) -> int:
+        """Write the BPF program to an inheritable in-memory fd for --seccomp.
+
+        Uses an anonymous memfd (Linux only, where seccomp applies) so the
+        filter never touches disk; the fd is rewound and marked inheritable so
+        bwrap can read it in the child.
+        """
+        fd = os.memfd_create("interlock-seccomp", getattr(os, "MFD_CLOEXEC", 0))
+        try:
+            os.write(fd, program)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.set_inheritable(fd, True)
+        except OSError:
+            os.close(fd)
+            raise
+        return fd
 
     def _read_stdout(self) -> None:
         process = self._process
