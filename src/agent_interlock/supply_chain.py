@@ -10,12 +10,29 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 from urllib.parse import urlsplit
 
 from .canonical import canonical_digest
 from .models import ControlDecision
-from .signing import sign_canonical, verify_canonical
+from .signing import (
+    sign_canonical,
+    sign_canonical_ed25519,
+    verify_canonical,
+    verify_canonical_ed25519,
+)
+
+__all__ = [
+    "ArtifactAdmissionDecision",
+    "ArtifactAdmissionPolicy",
+    "ArtifactProvenance",
+    "ArtifactSignature",
+    "Ed25519PublisherVerifier",
+    "HMACPublisherVerifier",
+    "PublisherVerifier",
+    "sign_artifact_provenance",
+    "sign_artifact_provenance_ed25519",
+]
 
 
 REASON_UNTRUSTED_PUBLISHER = "L1-M4-UNTRUSTED-PUBLISHER"
@@ -102,8 +119,52 @@ def sign_artifact_provenance(
     key_id: str,
     key: bytes,
 ) -> ArtifactSignature:
-    """Sign every provenance field and identify the publisher verification key."""
+    """Sign every provenance field with the shared-key HMAC signer."""
     return ArtifactSignature(key_id, sign_canonical(provenance.canonical_value(), key))
+
+
+def sign_artifact_provenance_ed25519(
+    provenance: ArtifactProvenance,
+    *,
+    key_id: str,
+    private_key: bytes,
+) -> ArtifactSignature:
+    """Sign every provenance field with a raw Ed25519 private key (reference signer)."""
+    return ArtifactSignature(key_id, sign_canonical_ed25519(provenance.canonical_value(), private_key))
+
+
+class PublisherVerifier(Protocol):
+    """Verifies a provenance signature for one publisher.
+
+    The admission policy holds one verifier per publisher and never sees key
+    material directly, so a Sigstore/Rekor or KMS/HSM verifier plugs in by
+    implementing this method — it can call out to an external service instead
+    of holding a local key.
+    """
+
+    def verify(self, canonical_value: Mapping[str, Any], signature: str, key_id: str) -> bool: ...
+
+
+class HMACPublisherVerifier:
+    """Shared-key verifier over the reference HMAC signature format."""
+
+    def __init__(self, keys: Mapping[str, bytes]) -> None:
+        self._keys = {key_id: key for key_id, key in keys.items() if key}
+
+    def verify(self, canonical_value: Mapping[str, Any], signature: str, key_id: str) -> bool:
+        key = self._keys.get(key_id)
+        return bool(key) and verify_canonical(canonical_value, signature, key)
+
+
+class Ed25519PublisherVerifier:
+    """Asymmetric verifier over raw Ed25519 public keys (optional crypto extra)."""
+
+    def __init__(self, public_keys: Mapping[str, bytes]) -> None:
+        self._keys = {key_id: key for key_id, key in public_keys.items() if key}
+
+    def verify(self, canonical_value: Mapping[str, Any], signature: str, key_id: str) -> bool:
+        key = self._keys.get(key_id)
+        return bool(key) and verify_canonical_ed25519(canonical_value, signature, key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,21 +183,26 @@ class ArtifactAdmissionPolicy:
 
     def __init__(
         self,
-        trusted_publisher_keys: Mapping[str, Mapping[str, bytes]],
+        trusted_publisher_keys: Mapping[str, Mapping[str, bytes]] | None = None,
         *,
+        publisher_verifiers: Mapping[str, PublisherVerifier] | None = None,
         allowed_repositories: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
-        self._trusted_keys = {
-            publisher: {key_id: key for key_id, key in keys.items() if key}
-            for publisher, keys in trusted_publisher_keys.items()
+        verifiers: dict[str, PublisherVerifier] = {
+            publisher: HMACPublisherVerifier(keys)
+            for publisher, keys in (trusted_publisher_keys or {}).items()
             if publisher and keys
         }
+        for publisher, verifier in (publisher_verifiers or {}).items():
+            if publisher and verifier is not None:
+                verifiers[publisher] = verifier  # explicit verifier overrides an HMAC entry
+        self._verifiers = verifiers
         self._allowed_repositories = {
             publisher: frozenset(_canonical_repository(repository) for repository in repositories)
             for publisher, repositories in (allowed_repositories or {}).items()
         }
-        if not self._trusted_keys:
-            raise ValueError("at least one trusted publisher key is required")
+        if not self._verifiers:
+            raise ValueError("at least one trusted publisher verifier is required")
 
     def admit(
         self,
@@ -154,8 +220,8 @@ class ArtifactAdmissionPolicy:
             "signatureKeyId": signature.key_id if signature else None,
             "signatureVerified": False,
         }
-        keys = self._trusted_keys.get(publisher)
-        if provenance is None or keys is None:
+        verifier = self._verifiers.get(publisher)
+        if provenance is None or verifier is None:
             return ArtifactAdmissionDecision(
                 ControlDecision.QUARANTINE,
                 (REASON_UNTRUSTED_PUBLISHER,),
@@ -168,11 +234,8 @@ class ArtifactAdmissionPolicy:
                 (REASON_PROVENANCE_DENIED,),
                 evidence,
             )
-        key = keys.get(signature.key_id) if signature else None
-        if key is None or not verify_canonical(
-            provenance.canonical_value(),
-            signature.signature if signature else "",
-            key or b"",
+        if signature is None or not verifier.verify(
+            provenance.canonical_value(), signature.signature, signature.key_id
         ):
             return ArtifactAdmissionDecision(
                 ControlDecision.QUARANTINE,

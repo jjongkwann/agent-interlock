@@ -17,6 +17,11 @@ from typing import Any
 from .canonical import canonical_json
 
 ALGORITHM = "hmac-sha256"
+ED25519_ALGORITHM = "ed25519"
+
+
+class SigningBackendUnavailable(RuntimeError):
+    """Raised when asymmetric signing is requested without the crypto backend."""
 
 
 def sign_canonical(value: Any, key: bytes) -> str:
@@ -36,3 +41,45 @@ def verify_canonical(value: Any, signature: str, key: bytes) -> bool:
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(signature, expected)
+
+
+def _require_cryptography() -> None:
+    try:
+        import cryptography  # noqa: F401
+    except ImportError:
+        raise SigningBackendUnavailable(
+            "asymmetric signing requires the 'jwt' extra (cryptography)"
+        ) from None
+
+
+def sign_canonical_ed25519(value: Any, private_key: bytes) -> str:
+    """Return ``ed25519:<hex>`` over the canonical JSON encoding of ``value``.
+
+    ``private_key`` is the 32-byte raw Ed25519 seed. This is the reference,
+    in-process signer; a KMS/HSM signer produces the same ``ed25519:<hex>``
+    format without the key ever leaving the boundary.
+    """
+    _require_cryptography()
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    signature = Ed25519PrivateKey.from_private_bytes(private_key).sign(canonical_json(value))
+    return f"{ED25519_ALGORITHM}:{signature.hex()}"
+
+
+def verify_canonical_ed25519(value: Any, signature: str, public_key: bytes) -> bool:
+    """Verify an ``ed25519:<hex>`` signature against a 32-byte raw public key."""
+    if not public_key or not isinstance(signature, str):
+        return False
+    prefix = f"{ED25519_ALGORITHM}:"
+    if not signature.startswith(prefix):
+        return False
+    _require_cryptography()
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    try:
+        raw = bytes.fromhex(signature[len(prefix):])
+        Ed25519PublicKey.from_public_bytes(public_key).verify(raw, canonical_json(value))
+        return True
+    except (InvalidSignature, ValueError):
+        return False

@@ -44,11 +44,13 @@ from .canonical import canonical_digest, canonical_json, raw_digest
 from .egress import (
     DestinationEgressGuard,
     DestinationEgressPolicy,
+    EgressBackendError,
     EgressReceipt,
     EgressRequest,
     InMemoryNetworkEgressBackend,
     NetworkConnectionEvidence,
     NetworkEgressBackend,
+    PinnedSocketEgressBackend,
     canonical_network_destination,
     compile_destination_egress_policy,
 )
@@ -181,13 +183,24 @@ from .receipts import (
     ReceiptSummary,
 )
 from .sdk import Actor, Interlock
-from .signing import ALGORITHM as SIGNING_ALGORITHM, sign_canonical, verify_canonical
+from .signing import (
+    ALGORITHM as SIGNING_ALGORITHM,
+    SigningBackendUnavailable,
+    sign_canonical,
+    sign_canonical_ed25519,
+    verify_canonical,
+    verify_canonical_ed25519,
+)
 from .supply_chain import (
     ArtifactAdmissionDecision,
     ArtifactAdmissionPolicy,
     ArtifactProvenance,
     ArtifactSignature,
+    Ed25519PublisherVerifier,
+    HMACPublisherVerifier,
+    PublisherVerifier,
     sign_artifact_provenance,
+    sign_artifact_provenance_ed25519,
 )
 from .telemetry import RuntimeTelemetryImport, TelemetryImportIssue, import_runtime_telemetry
 
@@ -209,6 +222,13 @@ __all__ = [
     "ArtifactProvenance",
     "ArtifactSignature",
     "AssuranceLevel",
+    "Ed25519PublisherVerifier",
+    "HMACPublisherVerifier",
+    "PublisherVerifier",
+    "SigningBackendUnavailable",
+    "sign_artifact_provenance_ed25519",
+    "sign_canonical_ed25519",
+    "verify_canonical_ed25519",
     "AttestationVerifier",
     "AttestedExternalSandboxBackend",
     "AuditSinkError",
@@ -240,6 +260,7 @@ __all__ = [
     "DirectTestSandboxBackend",
     "DestinationEgressGuard",
     "DestinationEgressPolicy",
+    "EgressBackendError",
     "EgressReceipt",
     "EgressRequest",
     "Environment",
@@ -312,6 +333,7 @@ __all__ = [
     "OAuthConsentError",
     "OAuthSecurityProfile",
     "OAuthTransactionStore",
+    "PinnedSocketEgressBackend",
     "PolicyMode",
     "PostgreSQLConfigStore",
     "PostgreSQLDriverUnavailable",

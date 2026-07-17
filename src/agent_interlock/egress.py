@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 import threading
 import uuid
 from collections.abc import Callable
@@ -190,6 +191,7 @@ class NetworkConnectionEvidence:
     connection_id: str
     canonical_destination: str
     socket_count: int
+    connected_address: str = ""
 
 
 class NetworkEgressBackend(Protocol):
@@ -200,6 +202,99 @@ class NetworkEgressBackend(Protocol):
         request: EgressRequest,
         canonical_destination: str,
     ) -> NetworkConnectionEvidence: ...
+
+
+class EgressBackendError(RuntimeError):
+    """Fail-closed backend failure; the guard converts it to a BLOCK receipt."""
+
+
+class PinnedSocketEgressBackend:
+    """Real TCP egress boundary: resolve DNS once, connect to that exact
+    address, verify the connected peer, and hand the pinned socket to the
+    caller.
+
+    Pinning model: the destination host is resolved through ``resolver``
+    exactly once, the socket is connected by IP (never by name, so a
+    rebinding re-resolution cannot occur), and the kernel-reported peer
+    address must equal the pinned address or the connection is torn down.
+    Resolved non-global addresses are refused by default — a public name
+    answering with a private address is the classic rebinding/SSRF move.
+    The caller collects the connected socket with :meth:`take` (one-time)
+    and owns its lifecycle; :meth:`close_all` abandons anything not taken.
+    """
+
+    backend_id = "pinned-socket-egress-v1"
+
+    def __init__(
+        self,
+        *,
+        resolver: Callable[..., list[tuple[Any, ...]]] | None = None,
+        require_global_addresses: bool = True,
+        connect_timeout_seconds: float = 5.0,
+    ) -> None:
+        if not 0 < connect_timeout_seconds <= 60:
+            raise ValueError("connect_timeout_seconds must be within (0, 60]")
+        self._resolver = resolver or socket.getaddrinfo
+        self._require_global_addresses = require_global_addresses
+        self._connect_timeout_seconds = connect_timeout_seconds
+        self._active: dict[str, socket.socket] = {}
+        self._lock = threading.RLock()
+
+    def connect(
+        self,
+        request: EgressRequest,
+        canonical_destination: str,
+    ) -> NetworkConnectionEvidence:
+        parsed = urlsplit(canonical_destination)
+        host = (parsed.hostname or "").strip("[]")
+        port = parsed.port or 443
+        try:
+            resolved = self._resolver(host, port, type=socket.SOCK_STREAM)
+        except OSError as error:
+            raise EgressBackendError("destination did not resolve") from error
+        if not resolved:
+            raise EgressBackendError("destination did not resolve")
+        family, _, _, _, address = resolved[0]
+        pinned_ip = str(address[0])
+        if self._require_global_addresses and not ipaddress.ip_address(pinned_ip).is_global:
+            raise EgressBackendError("destination resolved to a non-global address")
+        connection = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            connection.settimeout(self._connect_timeout_seconds)
+            connection.connect((pinned_ip, port))
+            peer = connection.getpeername()
+            if str(peer[0]) != pinned_ip or int(peer[1]) != port:
+                raise EgressBackendError("connected peer does not match the pinned address")
+        except (OSError, EgressBackendError) as error:
+            connection.close()
+            if isinstance(error, EgressBackendError):
+                raise
+            raise EgressBackendError("pinned connection failed") from error
+        connection_id = str(uuid.uuid4())
+        with self._lock:
+            self._active[connection_id] = connection
+        return NetworkConnectionEvidence(
+            backend_id=self.backend_id,
+            connection_id=connection_id,
+            canonical_destination=canonical_destination,
+            socket_count=1,
+            connected_address=f"{pinned_ip}:{port}",
+        )
+
+    def take(self, connection_id: str) -> socket.socket:
+        """One-time handoff of the pinned, connected socket to its caller."""
+        with self._lock:
+            connection = self._active.pop(connection_id, None)
+        if connection is None:
+            raise EgressBackendError("connection is unknown or already taken")
+        return connection
+
+    def close_all(self) -> None:
+        with self._lock:
+            abandoned = list(self._active.values())
+            self._active.clear()
+        for connection in abandoned:
+            connection.close()
 
 
 class InMemoryNetworkEgressBackend:
@@ -254,6 +349,7 @@ class EgressReceipt:
     connection_id: str | None
     socket_count: int | None
     process_terminated: bool
+    connected_address: str | None = None
 
     def evidence(self) -> Mapping[str, Any]:
         return {
@@ -272,6 +368,7 @@ class EgressReceipt:
             "connectionId": self.connection_id,
             "socketCount": self.socket_count,
             "processTerminated": self.process_terminated,
+            "connectedAddress": self.connected_address,
         }
 
 
@@ -353,6 +450,7 @@ class DestinationEgressGuard:
                 connection_id=evidence.connection_id,
                 socket_count=evidence.socket_count,
                 process_terminated=False,
+                connected_address=evidence.connected_address or None,
             )
         )
 
