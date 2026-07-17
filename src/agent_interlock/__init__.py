@@ -224,6 +224,14 @@ from .supply_chain import (
     sign_artifact_provenance,
     sign_artifact_provenance_ed25519,
 )
+from .studio_deploy import (
+    DeploymentApproval,
+    DeploymentBundle,
+    GitBundleStore,
+    StudioDeploymentError,
+    deployment_approval_statement,
+    sign_deployment_approval,
+)
 from .telemetry import RuntimeTelemetryImport, TelemetryImportIssue, import_runtime_telemetry
 
 __all__ = [
@@ -281,6 +289,12 @@ __all__ = [
     "ControlDecision",
     "ControlTiming",
     "ConnectorExecutionContext",
+    "DeploymentApproval",
+    "DeploymentBundle",
+    "GitBundleStore",
+    "StudioDeploymentError",
+    "deployment_approval_statement",
+    "sign_deployment_approval",
     "DynamicTargetSelector",
     "CredentialClaims",
     "DataSource",
