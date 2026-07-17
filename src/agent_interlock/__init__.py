@@ -1,6 +1,20 @@
 """Public API for the Agent Interlock reference implementation."""
 
-from .audit_sink import AuditSinkError, SignedAuditRecord, SignedAuditSink
+from .audit_sink import (
+    AuditSinkError,
+    InMemoryWORMAuditStore,
+    SignedAuditRecord,
+    SignedAuditSink,
+    WORMAuditStore,
+    WORMEntry,
+    WORMViolation,
+)
+from .vendor_telemetry import (
+    import_langfuse_traces,
+    import_langsmith_runs,
+    langfuse_traces_to_otlp,
+    langsmith_runs_to_otlp,
+)
 from .config_guard import (
     AgentConfig,
     ConfigApproval,
@@ -240,6 +254,14 @@ __all__ = [
     "AttestationVerifier",
     "AttestedExternalSandboxBackend",
     "AuditSinkError",
+    "InMemoryWORMAuditStore",
+    "WORMAuditStore",
+    "WORMEntry",
+    "WORMViolation",
+    "import_langfuse_traces",
+    "import_langsmith_runs",
+    "langfuse_traces_to_otlp",
+    "langsmith_runs_to_otlp",
     "BubblewrapSandboxBackend",
     "AuthorizationServerMetadata",
     "BearerChallenge",

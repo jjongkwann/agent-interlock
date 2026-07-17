@@ -13,15 +13,21 @@ deferred; this is the reference symmetric-key sink.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
+from .canonical import canonical_json, raw_digest
 from .ledger import Event, verify_event
 from .signing import sign_canonical, verify_canonical
 
 
 class AuditSinkError(RuntimeError):
     """Raised when an event cannot be sealed or a seal cannot be trusted."""
+
+
+class WORMViolation(AuditSinkError):
+    """Raised when a write-once record is overwritten or the chain is broken."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,3 +78,91 @@ class SignedAuditSink:
             return False
         body = _sealed_body(event.event_id, event.tenant_id, event.integrity_hash)
         return verify_canonical(body, record.signature, self._key)
+
+
+# --------------------------------------------------------------------------- #
+# WORM (write-once-read-many) retention store
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class WORMEntry:
+    """A sealed record fixed at a sequence position and chained to the prior one."""
+
+    sequence: int
+    record: SignedAuditRecord
+    previous_hash: str
+    entry_hash: str
+
+    def canonical_value(self) -> dict[str, Any]:
+        return {
+            "sequence": self.sequence,
+            "record": self.record.to_dict(),
+            "previousHash": self.previous_hash,
+        }
+
+
+_WORM_GENESIS = "sha256:" + "0" * 64
+
+
+def _entry_hash(sequence: int, record: SignedAuditRecord, previous_hash: str) -> str:
+    body = {"sequence": sequence, "record": record.to_dict(), "previousHash": previous_hash}
+    return raw_digest(canonical_json(body))
+
+
+class WORMAuditStore(Protocol):
+    """Append-only retention for sealed audit records.
+
+    A record, once appended, cannot be overwritten or removed; each entry is
+    hash-chained to its predecessor so a deletion or reordering breaks
+    verification. This is the storage contract; the reference implementation is
+    in-process, and a durable backend (e.g. S3 Object Lock in compliance mode)
+    satisfies the same contract.
+    """
+
+    def append(self, record: SignedAuditRecord) -> WORMEntry: ...
+
+    def entries(self) -> tuple[WORMEntry, ...]: ...
+
+    def verify_chain(self) -> bool: ...
+
+
+class InMemoryWORMAuditStore:
+    """Reference append-only, hash-chained store. No update or delete exists."""
+
+    def __init__(self) -> None:
+        self._entries: list[WORMEntry] = []
+        self._seen: set[tuple[str, str]] = set()
+        self._lock = threading.RLock()
+
+    def append(self, record: SignedAuditRecord) -> WORMEntry:
+        with self._lock:
+            key = (record.tenant_id, record.event_id)
+            if key in self._seen:
+                raise WORMViolation("audit record already written; WORM store is append-only")
+            previous_hash = self._entries[-1].entry_hash if self._entries else _WORM_GENESIS
+            sequence = len(self._entries)
+            entry = WORMEntry(
+                sequence=sequence,
+                record=record,
+                previous_hash=previous_hash,
+                entry_hash=_entry_hash(sequence, record, previous_hash),
+            )
+            self._entries.append(entry)
+            self._seen.add(key)
+            return entry
+
+    def entries(self) -> tuple[WORMEntry, ...]:
+        with self._lock:
+            return tuple(self._entries)
+
+    def verify_chain(self) -> bool:
+        with self._lock:
+            previous_hash = _WORM_GENESIS
+            for sequence, entry in enumerate(self._entries):
+                if entry.sequence != sequence or entry.previous_hash != previous_hash:
+                    return False
+                if entry.entry_hash != _entry_hash(sequence, entry.record, previous_hash):
+                    return False
+                previous_hash = entry.entry_hash
+            return True
