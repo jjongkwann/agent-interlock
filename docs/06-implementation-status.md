@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
 date: 2026-07-17
-version: 0.6.0
+version: 0.7.0
 status: active
 ---
 
@@ -69,6 +69,14 @@ status: active
 | 분산 PostgreSQL Session/OAuth/Config store | `postgres_stores.py` `PostgreSQLSessionStore`·`PostgreSQLOAuthTransactionStore`·`PostgreSQLConfigStore`, `migrations/postgresql/0002` | RLS·revision 불변 trigger 계약, 직렬화 round-trip·tamper 거부, CAS stale, DSN 게이트 multi-instance live 시험 |
 | Gateway config-guard preflight (opt-in) | `gateway.py` `_config_preflight` | 기본 비활성, drift → QUARANTINE 합성, guard 자체 CONTROL_EVALUATED trace 시험 |
 | Seatbelt OS sandbox backend (macOS) | `mcp_stdio.py` `SeatbeltSandboxBackend` | policy 구성·정직 비트(fs/net/child 전부 집행 시 True)·unsafe path·SBPL 주입 거부·서명 + **macOS live 집행 시험**(홈/쓰기/fork/네트워크 차단) |
+| 실 소켓 egress backend (DNS·IP pinning) | `egress.py` `PinnedSocketEgressBackend` | DNS 1회 해석·연결 IP 고정·peer 검증·비전역 주소 fail-closed·one-time 소켓 handoff, 실 127.0.0.1 fixture 시험 |
+| 비대칭 publisher 서명 검증 (KMS 어댑터 지점) | `supply_chain.py` `PublisherVerifier`·`Ed25519PublisherVerifier`·`HMACPublisherVerifier`, `signing.py` `sign/verify_canonical_ed25519` | Ed25519 승인·교차키 거부·tamper·KMS 스타일 커스텀 verifier·HMAC 하위호환 시험 |
+| bwrap seccomp child-process 강제 (Linux) | `mcp_stdio.py` `build_no_subprocess_seccomp`·`BubblewrapSandboxBackend(seccomp_child_denial=True)` | fork/vfork/clone3·비스레드 clone→EPERM, 스레드 clone·execve→ALLOW BPF 시뮬 검증, child=True 정직 attest, **bwrap live CI 집행** |
+| 분산 PostgreSQL DefinitionRegistry | `registry.py` `RevisionStore`·`InMemoryRevisionStore`, `postgres_stores.py` `PostgreSQLRevisionStore`, `migrations/postgresql/0003` | store 추출로 상태머신 단일화, RLS·identity 불변 trigger·digest 재검증·multi-node live 시험 |
+| Langfuse/LangSmith trace 어댑터 | `vendor_telemetry.py` `langfuse_traces_to_otlp`·`langsmith_runs_to_otlp`·`import_*` | vendor metadata→OTLP 속성 매핑 후 import_runtime_telemetry 재사용, edge 재구성·불완전 컨텍스트 issue 시험 |
+| WORM audit 보존 store | `audit_sink.py` `WORMAuditStore`·`InMemoryWORMAuditStore` | append-only·해시체인, write-once 중복 거부·삭제/치환/재정렬 chain 파손 탐지 시험 |
+| Studio git 배포 워크플로 | `studio_deploy.py` `GitBundleStore`·`sign_deployment_approval` | 실 git repo propose→2인 서명 SHADOW→ENFORCE 승격→rollback, 단일승인·위조서명·digest tamper 거부 시험 |
+| PostgreSQL live 프로비저닝 | `ci/docker-compose.postgres.yml`·`ci/postgres_provision.sql`·`ci/run_postgres_live.sh`, `.github/workflows/ci.yml` | postgres:16 + 0001-0003 migration + 2 tenant role 매핑, live store/ledger 6개 시험 실행 |
 
 ## 현재 자동화된 L1 범위
 
@@ -76,23 +84,23 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-17 기본 전체 회귀는 291개 test를 수집해 `OK (skipped=5)`다. skip은 DSN이 없을 때의 PostgreSQL live integration 5개(Ledger 2 + 분산 store 3)뿐이며 L1 matrix는 34개 모두 실행되고, Seatbelt live 집행 시험은 macOS 호스트에서 실제로 실행된다.
+2026-07-17 기본 전체 회귀는 347개 test를 수집해 `OK (skipped=9)`다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
-- BubblewrapSandboxBackend live 실행 시험(Linux+bwrap+런타임 클로저 필요, argv·attestation은 단위 검증됨)과 seccomp 기반 child-process 강제(Linux에서는 여전히 child=False; macOS Seatbelt는 `(deny process-fork)`로 child=True를 정직하게 집행·attest함)
-- Sigstore/KMS publisher 검증과 실제 egress proxy/sidecar의 DNS·연결 IP pinning, socket·kill telemetry(reference는 HMAC과 무소켓 SIMULATION backend)
-- PostgreSQL CORE-SIM-TENANT 전체 CI와 자동 partition/retention 운영(분산 store live 시험 포함: 0001+0002 migration이 적용된 DSN 필요)
-- streaming OTLP gRPC(:4317)와 vendor(Langfuse/LangSmith) trace adapter, Incident/response service
-- Studio의 저장소·Git review·policy deployment 연동
+- Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
+- OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
+- PostgreSQL 자동 partition/retention 운영과 connection pool·HA(live CI·프로비저닝은 구현됨)
+- WORM 보존의 S3 Object-Lock 내구 backend(Protocol·append-only 해시체인 impl은 구현됨), 원격 Git host PR 리뷰 배선(로컬 git propose/promote/rollback은 구현됨)
+- 고급 MCP 비동기 task·cancellation, IdP key rotation·DPoP/mTLS sender-constrained token
 
 ## 다음 구현 순서
 
 doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M9 test ID 자동화와 canary corpus, (b) canonical 서명 helper, (c) OTLP/HTTP JSON receiver와 signed Audit Sink, (d) 서명 sandbox attestation verifier, (e) inbound resumable SSE와 SessionStore, (f) RFC7662 introspection verifier와 OAuth TransactionStore, (g) Studio `compile --shadow`, (h) M7 agent-config guard, (i) JWKS/JWT verifier(optional `jwt` extra)와 loopback consent, (j) Bubblewrap OS sandbox backend.
 
-이후 분산 PostgreSQL store backend(Session/OAuth/Config, `0002_distributed_stores.sql`), opt-in gateway config-guard preflight, macOS Seatbelt sandbox backend(live 집행 시험 포함)를 추가로 구현했다.
+이후 다음 프로덕션 통합 항목을 추가로 구현했다: 분산 PostgreSQL store(Session/OAuth/Config `0002`, DefinitionRegistry `0003`), opt-in gateway config-guard preflight, macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행), 실 소켓 egress backend(DNS·IP pinning), 비대칭 publisher 서명(Ed25519·KMS 지점), Langfuse/LangSmith trace 어댑터, WORM audit store, Studio git 배포(propose→2인 승격→rollback), PostgreSQL live CI 프로비저닝과 GitHub Actions.
 
-남은 것은 외부 인프라가 필요한 프로덕션 연동이다.
+남은 것은 외부 서비스·SaaS 연동이 필요한 항목이다.
 
-1. BubblewrapSandboxBackend Linux CI live 시험과 seccomp child-process 강제(Linux)
-2. Sigstore/KMS publisher adapter와 실제 egress proxy/sidecar backend
-3. PostgreSQL live CI provisioning(0001+0002 migration·role 매핑)과 partition/retention 운영, OTLP gRPC·vendor adapter
-4. Studio 저장소·Git review·remote deploy 연동
+1. Sigstore/Rekor 네트워크 검증과 실 egress sidecar socket/kill telemetry, S3 Object-Lock WORM 내구 backend
+2. OTLP gRPC(:4317) streaming과 Incident/response service, 원격 Git host PR 리뷰 배선
+3. PostgreSQL 자동 partition/retention·pool·HA 운영
+4. 고급 MCP 비동기 task·cancellation과 IdP key rotation·DPoP/mTLS
