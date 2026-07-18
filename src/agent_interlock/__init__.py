@@ -204,6 +204,11 @@ from .receipts import (
     ReceiptStatus,
     ReceiptSummary,
 )
+from .sandbox_supervisor import (
+    SandboxHealth,
+    SandboxSupervisor,
+    SupervisedProcess,
+)
 from .sdk import Actor, Interlock
 from .signing import (
     ALGORITHM as SIGNING_ALGORITHM,
@@ -395,7 +400,10 @@ __all__ = [
     "RuntimeGraphDiff",
     "RuntimeTelemetryImport",
     "SandboxAttestation",
+    "SandboxHealth",
     "SandboxLaunchPlan",
+    "SandboxSupervisor",
+    "SupervisedProcess",
     "SeatbeltSandboxBackend",
     "SecurityControl",
     "SecurityOutcome",

@@ -177,9 +177,10 @@ reference core에는 서명 attestation verifier, Linux Bubblewrap backend, macO
 
 artifact digest 검사와 exec 사이의 TOCTOU는 fd 실행으로 제거했다. `_open_verified_artifact`가 pinned artifact를 fd로 한 번 열어 그 fd 위에서 digest를 검증하므로 검증한 inode가 fd 수명 동안 고정되고, `/proc/self/fd`를 지원하는 host(Linux)에서 client는 `argv[0]`을 그 fd로 실행해 검증 inode와 실행 inode가 동일함을 보장한다. `/proc/self/fd`가 없는 host(macOS)는 fd 기반 원자적 검증으로 재오픈 갭만 제거하고 경로로 실행한다.
 
+장기 process supervisor와 sandbox health telemetry는 `sandbox_supervisor.py` `SandboxSupervisor`로 제공한다. liveness/health probe와 bounded-backoff 재시작을 수행하고, 재시작한 process가 같은 sandbox(backend id·profile digest)를 재-attest하지 못하면 공급망 swap으로 간주해 fail-closed로 거부하며, 상태 전이마다 `CONTROL_HEALTH_CHANGED`(REL-11)를 방출한다.
+
 운영 완료를 위해 다음이 남아 있다.
 
 - gVisor, Kata Containers 또는 hardened container runtime, Kubernetes workload sandbox와 deny-by-default NetworkPolicy 대안 backend
 - 실 egress sidecar의 socket 전달·차단·kill telemetry 운영 배선
-- 장기 process supervisor와 운영 sandbox health telemetry
 - reference의 publisher/attestation key(HMAC·Ed25519 in-process)를 운영 Sigstore/Rekor 또는 KMS/HSM 발급·회전·폐기 체계로 교체
