@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http_test_server import QuietThreadingHTTPServer
 
 from agent_interlock import MCPJWKSVerifier, MCPOAuthError, OAuthSecurityProfile
 
@@ -69,7 +70,7 @@ class _JWKSServer:
             def log_message(self, *_a):
                 return
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = QuietThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         return self

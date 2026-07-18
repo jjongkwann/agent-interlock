@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http_test_server import QuietThreadingHTTPServer
 from typing import Any
 
 
@@ -216,7 +217,7 @@ class AdversarialMCPHTTPServer:
             def log_message(self, format: str, *args: Any) -> None:
                 return
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = QuietThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(
             target=lambda: self._server.serve_forever(poll_interval=0.01),
             daemon=True,
