@@ -192,8 +192,9 @@ persistent Definition Registry(`PostgreSQLRevisionStore`, migration 0003)와 Pos
 1. 운영 attestation issuer·key rotation과 외부 KMS/HSM 연동
 2. OTLP gRPC Collector와 S3 Object-Lock 기반 내구 WORM Audit Sink export
 3. event retention·backpressure와 multi-instance 장애 복구·HA 운영
-4. server-initiated request, 비동기 task, cancellation/replay 정책
+
+server-initiated request와 비동기 task·cancellation/replay는 `mcp_async.py`로 제공한다. `ServerRequestRouter`는 allowlist 밖 server 요청을 fail-closed로 거부하고(handler 예외는 internal-error로 격리, 모든 결정 audit), `AsyncTaskRegistry`는 task lifecycle과 one-time 결과 consume(replay 거부)·idempotent cancel을 principal에 결합해 제공한다. downstream HTTP 클라이언트는 `set_server_request_router`로 라우터를 켜기 전까지 server 요청을 계속 fail-closed로 거부한다.
 
 공식 [MCP Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)과 [Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)가 금지하는 token passthrough는 [10 OAuth Identity Guard](10-mcp-oauth-identity-guard.md)가 discovery·token exchange 단계부터 차단한다. stdio process와 sandbox attestation은 [11 stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md)를 따른다.
 
-downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 `SessionStore`를 주입하면 인증 principal에 결합된 session의 GET SSE를 송신하고 `Last-Event-ID` 이후 event를 재전송하며, store가 없으면 405로 fail closed한다. 기본 `InMemorySessionStore`는 단일 프로세스 reference이고, multi-instance 배포는 같은 protocol의 `PostgreSQLSessionStore`(migration 0002, RLS·tenant binding)를 주입한다. server-initiated JSON-RPC request는 현재 fail closed한다.
+downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 `SessionStore`를 주입하면 인증 principal에 결합된 session의 GET SSE를 송신하고 `Last-Event-ID` 이후 event를 재전송하며, store가 없으면 405로 fail closed한다. 기본 `InMemorySessionStore`는 단일 프로세스 reference이고, multi-instance 배포는 같은 protocol의 `PostgreSQLSessionStore`(migration 0002, RLS·tenant binding)를 주입한다. server-initiated JSON-RPC request는 `set_server_request_router`로 allowlist 라우터를 켜지 않으면 fail closed한다.

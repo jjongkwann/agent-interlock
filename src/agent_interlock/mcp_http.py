@@ -106,6 +106,8 @@ class MCPStreamableHTTPClient:
         self._session_id: str | None = None
         self._last_event_id: str | None = None
         self._server_capabilities: Mapping[str, Any] = {}
+        self._server_request_router: Any = None
+        self._server_request_responder: Any = None
 
     @property
     def initialized(self) -> bool:
@@ -121,6 +123,17 @@ class MCPStreamableHTTPClient:
 
     def set_server_message_handler(self, handler: ServerMessageHandler | None) -> None:
         self._server_message_handler = handler
+
+    def set_server_request_router(self, router: Any, responder: Any = None) -> None:
+        """Enable fail-closed handling of server-initiated requests.
+
+        ``router`` is a ``ServerRequestRouter``; ``responder`` (optional) is
+        called with the produced JSON-RPC response so a deployment can POST it
+        back to the server. Without a router, server-initiated requests remain
+        rejected fail-closed.
+        """
+        self._server_request_router = router
+        self._server_request_responder = responder
 
     def initialize(
         self,
@@ -349,10 +362,15 @@ class MCPStreamableHTTPClient:
         for message in messages:
             if "method" in message:
                 if "id" in message:
-                    raise MCPHTTPError(
-                        "MCP-SSE-SERVER-REQUEST-UNSUPPORTED",
-                        "server-initiated MCP requests are not enabled",
-                    )
+                    if self._server_request_router is None:
+                        raise MCPHTTPError(
+                            "MCP-SSE-SERVER-REQUEST-UNSUPPORTED",
+                            "server-initiated MCP requests are not enabled",
+                        )
+                    server_response = self._server_request_router.handle(message)
+                    if self._server_request_responder is not None:
+                        self._server_request_responder(server_response)
+                    continue
                 notifications.append(message)
                 continue
             if expected_id is None:

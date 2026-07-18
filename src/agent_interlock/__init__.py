@@ -109,6 +109,13 @@ from .mcp_http import (
     SessionStore,
     create_mcp_http_server,
 )
+from .mcp_async import (
+    AsyncTaskRegistry,
+    MCPAsyncError,
+    ServerRequestRouter,
+    TaskRecord,
+    TaskState,
+)
 from .mcp_jwt import MCPJWKSVerifier
 from .oauth_consent import LoopbackCallbackReceiver, OAuthConsentError, run_consent
 from .mcp_oauth import (
@@ -349,6 +356,11 @@ __all__ = [
     "LedgerQueryLimitExceeded",
     "LedgerTenantMismatch",
     "LoopbackCallbackReceiver",
+    "AsyncTaskRegistry",
+    "MCPAsyncError",
+    "ServerRequestRouter",
+    "TaskRecord",
+    "TaskState",
     "MCPJWKSVerifier",
     "MCPToolGateway",
     "MCPHTTPError",

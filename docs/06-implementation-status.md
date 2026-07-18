@@ -80,6 +80,7 @@ status: active
 | artifact 검사–실행 TOCTOU 제거 (fd 실행) | `mcp_stdio.py` `_open_verified_artifact`·`SandboxLaunchPlan.executable_digest`, client `/proc/self/fd` exec | fd 위 digest 검증·변조/swap 거부·비정규 파일 거부, backend별 argv[0] pin, Linux CI에서 fd-exec 실행 |
 | sandbox process supervisor·health telemetry | `sandbox_supervisor.py` `SandboxSupervisor`·`SandboxHealth`·`SupervisedProcess` | liveness/health probe, bounded-backoff 재시작, 재시작 시 attestation 재검증(swap fail-closed), 전이마다 `CONTROL_HEALTH_CHANGED`(REL-11) 방출 시험 |
 | OTLP semantic convention 어댑터·telemetry health | `otlp_semconv.py` `normalize_otlp_semconv`·`SEMCONV_ALIASES`, `control_health.py` `ControlHealthReporter` | legacy(`llm.*`·snake_case) 별칭→canonical 정규화·canonical 우선, import issue·sampling gap·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`(REL-12) 연결 시험 |
+| server-initiated request·async task·cancellation/replay | `mcp_async.py` `ServerRequestRouter`·`AsyncTaskRegistry`·`TaskState`, `mcp_http.py` `set_server_request_router` | allowlist fail-closed 라우팅·unknown 거부·handler 격리, task lifecycle·one-time consume(replay 거부)·idempotent cancel·principal binding·capacity, HTTP 클라이언트 배선 시험 |
 
 ## 현재 자동화된 L1 범위
 
@@ -87,7 +88,7 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-17 기본 전체 회귀는 372개 test를 수집해 `OK (skipped=9)`다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+2026-07-17 기본 전체 회귀는 391개 test를 수집해 `OK (skipped=9)`다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
@@ -105,11 +106,10 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 **내부 구현 작업 (저장소 안에서 가능):**
 
-1. MCP server-initiated request, 비동기 task와 cancellation/replay 정책
-2. PostgreSQL migration runner 정리와 자동 partition/retention job, connection pool/factory
-3. WORM store의 파일 기반 append-only 영속화(S3 이전 단계)
+1. PostgreSQL migration runner 정리와 자동 partition/retention job, connection pool/factory
+2. WORM store의 파일 기반 append-only 영속화(S3 이전 단계)
 
-(완료: artifact digest 검사와 exec 사이 TOCTOU 제거 — fd 실행; 장기 process supervisor와 sandbox health telemetry; OTLP semantic convention 어댑터와 sampling 누락·Audit Sink 장애의 `CONTROL_HEALTH_CHANGED` 연결)
+(완료: artifact digest 검사와 exec 사이 TOCTOU 제거 — fd 실행; 장기 process supervisor와 sandbox health telemetry; OTLP semantic convention 어댑터와 sampling 누락·Audit Sink 장애의 `CONTROL_HEALTH_CHANGED` 연결; MCP server-initiated request·비동기 task·cancellation/replay)
 
 **외부 연동 작업 (외부 서비스·플랫폼 필요):**
 
