@@ -98,9 +98,24 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 이후 다음 프로덕션 통합 항목을 추가로 구현했다: 분산 PostgreSQL store(Session/OAuth/Config `0002`, DefinitionRegistry `0003`), opt-in gateway config-guard preflight, macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행), 실 소켓 egress backend(DNS·IP pinning), 비대칭 publisher 서명(Ed25519·KMS 지점), Langfuse/LangSmith trace 어댑터, WORM audit store, Studio git 배포(propose→2인 승격→rollback), PostgreSQL live CI 프로비저닝과 GitHub Actions.
 
-남은 것은 외부 서비스·SaaS 연동이 필요한 항목이다.
+남은 것은 두 갈래다. 하나는 외부 서비스·인프라 없이 이 저장소 안에서 구현 가능한 **내부 구현 작업**, 다른 하나는 외부 SaaS·서비스·플랫폼과의 **연동 작업**이다.
 
-1. Sigstore/Rekor 네트워크 검증과 실 egress sidecar socket/kill telemetry, S3 Object-Lock WORM 내구 backend
-2. OTLP gRPC(:4317) streaming과 Incident/response service, 원격 Git host PR 리뷰 배선
-3. PostgreSQL 자동 partition/retention·pool·HA 운영
-4. 고급 MCP 비동기 task·cancellation과 IdP key rotation·DPoP/mTLS
+**내부 구현 작업 (저장소 안에서 가능):**
+
+1. artifact digest 검사와 exec 사이 TOCTOU 제거(immutable mount 또는 FD execution)
+2. 장기 process supervisor와 sandbox health telemetry
+3. OTLP semantic convention 버전 호환 어댑터, sampling 누락·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`로 연결
+4. MCP server-initiated request, 비동기 task와 cancellation/replay 정책
+5. PostgreSQL migration runner 정리와 자동 partition/retention job, connection pool/factory
+6. WORM store의 파일 기반 append-only 영속화(S3 이전 단계)
+
+**외부 연동 작업 (외부 서비스·플랫폼 필요):**
+
+1. Sigstore/Rekor 네트워크 검증, 외부 KMS/HSM key 발급·회전·폐기, 프로덕션 IdP·Secret Store 연동
+2. 실 egress sidecar의 socket 전달·차단·kill telemetry, S3 Object-Lock 기반 내구 WORM export
+3. OTLP gRPC(:4317) streaming receiver·Collector queue/backpressure, Incident/response service
+4. PostgreSQL HA·failover·distributed rate limit·TLS termination
+5. 원격 GitHub/GitLab PR 리뷰·배포 연결
+6. IdP JWKS cache·key rotation·장애 정책, DPoP/mTLS sender-constrained token, 운영 consent UI·HTTPS callback·refresh-token 수명주기
+
+gVisor·Kata·Kubernetes sandbox backend는 Bubblewrap/Seatbelt를 대체해야 하는 배포 환경에서만 필요한 선택 항목이다.
