@@ -85,7 +85,7 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-17 기본 전체 회귀는 347개 test를 수집해 `OK (skipped=9)`다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+2026-07-17 기본 전체 회귀는 356개 test를 수집해 `OK (skipped=9)`다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service

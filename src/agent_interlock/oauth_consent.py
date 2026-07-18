@@ -10,6 +10,7 @@ one callback; a second hit is refused.
 
 from __future__ import annotations
 
+import sys
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -19,6 +20,21 @@ from typing import Any
 
 class OAuthConsentError(RuntimeError):
     pass
+
+
+class _QuietLoopbackServer(ThreadingHTTPServer):
+    """Loopback server that does not print a traceback on client reset.
+
+    A browser that closes the tab, or a refused second callback, resets the
+    connection; the default handler would spew a stack trace to stderr. Real
+    handler errors still propagate.
+    """
+
+    def handle_error(self, request, client_address):  # noqa: ANN001
+        error = sys.exc_info()[1]
+        if isinstance(error, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def _bracket(host: str) -> str:
@@ -65,7 +81,7 @@ class LoopbackCallbackReceiver:
             def log_message(self, *_args) -> None:
                 return
 
-        self._server = ThreadingHTTPServer((host, port), Handler)
+        self._server = _QuietLoopbackServer((host, port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
