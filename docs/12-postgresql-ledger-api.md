@@ -138,8 +138,8 @@ server.serve_forever()
 
 ## 6. 현재 경계
 
-- Migration은 파일 기반(`migrations/postgresql/0001`–`0003`)이며 전용 migration runner는 없다. 자동 partition scheduler·retention job은 아직 포함하지 않는다.
-- connection pool은 제공하지 않는다. tenant별 인증 credential을 유지하는 pool/factory를 주입해야 한다.
+- Migration runner는 `postgres_ops.py` `PostgreSQLMigrationRunner`로 제공한다. `migrations/postgresql`의 4-digit `NNNN_*.sql`을 순서대로 멱등 적용하고 `public.interlock_schema_migrations`에 checksum과 함께 기록하며, 적용 후 파일이 바뀌면(checksum drift) 거부한다. 자동 partition/retention은 `PartitionMaintenance`(월별 partition ensure, cutoff보다 오래된 월 partition을 DETACH·ingest-key prune 후 drop)로 제공한다. 실행은 RLS를 bypass하는 migration owner/superuser 연결을 전제한다.
+- connection pool은 `postgres_ops.py` `PostgreSQLConnectionPool`로 제공한다. bounded pool이 `ConnectionFactory` 프록시를 반환하므로 `PostgreSQLLedger(pool.factory, ...)`처럼 기존 adapter에 그대로 주입되고, 반납 시 rollback해 열린 트랜잭션이 다음 borrower로 새지 않는다. tenant별 인증 credential 분리는 여전히 tenant마다 별도 pool을 쓴다.
 - reference API는 sync HTTP이며 HA, distributed rate limit, TLS termination을 제공하지 않는다.
 - producer 비대칭 서명은 `signing.py`의 Ed25519로, hash chain WORM 보존은 `audit_sink.py` `WORMAuditStore`(append-only·해시체인)로 제공한다. mTLS, 외부 KMS/HSM key 관리, S3 Object-Lock 기반 durable 복제·export pipeline은 아직 운영 단계다.
 - PostgreSQL live 검증은 `ci/docker-compose.postgres.yml` + `ci/postgres_provision.sql` + `ci/run_postgres_live.sh`로 로컬에서 실행하며(store/ledger live 시험 6개 통과 확인), `.github/workflows/ci.yml`의 `postgres-live` job이 postgres:16 서비스에 migration 0001–0003과 프로비저닝을 적용해 CI에서 실행한다. DSN(`INTERLOCK_TEST_POSTGRES_DSN_TENANT_A/B`)이 없으면 해당 integration test만 skip한다.

@@ -174,6 +174,13 @@ from .postgres_ledger import (
     PostgreSQLDriverUnavailable,
     PostgreSQLLedger,
 )
+from .postgres_ops import (
+    MigrationError,
+    PartitionMaintenance,
+    PoolExhausted,
+    PostgreSQLConnectionPool,
+    PostgreSQLMigrationRunner,
+)
 from .postgres_stores import (
     PostgreSQLConfigStore,
     PostgreSQLOAuthTransactionStore,
@@ -401,9 +408,14 @@ __all__ = [
     "OAuthTransactionStore",
     "PinnedSocketEgressBackend",
     "PolicyMode",
+    "MigrationError",
+    "PartitionMaintenance",
+    "PoolExhausted",
     "PostgreSQLConfigStore",
+    "PostgreSQLConnectionPool",
     "PostgreSQLDriverUnavailable",
     "PostgreSQLLedger",
+    "PostgreSQLMigrationRunner",
     "PostgreSQLOAuthTransactionStore",
     "PostgreSQLRevisionStore",
     "PostgreSQLSessionStore",
