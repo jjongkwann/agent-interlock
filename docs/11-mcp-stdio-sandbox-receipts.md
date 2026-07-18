@@ -173,11 +173,12 @@ outcome = gateway.reconcile_receipt_store(
 
 ## 6. 남은 운영 경계
 
-reference core에는 서명 attestation verifier와 Linux Bubblewrap launch-plan backend가 있다. 다만 현재 자동 검증은 argv와 증거 계약 수준이며 실제 Linux+bwrap process 격리를 CI에서 실행하지 않는다. 운영 완료를 위해서는 Bubblewrap live 시험 또는 다음 중 하나가 같은 attestation 계약을 충족해야 한다.
+reference core에는 서명 attestation verifier, Linux Bubblewrap backend, macOS Seatbelt backend(`SeatbeltSandboxBackend`)가 있다. Bubblewrap는 `seccomp_child_denial=True`일 때 `build_no_subprocess_seccomp`가 만든 classic-BPF 필터(fork/vfork/clone3·비스레드 clone 거부, 스레드 clone 허용)를 `--seccomp`로 붙여 child-process 제한을 정직하게 attest하며, Seatbelt는 `(deny process-fork)`로 같은 제한을 집행한다. Seatbelt live 집행 시험은 macOS 호스트에서, Bubblewrap+seccomp live 집행은 `.github/workflows/ci.yml`의 `sandbox-live` job에서 실제 격리를 실행한다(seccomp BPF 로직은 in-test classic-BPF 인터프리터로 검증). 실제 egress proxy/sidecar의 DNS·연결 IP pinning은 `egress.py` `PinnedSocketEgressBackend`로 제공한다.
 
-- Linux user/mount/network namespace와 seccomp/cgroup 정책
-- gVisor, Kata Containers 또는 hardened container runtime
-- macOS App Sandbox처럼 platform에서 지원하는 격리 프로파일
-- Kubernetes workload sandbox와 deny-by-default NetworkPolicy
+운영 완료를 위해 다음이 남아 있다.
 
-추가로 seccomp 기반 child-process 강제, 실제 egress proxy/sidecar와 DNS·연결 IP pinning, immutable artifact mount/FD execution으로 digest 검사와 exec 사이 TOCTOU 제거, macOS backend, 장기 process supervisor와 운영 sandbox health telemetry가 필요하다. reference의 publisher/attestation symmetric key는 운영에서 Sigstore 또는 KMS/HSM 발급·회전·폐기 체계로 교체해야 한다.
+- gVisor, Kata Containers 또는 hardened container runtime, Kubernetes workload sandbox와 deny-by-default NetworkPolicy 대안 backend
+- immutable artifact mount 또는 FD execution으로 digest 검사와 exec 사이 TOCTOU 제거
+- 실 egress sidecar의 socket 전달·차단·kill telemetry 운영 배선
+- 장기 process supervisor와 운영 sandbox health telemetry
+- reference의 publisher/attestation key(HMAC·Ed25519 in-process)를 운영 Sigstore/Rekor 또는 KMS/HSM 발급·회전·폐기 체계로 교체

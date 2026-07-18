@@ -76,8 +76,8 @@ Studio의 `Runtime graph` 또는 `Drift` 탭에서 같은 JSON을 가져올 수 
 ## 6. 현재 제한과 다음 통합
 
 - OTLP/HTTP JSON 파일 import와 인증된 HTTP receiver는 구현되어 있다. OTLP/gRPC `:4317`, 표준 Collector 배포 설정과 backpressure·queue는 아직 없다.
-- `SignedAuditSink`는 integrity 검증을 통과한 event를 symmetric keyed signature로 seal하는 reference다. 비대칭/KMS key, workload mTLS와 별도 WORM 보존소 export는 아직 없다.
-- Langfuse·LangSmith 등 vendor trace adapter는 아직 없다.
+- `SignedAuditSink`는 integrity 검증을 통과한 event를 symmetric keyed signature로 seal하는 reference다. 비대칭 서명은 `signing.py`의 Ed25519(`sign/verify_canonical_ed25519`)와 `supply_chain.py`의 `Ed25519PublisherVerifier`로 제공하며, append-only 해시체인 보존은 `audit_sink.py` `WORMAuditStore`/`InMemoryWORMAuditStore`로 제공한다. 외부 KMS/HSM key 운영, workload mTLS, S3 Object-Lock 기반 내구 WORM export는 아직 없다.
+- Langfuse·LangSmith vendor trace adapter는 `vendor_telemetry.py`(`langfuse_traces_to_otlp`·`langsmith_runs_to_otlp`·`import_langfuse_traces`·`import_langsmith_runs`)로 구현되어 있다. vendor metadata의 interlock/gen_ai 컨텍스트를 OTLP 속성으로 올린 뒤 `import_runtime_telemetry`를 재사용한다.
 - 표준 attribute 변경을 흡수할 semantic convention version adapter가 필요하다.
 - Dynamic Sub-Agent instance가 다시 source가 되는 관계는 admission identity registry와 함께 검증해야 한다.
 - trace sampling 누락과 Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`로 연결해야 한다.

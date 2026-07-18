@@ -135,15 +135,14 @@ trusted_credential_claims = token_provider.credential
 
 ## 6. Reference 범위와 남은 운영 구성요소
 
-reference core는 loopback callback receiver, browser opener 계약, RFC 7662 introspection verifier, optional JWKS/JWT verifier와 one-time `InMemoryOAuthTransactionStore`를 제공한다. 이는 protocol 경계의 실행 가능한 기준이며 다음 운영 구성요소는 포함하지 않는다.
+reference core는 loopback callback receiver, browser opener 계약, RFC 7662 introspection verifier, optional JWKS/JWT verifier와 one-time transaction store를 제공한다. 다중 instance 원자적 replay 방지가 필요한 배포는 `InMemoryOAuthTransactionStore` 대신 `PostgreSQLOAuthTransactionStore`(`postgres_stores.py`, migration 0002)를 주입하며, 이는 DELETE-consume으로 cross-instance callback replay를 차단한다. DNS pinning과 실제 연결 IP 강제는 `egress.py` `PinnedSocketEgressBackend`(DNS 1회 해석→연결 IP 고정→peer 검증→비전역 주소 fail-closed)로 제공한다. 다음 운영 구성요소는 아직 포함하지 않는다.
 
 - 조직별 로그인·동의 UI, public HTTPS callback service와 consent audit workflow
 - IdP별 JWKS cache·rotation·장애 정책과 introspection credential 수명주기
 - client 등록·secret 저장소와 Dynamic Client Registration/Client ID Metadata Document
 - refresh token 암호화 저장·회전·폐기
 - DPoP, mTLS sender-constrained token
-- Redis/PostgreSQL transaction/state store와 다중 instance 원자적 replay 방지
-- egress proxy에서의 DNS pinning과 실제 연결 IP 강제
+- 외부 KMS/HSM key 발급·회전·폐기와 프로덕션 IdP·Secret Store 연동
 
 따라서 현재 상태는 OAuth protocol guard와 token binding reference 구현 완료이며, 특정 IdP와 연결하는 production identity adapter 완료를 뜻하지 않는다.
 

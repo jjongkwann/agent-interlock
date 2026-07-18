@@ -187,13 +187,13 @@ Tool 승인 절차는 `tools/list → observed digest 확인 → reviewed manife
 
 ## 7. 남은 운영 경계
 
-현재 carrier를 production 운영과 나머지 실행 경계로 확장하려면 다음이 필요하다.
+persistent Definition Registry(`PostgreSQLRevisionStore`, migration 0003)와 PostgreSQL `SessionStore`(`postgres_stores.py`, migration 0002), macOS Seatbelt·Linux bwrap seccomp live sandbox는 구현되어 있다. 현재 carrier를 production 운영과 나머지 실행 경계로 확장하려면 다음이 남아 있다.
 
-1. platform별 production OS sandbox live 검증과 운영 attestation issuer·key rotation
-2. persistent Definition Registry와 OTLP gRPC Collector·외부 KMS/WORM Audit Sink export
-3. Redis/PostgreSQL 기반 분산 `SessionStore`, event retention·backpressure와 multi-instance 장애 복구
+1. 운영 attestation issuer·key rotation과 외부 KMS/HSM 연동
+2. OTLP gRPC Collector와 S3 Object-Lock 기반 내구 WORM Audit Sink export
+3. event retention·backpressure와 multi-instance 장애 복구·HA 운영
 4. server-initiated request, 비동기 task, cancellation/replay 정책
 
 공식 [MCP Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)과 [Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)가 금지하는 token passthrough는 [10 OAuth Identity Guard](10-mcp-oauth-identity-guard.md)가 discovery·token exchange 단계부터 차단한다. stdio process와 sandbox attestation은 [11 stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md)를 따른다.
 
-downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 `SessionStore`를 주입하면 인증 principal에 결합된 session의 GET SSE를 송신하고 `Last-Event-ID` 이후 event를 재전송하며, store가 없으면 405로 fail closed한다. 기본 `InMemorySessionStore`는 단일 프로세스 reference이므로 HA 배포는 같은 protocol의 분산 store가 필요하다. server-initiated JSON-RPC request는 현재 fail closed한다.
+downstream Client는 POST SSE와 GET SSE를 수신할 수 있다. inbound reference Server는 `SessionStore`를 주입하면 인증 principal에 결합된 session의 GET SSE를 송신하고 `Last-Event-ID` 이후 event를 재전송하며, store가 없으면 405로 fail closed한다. 기본 `InMemorySessionStore`는 단일 프로세스 reference이고, multi-instance 배포는 같은 protocol의 `PostgreSQLSessionStore`(migration 0002, RLS·tenant binding)를 주입한다. server-initiated JSON-RPC request는 현재 fail closed한다.
