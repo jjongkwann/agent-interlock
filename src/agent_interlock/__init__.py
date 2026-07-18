@@ -55,6 +55,8 @@ from .architecture import (
     compare_runtime,
 )
 from .canonical import canonical_digest, canonical_json, raw_digest
+from .control_health import ControlHealthReporter
+from .otlp_semconv import SEMCONV_ALIASES, normalize_otlp_semconv, normalize_semconv_attributes
 from .egress import (
     DestinationEgressGuard,
     DestinationEgressPolicy,
@@ -292,6 +294,7 @@ __all__ = [
     "ConfigStoreStale",
     "ConfiguredTool",
     "ControlDecision",
+    "ControlHealthReporter",
     "ControlTiming",
     "ConnectorExecutionContext",
     "DeploymentApproval",
@@ -420,6 +423,9 @@ __all__ = [
     "ToolRevision",
     "TelemetryImportIssue",
     "VerifiedAccessTokenClaims",
+    "SEMCONV_ALIASES",
+    "normalize_otlp_semconv",
+    "normalize_semconv_attributes",
     "canonical_digest",
     "canonical_json",
     "canonical_network_destination",
