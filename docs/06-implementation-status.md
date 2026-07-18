@@ -77,6 +77,7 @@ status: active
 | WORM audit 보존 store | `audit_sink.py` `WORMAuditStore`·`InMemoryWORMAuditStore` | append-only·해시체인, write-once 중복 거부·삭제/치환/재정렬 chain 파손 탐지 시험 |
 | Studio git 배포 워크플로 | `studio_deploy.py` `GitBundleStore`·`sign_deployment_approval` | 실 git repo propose→2인 서명 SHADOW→ENFORCE 승격→rollback, 단일승인·위조서명·digest tamper 거부 시험 |
 | PostgreSQL live 프로비저닝 | `ci/docker-compose.postgres.yml`·`ci/postgres_provision.sql`·`ci/run_postgres_live.sh`, `.github/workflows/ci.yml` | postgres:16 + 0001-0003 migration + 2 tenant role 매핑, live store/ledger 6개 시험 실행 |
+| artifact 검사–실행 TOCTOU 제거 (fd 실행) | `mcp_stdio.py` `_open_verified_artifact`·`SandboxLaunchPlan.executable_digest`, client `/proc/self/fd` exec | fd 위 digest 검증·변조/swap 거부·비정규 파일 거부, backend별 argv[0] pin, Linux CI에서 fd-exec 실행 |
 
 ## 현재 자동화된 L1 범위
 
@@ -102,12 +103,13 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 **내부 구현 작업 (저장소 안에서 가능):**
 
-1. artifact digest 검사와 exec 사이 TOCTOU 제거(immutable mount 또는 FD execution)
-2. 장기 process supervisor와 sandbox health telemetry
-3. OTLP semantic convention 버전 호환 어댑터, sampling 누락·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`로 연결
-4. MCP server-initiated request, 비동기 task와 cancellation/replay 정책
-5. PostgreSQL migration runner 정리와 자동 partition/retention job, connection pool/factory
-6. WORM store의 파일 기반 append-only 영속화(S3 이전 단계)
+1. 장기 process supervisor와 sandbox health telemetry
+2. OTLP semantic convention 버전 호환 어댑터, sampling 누락·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`로 연결
+3. MCP server-initiated request, 비동기 task와 cancellation/replay 정책
+4. PostgreSQL migration runner 정리와 자동 partition/retention job, connection pool/factory
+5. WORM store의 파일 기반 append-only 영속화(S3 이전 단계)
+
+(완료: artifact digest 검사와 exec 사이 TOCTOU 제거 — fd 실행)
 
 **외부 연동 작업 (외부 서비스·플랫폼 필요):**
 

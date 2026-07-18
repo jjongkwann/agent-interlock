@@ -215,6 +215,10 @@ class SandboxLaunchPlan:
     working_directory: str
     attestation: SandboxAttestation
     seccomp_program: bytes = b""
+    # sha256 digest of argv[0] (the directly-exec'd binary: launcher, or the
+    # executable for a direct launch). The client verifies it over an open fd
+    # and, where supported, execs that fd to close the check-to-exec window.
+    executable_digest: str = ""
 
 
 class StdioSandboxBackend(Protocol):
@@ -245,6 +249,7 @@ class DirectTestSandboxBackend:
                 network_restricted=False,
                 child_process_restricted=False,
             ),
+            executable_digest=profile.executable.digest,
         )
 
 
@@ -292,6 +297,7 @@ class AttestedExternalSandboxBackend:
             environment=profile.environment,
             working_directory=profile.working_directory,
             attestation=attestation,
+            executable_digest=self.launcher.digest,
         )
 
 
@@ -446,6 +452,7 @@ class BubblewrapSandboxBackend:
             working_directory=profile.working_directory,
             attestation=sign_attestation(attestation, self.signing_key),
             seccomp_program=seccomp_program,
+            executable_digest=self.launcher.digest,
         )
 
     def _argv(self, profile: StdioSandboxProfile, *, with_seccomp: bool = False) -> tuple[str, ...]:
@@ -583,6 +590,7 @@ class SeatbeltSandboxBackend:
             environment=profile.environment,
             working_directory=profile.working_directory,
             attestation=sign_attestation(attestation, self.signing_key),
+            executable_digest=self.launcher.digest,
         )
 
     def _policy(self, profile: StdioSandboxProfile) -> str:
@@ -749,9 +757,20 @@ class MCPStdioClient:
             self._validate_launch_plan(plan)
             argv = list(plan.argv)
             seccomp_fd: int | None = None
+            exec_fd: int | None = None
+            pass_fds: list[int] = []
             if plan.seccomp_program:
                 seccomp_fd = self._open_seccomp_fd(plan.seccomp_program)
                 argv = [str(seccomp_fd) if token == _SECCOMP_FD_TOKEN else token for token in argv]
+                pass_fds.append(seccomp_fd)
+            if plan.executable_digest:
+                # Verify argv[0] over an open fd, then execute THAT fd so the
+                # verified inode and the exec'd inode are provably identical.
+                exec_fd = _open_verified_artifact(StdioArtifactPin(argv[0], plan.executable_digest))
+                if _FD_EXEC_AVAILABLE:
+                    os.set_inheritable(exec_fd, True)
+                    argv[0] = f"/proc/self/fd/{exec_fd}"
+                    pass_fds.append(exec_fd)
             popen_arguments: dict[str, Any] = {
                 "args": argv,
                 "stdin": subprocess.PIPE,
@@ -763,8 +782,8 @@ class MCPStdioClient:
                 "close_fds": True,
                 "bufsize": 0,
             }
-            if seccomp_fd is not None:
-                popen_arguments["pass_fds"] = (seccomp_fd,)
+            if pass_fds:
+                popen_arguments["pass_fds"] = tuple(pass_fds)
             if os.name == "posix":
                 popen_arguments["start_new_session"] = True
             elif os.name == "nt":
@@ -774,8 +793,10 @@ class MCPStdioClient:
             except OSError:
                 raise MCPStdioError("MCP-STDIO-SPAWN-FAILED", "stdio server process failed to start") from None
             finally:
-                if seccomp_fd is not None:
-                    os.close(seccomp_fd)  # the child inherited its own copy
+                # The child inherited its own copies of any passed fds.
+                for fd in (seccomp_fd, exec_fd):
+                    if fd is not None:
+                        os.close(fd)
             self._process = process
             self._sandbox_attestation = plan.attestation
             self._reader_failure = None
@@ -1172,20 +1193,42 @@ def sha256_file(path: str) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+# True only where an open fd can be executed by path (/proc/self/fd/N). On
+# such hosts the verified fd and the exec'd inode are provably identical.
+_FD_EXEC_AVAILABLE = os.path.isdir("/proc/self/fd")
+
+
+def _open_verified_artifact(pin: StdioArtifactPin) -> int:
+    """Open the pinned artifact once and verify its digest over that fd.
+
+    The returned open fd refers to a single fixed inode for its whole lifetime.
+    Hashing over the fd (not a re-opened path) removes the check-time re-open
+    gap, and a caller that executes this fd via ``/proc/self/fd`` runs exactly
+    the bytes that were verified — no path can be swapped between check and
+    exec. The caller owns the fd and must close it. ``O_NOFOLLOW`` rejects a
+    final-component symlink swapped in after path resolution.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(pin.path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise MCPStdioError("L1-M4-ARTIFACT-INVALID", "approved stdio artifact is not a regular file")
+        digest = hashlib.sha256()
+        while chunk := os.read(fd, 1_048_576):
+            digest.update(chunk)
+        if f"sha256:{digest.hexdigest()}" != pin.digest:
+            raise MCPStdioError("L1-M4-ARTIFACT-DIGEST-MISMATCH", "stdio artifact digest changed")
+        os.lseek(fd, 0, os.SEEK_SET)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def _verify_artifact(pin: StdioArtifactPin) -> None:
-    before = os.stat(pin.path, follow_symlinks=False)
-    if not stat.S_ISREG(before.st_mode):
-        raise MCPStdioError("L1-M4-ARTIFACT-INVALID", "approved stdio artifact is not a regular file")
-    observed = sha256_file(pin.path)
-    after = os.stat(pin.path, follow_symlinks=False)
-    if (
-        observed != pin.digest
-        or before.st_dev != after.st_dev
-        or before.st_ino != after.st_ino
-        or before.st_size != after.st_size
-        or before.st_mtime_ns != after.st_mtime_ns
-    ):
-        raise MCPStdioError("L1-M4-ARTIFACT-DIGEST-MISMATCH", "stdio artifact digest changed")
+    """Atomically verify a pinned artifact's digest (fd-based; no re-open gap)."""
+    os.close(_open_verified_artifact(pin))
 
 
 def _resolved_regular_file(value: str) -> str:

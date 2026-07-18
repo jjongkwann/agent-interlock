@@ -175,10 +175,11 @@ outcome = gateway.reconcile_receipt_store(
 
 reference core에는 서명 attestation verifier, Linux Bubblewrap backend, macOS Seatbelt backend(`SeatbeltSandboxBackend`)가 있다. Bubblewrap는 `seccomp_child_denial=True`일 때 `build_no_subprocess_seccomp`가 만든 classic-BPF 필터(fork/vfork/clone3·비스레드 clone 거부, 스레드 clone 허용)를 `--seccomp`로 붙여 child-process 제한을 정직하게 attest하며, Seatbelt는 `(deny process-fork)`로 같은 제한을 집행한다. Seatbelt live 집행 시험은 macOS 호스트에서, Bubblewrap+seccomp live 집행은 `.github/workflows/ci.yml`의 `sandbox-live` job에서 실제 격리를 실행한다(seccomp BPF 로직은 in-test classic-BPF 인터프리터로 검증). 실제 egress proxy/sidecar의 DNS·연결 IP pinning은 `egress.py` `PinnedSocketEgressBackend`로 제공한다.
 
+artifact digest 검사와 exec 사이의 TOCTOU는 fd 실행으로 제거했다. `_open_verified_artifact`가 pinned artifact를 fd로 한 번 열어 그 fd 위에서 digest를 검증하므로 검증한 inode가 fd 수명 동안 고정되고, `/proc/self/fd`를 지원하는 host(Linux)에서 client는 `argv[0]`을 그 fd로 실행해 검증 inode와 실행 inode가 동일함을 보장한다. `/proc/self/fd`가 없는 host(macOS)는 fd 기반 원자적 검증으로 재오픈 갭만 제거하고 경로로 실행한다.
+
 운영 완료를 위해 다음이 남아 있다.
 
 - gVisor, Kata Containers 또는 hardened container runtime, Kubernetes workload sandbox와 deny-by-default NetworkPolicy 대안 backend
-- immutable artifact mount 또는 FD execution으로 digest 검사와 exec 사이 TOCTOU 제거
 - 실 egress sidecar의 socket 전달·차단·kill telemetry 운영 배선
 - 장기 process supervisor와 운영 sandbox health telemetry
 - reference의 publisher/attestation key(HMAC·Ed25519 in-process)를 운영 Sigstore/Rekor 또는 KMS/HSM 발급·회전·폐기 체계로 교체
