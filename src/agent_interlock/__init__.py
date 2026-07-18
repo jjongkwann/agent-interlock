@@ -2,6 +2,7 @@
 
 from .audit_sink import (
     AuditSinkError,
+    FileWORMAuditStore,
     InMemoryWORMAuditStore,
     SignedAuditRecord,
     SignedAuditSink,
@@ -283,6 +284,7 @@ __all__ = [
     "AttestationVerifier",
     "AttestedExternalSandboxBackend",
     "AuditSinkError",
+    "FileWORMAuditStore",
     "InMemoryWORMAuditStore",
     "WORMAuditStore",
     "WORMEntry",

@@ -13,8 +13,11 @@ deferred; this is the reference symmetric-key sink.
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from .canonical import canonical_json, raw_digest
@@ -158,11 +161,104 @@ class InMemoryWORMAuditStore:
 
     def verify_chain(self) -> bool:
         with self._lock:
-            previous_hash = _WORM_GENESIS
-            for sequence, entry in enumerate(self._entries):
-                if entry.sequence != sequence or entry.previous_hash != previous_hash:
-                    return False
-                if entry.entry_hash != _entry_hash(sequence, entry.record, previous_hash):
-                    return False
-                previous_hash = entry.entry_hash
-            return True
+            return _verify_chain(self._entries)
+
+
+def _verify_chain(entries: list[WORMEntry]) -> bool:
+    previous_hash = _WORM_GENESIS
+    for sequence, entry in enumerate(entries):
+        if entry.sequence != sequence or entry.previous_hash != previous_hash:
+            return False
+        if entry.entry_hash != _entry_hash(sequence, entry.record, previous_hash):
+            return False
+        previous_hash = entry.entry_hash
+    return True
+
+
+def _record_from_dict(value: Mapping[str, Any]) -> SignedAuditRecord:
+    return SignedAuditRecord(
+        event_id=str(value["eventId"]),
+        tenant_id=str(value["tenantId"]),
+        integrity_hash=str(value["integrityHash"]),
+        signature=str(value["signature"]),
+    )
+
+
+class FileWORMAuditStore:
+    """File-backed append-only, hash-chained WORM store.
+
+    Each entry is one JSONL line; the chain is verified when the file is opened
+    (a tampered or truncated line raises), every append is flushed and fsynced,
+    and the write-once dedupe survives a restart because the (tenant, event)
+    keys are reloaded. Same contract as the in-memory store; durable object-lock
+    (S3) remains a further step.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = Path(path)
+        self._entries: list[WORMEntry] = []
+        self._seen: set[tuple[str, str]] = set()
+        self._lock = threading.RLock()
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path.exists():
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            return
+        entries: list[WORMEntry] = []
+        with self._path.open("r", encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream):
+                line = line.strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                record = _record_from_dict(data["record"])
+                entries.append(
+                    WORMEntry(
+                        sequence=int(data["sequence"]),
+                        record=record,
+                        previous_hash=str(data["previousHash"]),
+                        entry_hash=str(data["entryHash"]),
+                    )
+                )
+        if not _verify_chain(entries):
+            raise WORMViolation(f"persisted WORM chain in {self._path} failed verification")
+        self._entries = entries
+        self._seen = {(entry.record.tenant_id, entry.record.event_id) for entry in entries}
+
+    def append(self, record: SignedAuditRecord) -> WORMEntry:
+        with self._lock:
+            key = (record.tenant_id, record.event_id)
+            if key in self._seen:
+                raise WORMViolation("audit record already written; WORM store is append-only")
+            previous_hash = self._entries[-1].entry_hash if self._entries else _WORM_GENESIS
+            sequence = len(self._entries)
+            entry = WORMEntry(
+                sequence=sequence,
+                record=record,
+                previous_hash=previous_hash,
+                entry_hash=_entry_hash(sequence, record, previous_hash),
+            )
+            self._persist(entry)
+            self._entries.append(entry)
+            self._seen.add(key)
+            return entry
+
+    def _persist(self, entry: WORMEntry) -> None:
+        line = json.dumps(
+            {**entry.canonical_value(), "entryHash": entry.entry_hash},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        with self._path.open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def entries(self) -> tuple[WORMEntry, ...]:
+        with self._lock:
+            return tuple(self._entries)
+
+    def verify_chain(self) -> bool:
+        with self._lock:
+            return _verify_chain(self._entries)
