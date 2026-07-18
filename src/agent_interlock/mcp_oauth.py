@@ -18,8 +18,8 @@ import ssl
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import (
     parse_qsl,
@@ -30,6 +30,11 @@ from urllib.parse import (
 )
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
+from .mcp_contracts import (
+    MCPOAuthError,
+    OAuthAuthorizationTransaction,
+    OAuthTransactionStore,
+)
 from .models import CredentialClaims
 
 
@@ -40,14 +45,6 @@ _CHALLENGE_RE = re.compile(rf"^({_TOKEN})(?:\s+(.*))?$")
 _BEARER_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-._~+/]+=*$")
 _PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9\-._~]{43,128}$")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-
-
-class MCPOAuthError(RuntimeError):
-    """Fail-closed OAuth error with a stable, non-secret reason code."""
-
-    def __init__(self, reason_code: str, message: str) -> None:
-        super().__init__(message)
-        self.reason_code = reason_code
 
 
 class MCPOAuthHTTPStatusError(MCPOAuthError):
@@ -425,22 +422,6 @@ class MCPProtectedResourceDiscovery:
                 response.close()
             return _json_mapping(payload), current
         raise AssertionError("unreachable OAuth redirect loop")
-
-
-@dataclass(slots=True)
-class OAuthAuthorizationTransaction:
-    client_id: str
-    redirect_uri: str
-    resource: str
-    scopes: tuple[str, ...]
-    state: str = field(repr=False)
-    code_verifier: str = field(repr=False)
-    authorization_uri: str = field(repr=False)
-    expires_at_epoch: float
-    callback_consumed: bool = False
-    callback_validated: bool = False
-    exchange_consumed: bool = False
-    authorization_code_digest: str | None = field(default=None, repr=False)
 
 
 class MCPAuthorizationCodeFlow:
@@ -848,20 +829,6 @@ class MCPTokenIntrospectionVerifier:
         finally:
             response.close()
         return _map_introspection_claims(_json_mapping(payload))
-
-
-class OAuthTransactionStore(Protocol):
-    """One-time-consume store for pending OAuth authorization transactions.
-
-    A distributed implementation makes state/code callbacks single-use across
-    gateway instances, so a callback cannot be replayed on a different node.
-    """
-
-    def put(self, transaction: OAuthAuthorizationTransaction) -> None: ...
-
-    def consume(self, state: str) -> OAuthAuthorizationTransaction | None: ...
-
-    def delete(self, state: str) -> None: ...
 
 
 class InMemoryOAuthTransactionStore:

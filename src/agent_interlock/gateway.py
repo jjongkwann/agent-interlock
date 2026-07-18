@@ -27,7 +27,7 @@ from .models import (
     SideEffect,
     ToolDefinition,
 )
-from .policy import EvaluationInput, evaluate, _strongest
+from .policy import EvaluationInput, evaluate, strongest_decision
 from .receipts import FakeExternalReceiptStore
 from .registry import DefinitionRegistry, ToolRevision
 from .security import canonical_destination, destination_domain, sanitize_secrets, validate_schema
@@ -231,7 +231,7 @@ class MCPToolGateway:
         if config_decision is not None:
             decision = replace(
                 decision,
-                decision=_strongest([decision.decision, config_decision.decision]),
+                decision=strongest_decision([decision.decision, config_decision.decision]),
                 reason_codes=decision.reason_codes + config_decision.reason_codes,
             )
         self._decisions[decision.decision_id] = _Pending(

@@ -36,7 +36,7 @@ class LedgerQueryLimitExceeded(LedgerError):
     """Raised when an unpaged internal query exceeds its safety bound."""
 
 
-class _Cursor(Protocol):
+class Cursor(Protocol):
     def execute(self, query: str, parameters: tuple[Any, ...] = ()) -> Any: ...
 
     def fetchone(self) -> tuple[Any, ...] | None: ...
@@ -46,8 +46,8 @@ class _Cursor(Protocol):
     def close(self) -> None: ...
 
 
-class _Connection(Protocol):
-    def cursor(self) -> _Cursor: ...
+class Connection(Protocol):
+    def cursor(self) -> Cursor: ...
 
     def commit(self) -> None: ...
 
@@ -56,7 +56,7 @@ class _Connection(Protocol):
     def close(self) -> None: ...
 
 
-ConnectionFactory = Callable[[], _Connection]
+ConnectionFactory = Callable[[], Connection]
 
 _SELECT_COLUMNS = """
 event_id::text, event_type, schema_version,
@@ -129,7 +129,7 @@ class PostgreSQLLedger:
                 "install the 'postgres' project extra to use PostgreSQLLedger.from_dsn"
             ) from error
 
-        def connect() -> _Connection:
+        def connect() -> Connection:
             return psycopg.connect(
                 dsn,
                 autocommit=False,
@@ -323,7 +323,7 @@ class PostgreSQLLedger:
 
     @staticmethod
     def _load_event(
-        cursor: _Cursor,
+        cursor: Cursor,
         tenant_id: str,
         event_id: str,
         occurred_at: Any,
@@ -344,7 +344,7 @@ class PostgreSQLLedger:
             raise LedgerTenantMismatch("requested tenant does not match the Ledger binding")
 
     @contextmanager
-    def _transaction(self) -> Iterator[_Connection]:
+    def _transaction(self) -> Iterator[Connection]:
         connection = self._connection_factory()
         try:
             cursor = connection.cursor()

@@ -20,6 +20,11 @@ from urllib.request import (
     build_opener,
 )
 
+from .mcp_contracts import (
+    MCPHTTPError,
+    SessionStore,
+    _PrincipalKey,
+)
 from .mcp_transport import (
     MCP_PROTOCOL_VERSION,
     MCPInvocationContext,
@@ -32,12 +37,6 @@ _JSONRPC_PARSE_ERROR = -32700
 _JSONRPC_INVALID_REQUEST = -32600
 _JSONRPC_METHOD_NOT_FOUND = -32601
 _INTERLOCK_NOT_CONFIGURED = -32002
-
-
-class MCPHTTPError(RuntimeError):
-    def __init__(self, reason_code: str, message: str) -> None:
-        super().__init__(message)
-        self.reason_code = reason_code
 
 
 class MCPHTTPStatusError(MCPHTTPError):
@@ -479,32 +478,6 @@ InboundAuthenticator = Callable[[str | None], MCPHTTPPrincipal | None]
 InvocationContextResolver = Callable[
     [MCPHTTPPrincipal, Mapping[str, Any]], MCPInvocationContext | None
 ]
-
-_PrincipalKey = tuple[str, str, str]
-
-
-class SessionStore(Protocol):
-    """Session lifecycle + resumable SSE event buffer, keyed by MCP-Session-Id.
-
-    An implementation makes the inbound lifecycle and server-push replay survive
-    across gateway instances. The in-process reference below is single-node; a
-    Redis/Postgres backend implements the same contract for multi-instance.
-    """
-
-    def create(self, session_id: str, principal_key: _PrincipalKey) -> None: ...
-
-    def mark_ready(self, session_id: str, principal_key: _PrincipalKey) -> bool: ...
-
-    def state(self, session_id: str, principal_key: _PrincipalKey) -> str | None: ...
-
-    def append(self, session_id: str, principal_key: _PrincipalKey, message: Mapping[str, Any]) -> int: ...
-
-    def replay(
-        self, session_id: str, principal_key: _PrincipalKey, after: int | None
-    ) -> tuple[tuple[int, Mapping[str, Any]], ...]: ...
-
-    def delete(self, session_id: str, principal_key: _PrincipalKey) -> bool: ...
-
 
 @dataclass(slots=True)
 class _StoredSession:

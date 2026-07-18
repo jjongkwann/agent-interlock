@@ -126,7 +126,7 @@ def evaluate(policy: LinkPolicy, value: EvaluationInput) -> PolicyDecisionRecord
             reasons.append("L1-M5-DELEGATION-DEPTH")
             decisions.append(ControlDecision.BLOCK)
 
-    decision = _strongest(decisions)
+    decision = strongest_decision(decisions)
     return PolicyDecisionRecord(
         decision_id=str(uuid.uuid4()),
         decision=decision,
@@ -144,7 +144,7 @@ def evaluate(policy: LinkPolicy, value: EvaluationInput) -> PolicyDecisionRecord
     )
 
 
-def _strongest(decisions: list[ControlDecision]) -> ControlDecision:
+def strongest_decision(decisions: list[ControlDecision]) -> ControlDecision:
     if not decisions:
         return ControlDecision.ALLOW
     order = {

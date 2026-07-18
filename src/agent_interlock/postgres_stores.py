@@ -26,15 +26,14 @@ from .config_guard import (
     ConfiguredTool,
 )
 from .ledger import LedgerIntegrityError
-from .mcp_http import MCPHTTPError
-from .mcp_oauth import MCPOAuthError, OAuthAuthorizationTransaction
+from .mcp_contracts import MCPHTTPError, MCPOAuthError, OAuthAuthorizationTransaction
 from .models import DefinitionState, ToolDefinition
 from .registry import ToolRevision
 from .postgres_ledger import (
     ConnectionFactory,
     LedgerTenantMismatch,
     PostgreSQLDriverUnavailable,
-    _Connection,
+    Connection,
 )
 
 _PrincipalKey = tuple[str, str, str]
@@ -66,7 +65,7 @@ class _PostgreSQLStoreBase:
                 f"install the 'postgres' project extra to use {cls.__name__}.from_dsn"
             ) from error
 
-        def connect() -> _Connection:
+        def connect() -> Connection:
             return psycopg.connect(
                 dsn,
                 autocommit=False,
@@ -84,7 +83,7 @@ class _PostgreSQLStoreBase:
             raise LedgerTenantMismatch("requested tenant does not match the store binding")
 
     @contextmanager
-    def _transaction(self) -> Iterator[_Connection]:
+    def _transaction(self) -> Iterator[Connection]:
         connection = self._connection_factory()
         try:
             cursor = connection.cursor()
@@ -106,7 +105,7 @@ class _PostgreSQLStoreBase:
             connection.close()
 
     def _execute(
-        self, connection: _Connection, query: str, parameters: tuple[Any, ...]
+        self, connection: Connection, query: str, parameters: tuple[Any, ...]
     ) -> tuple[Any, ...] | None:
         cursor = connection.cursor()
         try:
@@ -116,7 +115,7 @@ class _PostgreSQLStoreBase:
             cursor.close()
 
     def _execute_all(
-        self, connection: _Connection, query: str, parameters: tuple[Any, ...]
+        self, connection: Connection, query: str, parameters: tuple[Any, ...]
     ) -> list[tuple[Any, ...]]:
         cursor = connection.cursor()
         try:
@@ -125,7 +124,7 @@ class _PostgreSQLStoreBase:
         finally:
             cursor.close()
 
-    def _execute_none(self, connection: _Connection, query: str, parameters: tuple[Any, ...]) -> None:
+    def _execute_none(self, connection: Connection, query: str, parameters: tuple[Any, ...]) -> None:
         cursor = connection.cursor()
         try:
             cursor.execute(query, parameters)

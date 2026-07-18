@@ -15,7 +15,7 @@ import threading
 from datetime import date
 from pathlib import Path
 
-from .postgres_ledger import ConnectionFactory, PostgreSQLDriverUnavailable, _Connection
+from .postgres_ledger import ConnectionFactory, PostgreSQLDriverUnavailable, Connection
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -58,7 +58,7 @@ class PostgreSQLMigrationRunner:
     def _checksum(sql: str) -> str:
         return "sha256:" + hashlib.sha256(sql.encode("utf-8")).hexdigest()
 
-    def applied(self, connection: _Connection) -> dict[str, str]:
+    def applied(self, connection: Connection) -> dict[str, str]:
         cursor = connection.cursor()
         try:
             cursor.execute(_MIGRATIONS_TABLE)
@@ -163,7 +163,7 @@ class PartitionMaintenance:
             connection.close()
 
     @staticmethod
-    def _drop_partition(connection: _Connection, name: str, month: date) -> None:
+    def _drop_partition(connection: Connection, name: str, month: date) -> None:
         """Detach and drop one month partition, pruning its cross-partition
         idempotency keys first so the deferred FK does not block the drop.
 
@@ -182,7 +182,7 @@ class PartitionMaintenance:
         finally:
             cursor.close()
 
-    def _month_partitions(self, connection: _Connection) -> list[str]:
+    def _month_partitions(self, connection: Connection) -> list[str]:
         cursor = connection.cursor()
         try:
             cursor.execute(
@@ -209,7 +209,7 @@ class _PooledConnection:
 
     __slots__ = ("_real", "_pool", "_released")
 
-    def __init__(self, real: _Connection, pool: "PostgreSQLConnectionPool") -> None:
+    def __init__(self, real: Connection, pool: "PostgreSQLConnectionPool") -> None:
         self._real = real
         self._pool = pool
         self._released = False
@@ -243,7 +243,7 @@ class PostgreSQLConnectionPool:
             raise ValueError("max_size must be positive")
         self._factory = connection_factory
         self._max_size = max_size
-        self._idle: list[_Connection] = []
+        self._idle: list[Connection] = []
         self._in_use = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -261,7 +261,7 @@ class PostgreSQLConnectionPool:
             self._in_use += 1
             return _PooledConnection(real, self)
 
-    def _release(self, real: _Connection) -> None:
+    def _release(self, real: Connection) -> None:
         with self._lock:
             self._in_use -= 1
             if self._closed:
@@ -303,7 +303,7 @@ def _partition_month(name: str) -> date | None:
     return date(int(match.group(1)), int(match.group(2)), 1)
 
 
-def _safe_close(connection: _Connection) -> None:
+def _safe_close(connection: Connection) -> None:
     try:
         connection.close()
     except Exception:  # noqa: BLE001
@@ -314,7 +314,7 @@ def _dsn_factory(dsn: str, application_name: str) -> ConnectionFactory:
     if not dsn:
         raise ValueError("dsn is required")
 
-    def connect() -> _Connection:
+    def connect() -> Connection:
         try:
             import psycopg
         except ImportError as error:
