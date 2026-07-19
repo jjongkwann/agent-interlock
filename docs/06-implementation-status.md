@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
-date: 2026-07-17
-version: 0.7.0
+date: 2026-07-19
+version: 0.8.0
 status: active
 ---
 
@@ -82,6 +82,15 @@ status: active
 | OTLP semantic convention 어댑터·telemetry health | `otlp_semconv.py` `normalize_otlp_semconv`·`SEMCONV_ALIASES`, `control_health.py` `ControlHealthReporter` | legacy(`llm.*`·snake_case) 별칭→canonical 정규화·canonical 우선, import issue·sampling gap·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`(REL-12) 연결 시험 |
 | server-initiated request·async task·cancellation/replay | `mcp_async.py` `ServerRequestRouter`·`AsyncTaskRegistry`·`TaskState`, `mcp_http.py` `set_server_request_router` | allowlist fail-closed 라우팅·unknown 거부·handler 격리, task lifecycle·one-time consume(replay 거부)·idempotent cancel·principal binding·capacity, HTTP 클라이언트 배선 시험 |
 | PostgreSQL migration runner·partition/retention·pool | `postgres_ops.py` `PostgreSQLMigrationRunner`·`PartitionMaintenance`·`PostgreSQLConnectionPool` | 멱등 적용·checksum drift 거부·legacy 파일 무시, 월별 partition ensure·DETACH+ingest-key prune 후 drop, bounded pool 재사용/capacity, admin DSN 게이트 live 왕복 시험 |
+| 보안 통계 계약·interaction reducer | `analytics.py`, `schemas/security-statistics.schema.json`, `schemas/fixtures/analytics-*.json` | interaction_id 상태 결합(REQUESTED→CONTROL→ACTION→OUTCOME), golden fixture·손계산 counters·실 gateway reduction 시험 |
+| Studio TS reducer 파리티 (교차언어 golden) | `studio/app/analytics.mjs`(+`.d.ts`) | 같은 fixture에서 Python과 정렬키 직렬화 **바이트 일치** (`studio/tests/analytics-contract.test.mjs`) |
+| SDK 이벤트 shape 정합 (gateway와 동일) | `sdk.py` (`payload.control` 중첩·connector `connectorExecutionId`) | SDK 래핑 액터가 통계에 잡히는 것을 scaffold 생성 테스트 경유로 검증 |
+| 원장 시간범위 조회·통계 API | `ledger.py`/`postgres_ledger.py` `events_between`, `ledger_http.py` `GET /v1/statistics`, `ledger-api.openapi.yaml` | `statistics:read` scope 분리, 범위 필수·역전·dataSource 검증, 한도 초과 422(`LedgerRangeTooLarge`), PG tenant-scoped SQL 시험 |
+| manifest skeleton·보안테스트 생성기 | `scaffold.py`, `interlock architecture skeleton` | 예제 manifest 생성물이 import·`build()` 배선·**자체 생성 보안테스트 통과**(판정은 statistics reducer로 단언) |
+| Studio 승격 CLI | `__main__.py` `interlock studio propose/approve/promote/rollback/status` | compile→propose→2인 승인→promote→rollback E2E, 단일 승인 거부, 키는 env 전달 시험 |
+| Run Control Plane (특권 배포 명령 API) | `control_plane.py` `ControlPlaneAPI` | HTTP propose/승인 제출/서버측 2인 검증 promote/rollback, `deploy:*` scope 게이트, 위조 서명·단일 승인 422 시험 |
+| API CORS (Studio read-only Live Attach) | `ledger_http.py`·`control_plane.py` | 인증 전 origin 거부, preflight OPTIONS, 허용 origin echo, loopback http 개발 origin 허용 시험 |
+| Studio 통계·배포 뷰 | `studio/app/panels.tsx` (`StatsPanel`·`DeployPanel`), `page.tsx` stats/deploy 뷰 | 오프라인 ledger import 집계 + Live `/v1/statistics` fetch, control plane 승격 패널(서명 키는 브라우저 밖), build·lint·계약 시험 |
 
 ## 현재 자동화된 L1 범위
 
@@ -89,7 +98,7 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-17 기본 전체 회귀는 407개 test를 수집해 `OK (skipped=12)`다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+2026-07-19 기본 전체 회귀는 Python 420개 test `OK (skipped=12)` + studio 5개(`npm test`, golden 계약 포함)다. 무설정 skip은 Linux+bwrap live(seccomp 포함 6개)와 DSN 없는 PostgreSQL live(6개) 계열이며, macOS + 실 postgres:16 + `cryptography`를 붙이면 skip은 bwrap-live 3개까지 줄고 나머지(분산 store·registry·ledger live 6개 포함)는 모두 실행된다. seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
@@ -105,7 +114,11 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 남은 것은 두 갈래다. 하나는 외부 서비스·인프라 없이 이 저장소 안에서 구현 가능한 **내부 구현 작업**, 다른 하나는 외부 SaaS·서비스·플랫폼과의 **연동 작업**이다.
 
-**내부 구현 작업: 모두 완료됨.** artifact digest 검사와 exec 사이 TOCTOU 제거(fd 실행), 장기 process supervisor와 sandbox health telemetry, OTLP semantic convention 어댑터와 sampling 누락·Audit Sink 장애의 `CONTROL_HEALTH_CHANGED` 연결, MCP server-initiated request·비동기 task·cancellation/replay, PostgreSQL migration runner·자동 partition/retention·connection pool, WORM store의 파일 기반 append-only 영속화까지 이 저장소 안에서 구현·검증했다. 남은 것은 외부 서비스·플랫폼 연동뿐이다(아래).
+**내부 구현 작업: 모두 완료됨.** artifact digest 검사와 exec 사이 TOCTOU 제거(fd 실행), 장기 process supervisor와 sandbox health telemetry, OTLP semantic convention 어댑터와 sampling 누락·Audit Sink 장애의 `CONTROL_HEALTH_CHANGED` 연결, MCP server-initiated request·비동기 task·cancellation/replay, PostgreSQL migration runner·자동 partition/retention·connection pool, WORM store의 파일 기반 append-only 영속화까지 이 저장소 안에서 구현·검증했다.
+
+**2026-07-19 제품 폐쇄 루프(설계→계약→개발→SHADOW 실행→증거→통계·drift→승격) 연결 계층도 완료됐다.** 통계는 이벤트 카운트가 아니라 interaction_id 상태 결합이며, 교차언어 golden 계약(`schemas/fixtures/`)이 Python API와 Studio 오프라인 import의 결과 동일성을 고정한다: (1) 보안 통계 계약·Python reducer(`analytics.py`), (2) 원장 시간범위 조회와 `GET /v1/statistics`(`statistics:read` scope 분리), (3) Studio TS reducer 파리티와 통계 화면(오프라인 집계 + read-only Live Attach), (4) manifest→SDK skeleton·보안테스트 생성기(`interlock architecture skeleton`), (5) 승격 CLI(`interlock studio`)와 Studio 배포 패널, (6) Run Control Plane(`control_plane.py`, 서버측 2인 검증·`deploy:*` scope — 서명 키는 브라우저에 두지 않는다). 알려진 v1 한계: 통계 시계열은 표 렌더, control plane 대기 승인은 in-memory(재시작 시 재제출), 대용량 범위는 사전집계 없이 422로 방어(규모가 커지면 PostgreSQL측 집계로 전환), OTLP import는 통계 집계 불가(원본 ledger 이벤트 필요).
+
+남은 것은 외부 서비스·플랫폼 연동뿐이다(아래).
 
 **외부 연동 작업 (외부 서비스·플랫폼 필요):**
 
