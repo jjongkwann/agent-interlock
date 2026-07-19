@@ -8,12 +8,13 @@ import {
   parseRuntimeTelemetry,
   type RuntimeImport,
 } from "./runtime";
+import { DeployPanel, StatsPanel } from "./panels";
 
 type NodeType = "USER" | "AGENT" | "SUBAGENT" | "RAG" | "TOOL" | "MEMORY" | "EXTERNAL";
 type Mode = "OBSERVE" | "SHADOW" | "ENFORCE";
 type Assurance = "DECLARED" | "OBSERVED" | "ENFORCED" | "RECONCILED";
 type EnforcementPoint = "INPUT_GATEWAY" | "RAG_GATEWAY" | "MCP_GATEWAY" | "A2A_BROKER" | "EGRESS_GATEWAY" | "SANDBOX" | "AUDIT_SINK";
-type GraphView = "design" | "runtime" | "drift";
+type GraphView = "design" | "runtime" | "drift" | "stats" | "deploy";
 type Selection = { kind: "node" | "edge"; id: string };
 type MobilePanel = "palette" | "inspector" | null;
 type VisualEdge = Pick<ArchitectureEdge, "id" | "source" | "target" | "relationship" | "relationshipId" | "mode"> & {
@@ -148,6 +149,7 @@ export default function Home() {
   const [notice, setNotice] = useState("Architecture v1.0.0 · all changes are local drafts");
   const [activeGraph, setActiveGraph] = useState<GraphView>("design");
   const [runtimeImport, setRuntimeImport] = useState<RuntimeImport | null>(null);
+  const [rawLedgerEvents, setRawLedgerEvents] = useState<Array<Record<string, unknown>> | null>(null);
   const [zoom, setZoom] = useState(1);
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
   const [past, setPast] = useState<ArchitectureSnapshot[]>([]);
@@ -473,6 +475,9 @@ export default function Home() {
     try {
       const imported = parseRuntimeTelemetry(value);
       setRuntimeImport(imported);
+      setRawLedgerEvents(
+        imported.format === "INTERLOCK_LEDGER" && Array.isArray(value) ? (value as Array<Record<string, unknown>>) : null,
+      );
       setActiveGraph("runtime");
       setConnectFrom(null);
       setMobilePanel(null);
@@ -502,7 +507,7 @@ export default function Home() {
     setActiveGraph(view);
     setConnectFrom(null);
     setMobilePanel(null);
-    if (view !== "design" && !runtimeImport) setNotice("Import Ledger or OTLP JSON telemetry to build the runtime graph");
+    if ((view === "runtime" || view === "drift") && !runtimeImport) setNotice("Import Ledger or OTLP JSON telemetry to build the runtime graph");
   }
 
   function exportManifest() {
@@ -601,19 +606,21 @@ export default function Home() {
 
         <section className="canvas-region">
           <div className="canvas-toolbar">
-            <div className="graph-tabs"><button aria-pressed={activeGraph === "design"} className={activeGraph === "design" ? "active" : ""} onClick={() => selectGraph("design")}>Design graph</button><button aria-pressed={activeGraph === "runtime"} className={activeGraph === "runtime" ? "active" : ""} onClick={() => selectGraph("runtime")}>Runtime graph</button><button aria-pressed={activeGraph === "drift"} className={activeGraph === "drift" ? "active" : ""} onClick={() => selectGraph("drift")}>Drift</button></div>
+            <div className="graph-tabs"><button aria-pressed={activeGraph === "design"} className={activeGraph === "design" ? "active" : ""} onClick={() => selectGraph("design")}>Design graph</button><button aria-pressed={activeGraph === "runtime"} className={activeGraph === "runtime" ? "active" : ""} onClick={() => selectGraph("runtime")}>Runtime graph</button><button aria-pressed={activeGraph === "drift"} className={activeGraph === "drift" ? "active" : ""} onClick={() => selectGraph("drift")}>Drift</button><button aria-pressed={activeGraph === "stats"} className={activeGraph === "stats" ? "active" : ""} onClick={() => selectGraph("stats")}>Statistics</button><button aria-pressed={activeGraph === "deploy"} className={activeGraph === "deploy" ? "active" : ""} onClick={() => selectGraph("deploy")}>Deploy</button></div>
             <div className="mobile-panel-actions"><button onClick={() => setMobilePanel("palette")}>{activeGraph === "design" ? "Actors" : "Telemetry"}</button><button onClick={() => setMobilePanel("inspector")}>Inspect</button></div>
             <div className="canvas-toolbar-right">
-              <div className="canvas-stats">{activeGraph === "design" ? <><span>{nodes.length} actors</span><span>{edges.length} relationships</span><span>{coverage}% enforced</span></> : activeGraph === "runtime" ? <><span>{runtimeNodes.length} runtime actors</span><span>{runtimeImport?.observations.length ?? 0} calls</span><span>{runtimeImport?.observations.filter((item) => item.controlEvaluated).length ?? 0} controlled</span></> : <><span>{runtimeImport ? runtimeDiff.undeclared.length : 0} undeclared</span><span>{runtimeImport ? runtimeDiff.unobservedEdgeIds.length : 0} unobserved</span><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : 0} bypass</span></>}</div>
+              <div className="canvas-stats">{activeGraph === "stats" ? <span>Security statistics</span> : activeGraph === "deploy" ? <span>Deployment operations</span> : activeGraph === "design" ? <><span>{nodes.length} actors</span><span>{edges.length} relationships</span><span>{coverage}% enforced</span></> : activeGraph === "runtime" ? <><span>{runtimeNodes.length} runtime actors</span><span>{runtimeImport?.observations.length ?? 0} calls</span><span>{runtimeImport?.observations.filter((item) => item.controlEvaluated).length ?? 0} controlled</span></> : <><span>{runtimeImport ? runtimeDiff.undeclared.length : 0} undeclared</span><span>{runtimeImport ? runtimeDiff.unobservedEdgeIds.length : 0} unobserved</span><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : 0} bypass</span></>}</div>
               <div className="view-controls" aria-label="Graph view controls"><button aria-label="Zoom out" onClick={() => changeZoom(zoom - ZOOM_STEP)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => changeZoom(zoom + ZOOM_STEP)}>+</button><button onClick={fitGraph}>Fit</button><button onClick={focusCurrentContext}>Focus</button></div>
             </div>
           </div>
-          <div ref={canvasScroll} className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerMove={onCanvasMove} onPointerUp={() => { setDragging(null); dragCheckpointed.current = false; }} onPointerCancel={() => { setDragging(null); dragCheckpointed.current = false; }}>
+          {activeGraph === "stats" ? <StatsPanel rawLedgerEvents={rawLedgerEvents} importedFormat={runtimeImport?.format ?? null} notify={setNotice} />
+          : activeGraph === "deploy" ? <DeployPanel notify={setNotice} />
+          : <div ref={canvasScroll} className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerMove={onCanvasMove} onPointerUp={() => { setDragging(null); dragCheckpointed.current = false; }} onPointerCancel={() => { setDragging(null); dragCheckpointed.current = false; }}>
             <div className="graph-surface" style={{ width: boardSize.width * zoom, height: boardSize.height * zoom }}>
             <div className="graph-board" style={{ width: boardSize.width, height: boardSize.height, transform: `scale(${zoom})` }}>
               <div className="trust-zone zone-internal"><span>INTERNAL TRUST ZONE</span></div>
               <div className="trust-zone zone-external"><span>EXTERNAL</span></div>
-              {activeGraph !== "design" && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>No runtime telemetry</strong><p>Import Ledger events or OTLP JSON to reconcile actual calls with this architecture.</p><button onClick={() => applyTelemetry(demoRuntimeTelemetry, "Drift demo")}>Load drift demo</button></div>}
+              {(activeGraph === "runtime" || activeGraph === "drift") && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>No runtime telemetry</strong><p>Import Ledger events or OTLP JSON to reconcile actual calls with this architecture.</p><button onClick={() => applyTelemetry(demoRuntimeTelemetry, "Drift demo")}>Load drift demo</button></div>}
               <svg className="edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label="Architecture relationships">
                 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" /></marker></defs>
                 {visualEdges.map((edge) => {
@@ -631,7 +638,7 @@ export default function Home() {
               {visualNodes.map((node) => { const runtimeOnly = !nodeMap[node.id]; return <button key={node.id} title={`${node.label} · ${runtimeOnly ? node.id : `${node.type} · ${node.owner}`}`} style={{ left: node.x, top: node.y }} className={`actor-node tone-${nodeTone[node.type]} ${activeGraph === "design" && selected.kind === "node" && selected.id === node.id ? "selected" : ""} ${focusedNodeId === node.id ? "focused" : ""} ${dragging?.id === node.id ? "dragging" : ""} ${connectFrom === node.id ? "connect-source" : ""} ${runtimeOnly ? "runtime-only" : ""}`} onPointerDown={(event) => onNodePointerDown(event, node)} onLostPointerCapture={() => { setDragging(null); dragCheckpointed.current = false; }} onClick={() => activeGraph === "design" ? selectNode(node) : focusNode(node.id)} aria-label={`${node.label}, ${node.type}`}><span className="node-icon">{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span className="node-copy"><strong>{node.label}</strong><small>{runtimeOnly ? node.id : `${node.type} · ${node.owner}`}</small></span><i className={`node-status ${runtimeOnly ? "warning" : ""}`} /></button>; })}
             </div>
             </div>
-          </div>
+          </div>}
           <div className="notice-bar"><div className="notice-copy"><span>●</span>{notice}</div><div className="draft-actions"><button disabled={!past.length} onClick={undo}>Undo</button><button disabled={!future.length} onClick={redo}>Redo</button><button onClick={resetDraft}>Reset draft</button></div></div>
         </section>
 
