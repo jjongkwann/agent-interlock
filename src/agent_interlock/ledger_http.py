@@ -12,7 +12,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .ledger import Ledger, LedgerError, LedgerIdempotencyConflict
+from .analytics import summarize_security_statistics
+from .ledger import (
+    Ledger,
+    LedgerError,
+    LedgerIdempotencyConflict,
+    LedgerRangeTooLarge,
+    parse_event_time,
+)
+from .models import DataSource
 from .models import DataSource, Environment
 from .postgres_ledger import LedgerTenantMismatch
 from .telemetry import import_runtime_telemetry
@@ -120,8 +128,11 @@ class LedgerHTTPConfig:
     default_page_size: int = 100
     max_page_size: int = 500
     allowed_origins: frozenset[str] = frozenset()
+    max_statistics_events: int = 100_000
 
     def __post_init__(self) -> None:
+        if not 1 <= self.max_statistics_events <= 1_000_000:
+            raise ValueError("max_statistics_events must be between 1 and 1,000,000")
         if not 1 <= self.max_request_bytes <= 5 * 1024 * 1024:
             raise ValueError("max_request_bytes must be between 1 byte and 5 MiB")
         if not 0.1 <= self.request_timeout_seconds <= 30:
@@ -171,6 +182,10 @@ class LedgerHTTPAPI:
             if handler.command == "GET" and match is not None:
                 self._require_scope(principal, "events:read")
                 self._get_trace(handler, principal, match.group(1), parts.query)
+                return
+            if handler.command == "GET" and parts.path == "/v1/statistics":
+                self._require_scope(principal, "statistics:read")
+                self._get_statistics(handler, principal, parts.query)
                 return
             raise LedgerAPIError(404, "LEDGER-ROUTE-NOT-FOUND", "route not found")
         except LedgerAPIError as error:
@@ -385,6 +400,48 @@ class LedgerHTTPAPI:
                 "events": [event.to_dict() for event in page.events],
                 "next_cursor": page.next_cursor,
             },
+        )
+
+    def _get_statistics(
+        self,
+        handler: BaseHTTPRequestHandler,
+        principal: LedgerAPIPrincipal,
+        query: str,
+    ) -> None:
+        content_length = _single_header(handler, "Content-Length", required=False)
+        if content_length and content_length != "0":
+            raise LedgerAPIError(400, "LEDGER-GET-BODY-DENIED", "GET request body is not allowed")
+        try:
+            parameters = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
+        except ValueError as error:
+            raise LedgerAPIError(400, "LEDGER-QUERY-INVALID", "query parameters are invalid") from error
+        if set(parameters) - {"from", "to", "dataSource"} or any(len(values) != 1 for values in parameters.values()):
+            raise LedgerAPIError(400, "LEDGER-QUERY-INVALID", "query parameters are invalid")
+        if "from" not in parameters or "to" not in parameters:
+            raise LedgerAPIError(400, "LEDGER-STATS-RANGE-REQUIRED", "from and to are required")
+        start, end = parameters["from"][0], parameters["to"][0]
+        try:
+            if parse_event_time(start) >= parse_event_time(end):
+                raise LedgerAPIError(400, "LEDGER-STATS-RANGE-INVALID", "from must be before to")
+        except ValueError as error:
+            raise LedgerAPIError(400, "LEDGER-STATS-RANGE-INVALID", "from/to must be ISO 8601") from error
+        data_source = parameters.get("dataSource", [None])[0]
+        if data_source is not None and data_source not in {item.value for item in DataSource}:
+            raise LedgerAPIError(400, "LEDGER-STATS-SOURCE-INVALID", "dataSource is invalid")
+        ledger = self._resolver(principal.tenant_id)
+        try:
+            events = ledger.events_between(principal.tenant_id, start, end, limit=self.config.max_statistics_events)
+        except LedgerRangeTooLarge as error:
+            raise LedgerAPIError(
+                422,
+                "LEDGER-STATS-RANGE-TOO-LARGE",
+                "time range matches too many events; narrow the range",
+            ) from error
+        values = (event.to_dict() for event in events if data_source is None or event.data_source == data_source)
+        self._send_json(
+            handler,
+            200,
+            {"from": start, "to": end, "statistics": summarize_security_statistics(values)},
         )
 
     def _read_json(self, handler: BaseHTTPRequestHandler) -> Any:

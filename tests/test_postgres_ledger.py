@@ -60,6 +60,18 @@ class RecordingConnection:
 
 
 class PostgreSQLLedgerUnitTests(unittest.TestCase):
+    def test_events_between_issues_tenant_scoped_range_sql(self):
+        connection = RecordingConnection("tenant-a")
+        ledger = PostgreSQLLedger(lambda: connection, bound_tenant_id="tenant-a")
+        result = ledger.events_between("tenant-a", "2026-07-19T00:00:00Z", "2026-07-20T00:00:00Z", limit=500)
+        self.assertEqual(result, ())
+        query, parameters = connection.cursor_value.executed[-1]
+        self.assertIn("occurred_at >= %s::timestamptz AND occurred_at < %s::timestamptz", query)
+        self.assertIn("ORDER BY occurred_at, event_id", query)
+        self.assertEqual(parameters, ("tenant-a", "2026-07-19T00:00:00Z", "2026-07-20T00:00:00Z", 501))
+        with self.assertRaises(ValueError):
+            ledger.events_between("tenant-a", "2026-07-20T00:00:00Z", "2026-07-19T00:00:00Z")
+
     def test_db_role_tenant_mismatch_fails_before_event_sql(self):
         connection = RecordingConnection("tenant-b")
         ledger = PostgreSQLLedger(lambda: connection, bound_tenant_id="tenant-a")

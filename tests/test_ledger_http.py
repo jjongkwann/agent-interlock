@@ -43,7 +43,7 @@ class RunningLedgerServer:
                 TOKEN_A: LedgerAPIPrincipal(
                     "writer-a",
                     "tenant-a",
-                    frozenset({"events:read", "events:write"}),
+                    frozenset({"events:read", "events:write", "statistics:read"}),
                     frozenset({"agent.support", "gateway"}),
                 ),
                 TOKEN_B: LedgerAPIPrincipal(
@@ -110,6 +110,126 @@ class RunningLedgerServer:
             )
         finally:
             connection.close()
+
+
+def seed_interaction(ledger, *, interaction_id: str, decision: str, data_source=None):
+    """Append a minimal gateway-shaped interaction lifecycle."""
+    from agent_interlock import DataSource
+
+    source = data_source or DataSource.PRODUCTION
+    common = dict(
+        tenant_id="tenant-a",
+        trace_id=f"trace-{interaction_id}",
+        span_id=f"span-{interaction_id}",
+        interaction_id=interaction_id,
+        source_actor_id="agent.support",
+        target_actor_id="tool.mail",
+        data_source=source,
+    )
+    ledger.append("INTERACTION_REQUESTED", payload={"invocation": {"purpose": "reply"}}, **common)
+    ledger.append(
+        "CONTROL_EVALUATED",
+        payload={
+            "control": {
+                "policyId": "policy.mail",
+                "policyVersion": "1.0.0",
+                "mode": "ENFORCE",
+                "decision": decision,
+                "reasonCodes": [] if decision == "ALLOW" else ["L1-TEST-BLOCK"],
+                "actualEnforced": True,
+            }
+        },
+        **common,
+    )
+    if decision == "ALLOW":
+        ledger.append(
+            "ACTION_EXECUTED",
+            payload={"result": "COMPLETED", "connectorExecutionId": f"exec-{interaction_id}"},
+            **common,
+        )
+        ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "UNKNOWN"}, **common)
+    else:
+        ledger.append(
+            "ACTION_EXECUTED",
+            payload={"result": "COMPLETED", "connectorExecutionId": None},
+            **common,
+        )
+        ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
+
+
+WIDE_RANGE = "from=2000-01-01T00:00:00Z&to=2100-01-01T00:00:00Z"
+
+
+class StatisticsRouteTests(unittest.TestCase):
+    def test_range_statistics_aggregate_interactions(self):
+        with RunningLedgerServer() as server:
+            seed_interaction(server.ledger, interaction_id="ia-allow", decision="ALLOW")
+            seed_interaction(server.ledger, interaction_id="ia-block", decision="BLOCK")
+            status, body, _ = server.request("GET", f"/v1/statistics?{WIDE_RANGE}")
+        self.assertEqual(status, 200)
+        counters = body["statistics"]["partitions"][0]["counters"]
+        self.assertEqual(counters["interactionCount"], 2)
+        self.assertEqual(counters["blockDecisionCount"], 1)
+        self.assertEqual(counters["enforcedBlockCount"], 1)
+        self.assertEqual(counters["executionAttemptCount"], 1)
+
+    def test_statistics_requires_its_own_scope(self):
+        with RunningLedgerServer() as server:
+            status, body, _ = server.request("GET", f"/v1/statistics?{WIDE_RANGE}", token=TOKEN_B, tenant_id="tenant-b")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"]["code"], "LEDGER-SCOPE-DENIED")
+
+    def test_statistics_range_is_required_and_validated(self):
+        with RunningLedgerServer() as server:
+            status, body, _ = server.request("GET", "/v1/statistics?from=2000-01-01T00:00:00Z")
+            self.assertEqual((status, body["error"]["code"]), (400, "LEDGER-STATS-RANGE-REQUIRED"))
+            status, body, _ = server.request("GET", "/v1/statistics?from=2100-01-01T00:00:00Z&to=2000-01-01T00:00:00Z")
+            self.assertEqual((status, body["error"]["code"]), (400, "LEDGER-STATS-RANGE-INVALID"))
+            status, body, _ = server.request("GET", f"/v1/statistics?{WIDE_RANGE}&dataSource=BOGUS")
+            self.assertEqual((status, body["error"]["code"]), (400, "LEDGER-STATS-SOURCE-INVALID"))
+
+    def test_statistics_range_too_large_is_422(self):
+        with RunningLedgerServer(config=LedgerHTTPConfig(max_statistics_events=1)) as server:
+            seed_interaction(server.ledger, interaction_id="ia-1", decision="ALLOW")
+            status, body, _ = server.request("GET", f"/v1/statistics?{WIDE_RANGE}")
+        self.assertEqual(status, 422)
+        self.assertEqual(body["error"]["code"], "LEDGER-STATS-RANGE-TOO-LARGE")
+
+    def test_statistics_data_source_filter(self):
+        from agent_interlock import DataSource
+
+        with RunningLedgerServer() as server:
+            seed_interaction(server.ledger, interaction_id="ia-prod", decision="ALLOW")
+            seed_interaction(
+                server.ledger,
+                interaction_id="ia-sim",
+                decision="BLOCK",
+                data_source=DataSource.SIMULATION,
+            )
+            status, body, _ = server.request("GET", f"/v1/statistics?{WIDE_RANGE}&dataSource=SIMULATION")
+        self.assertEqual(status, 200)
+        partitions = body["statistics"]["partitions"]
+        self.assertEqual([item["dataSource"] for item in partitions], ["SIMULATION"])
+        self.assertEqual(partitions[0]["counters"]["interactionCount"], 1)
+
+
+class EventsBetweenContractTests(unittest.TestCase):
+    def test_range_is_tenant_scoped_ordered_and_bounded(self):
+        from agent_interlock import LedgerRangeTooLarge
+
+        ledger = InMemoryLedger()
+        seed_interaction(ledger, interaction_id="ia-1", decision="ALLOW")
+        events = ledger.events_between("tenant-a", "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z")
+        self.assertEqual(len(events), 4)
+        self.assertEqual(
+            [event.occurred_at for event in events],
+            sorted(event.occurred_at for event in events),
+        )
+        self.assertEqual(ledger.events_between("tenant-b", "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"), ())
+        with self.assertRaises(LedgerRangeTooLarge):
+            ledger.events_between("tenant-a", "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z", limit=1)
+        with self.assertRaises(ValueError):
+            ledger.events_between("tenant-a", "2100-01-01T00:00:00Z", "2000-01-01T00:00:00Z")
 
 
 class InMemoryLedgerContractTests(unittest.TestCase):

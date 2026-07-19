@@ -74,6 +74,7 @@ from .ledger import (
     LedgerError,
     LedgerIdempotencyConflict,
     LedgerIntegrityError,
+    LedgerRangeTooLarge,
     build_event,
 )
 from .ledger_http import (
@@ -343,6 +344,7 @@ __all__ = [
     "LedgerHTTPConfig",
     "LedgerIdempotencyConflict",
     "LedgerIntegrityError",
+    "LedgerRangeTooLarge",
     "LedgerQueryLimitExceeded",
     "LedgerTenantMismatch",
     "LoopbackCallbackReceiver",

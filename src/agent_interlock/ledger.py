@@ -36,6 +36,18 @@ class LedgerIntegrityError(LedgerError):
     """Raised when a stored event no longer matches its canonical hash."""
 
 
+class LedgerRangeTooLarge(LedgerError):
+    """Raised when a time-range query matches more events than its limit."""
+
+
+def parse_event_time(value: str) -> datetime:
+    """Parse an event timestamp (ISO 8601, Z or offset) to aware UTC."""
+    moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if moment.tzinfo is None:
+        raise ValueError("event timestamps must carry a UTC offset")
+    return moment.astimezone(UTC)
+
+
 def _uuid7() -> str:
     timestamp_ms = int(time.time() * 1000)
     value = (timestamp_ms & ((1 << 48) - 1)) << 80
@@ -129,6 +141,15 @@ class Ledger(Protocol):
         limit: int = 100,
         cursor: str | None = None,
     ) -> EventPage: ...
+
+    def events_between(
+        self,
+        tenant_id: str,
+        start: str,
+        end: str,
+        *,
+        limit: int = 100_000,
+    ) -> tuple[Event, ...]: ...
 
 
 def build_event(
@@ -352,6 +373,33 @@ class InMemoryLedger:
         page = tuple(values[:limit])
         next_cursor = encode_event_cursor(page[-1]) if len(values) > limit and page else None
         return EventPage(page, next_cursor)
+
+    def events_between(
+        self,
+        tenant_id: str,
+        start: str,
+        end: str,
+        *,
+        limit: int = 100_000,
+    ) -> tuple[Event, ...]:
+        if not tenant_id or limit < 1:
+            raise ValueError("tenant_id and a positive limit are required")
+        start_at = parse_event_time(start)
+        end_at = parse_event_time(end)
+        if start_at >= end_at:
+            raise ValueError("start must be before end")
+        with self._lock:
+            values = sorted(
+                (
+                    event
+                    for event in self._events
+                    if event.tenant_id == tenant_id and start_at <= parse_event_time(event.occurred_at) < end_at
+                ),
+                key=lambda item: (item.occurred_at, item.event_id),
+            )
+        if len(values) > limit:
+            raise LedgerRangeTooLarge("time range matches more events than the limit")
+        return tuple(values)
 
     @staticmethod
     def verify(event: Event) -> bool:

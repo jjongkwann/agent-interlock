@@ -15,10 +15,12 @@ from .ledger import (
     LedgerError,
     LedgerIdempotencyConflict,
     LedgerIntegrityError,
+    LedgerRangeTooLarge,
     build_event,
     decode_event_cursor,
     encode_event_cursor,
     event_request_digest,
+    parse_event_time,
     validate_query,
     verify_event,
 )
@@ -285,6 +287,40 @@ class PostgreSQLLedger:
         page = values[:limit]
         next_cursor = encode_event_cursor(page[-1]) if len(values) > limit and page else None
         return EventPage(page, next_cursor)
+
+    def events_between(
+        self,
+        tenant_id: str,
+        start: str,
+        end: str,
+        *,
+        limit: int = 100_000,
+    ) -> tuple[Event, ...]:
+        self._require_bound_tenant(tenant_id)
+        if not tenant_id or limit < 1:
+            raise ValueError("tenant_id and a positive limit are required")
+        if parse_event_time(start) >= parse_event_time(end):
+            raise ValueError("start must be before end")
+        with self._transaction() as connection:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT {_SELECT_COLUMNS}
+                    FROM interlock.security_events
+                    WHERE tenant_id = %s
+                      AND occurred_at >= %s::timestamptz AND occurred_at < %s::timestamptz
+                    ORDER BY occurred_at, event_id
+                    LIMIT %s
+                    """,
+                    (tenant_id, start, end, limit + 1),
+                )
+                values = tuple(_event_from_row(row) for row in cursor.fetchall())
+            finally:
+                cursor.close()
+        if len(values) > limit:
+            raise LedgerRangeTooLarge("time range matches more events than the limit")
+        return values
 
     def _bounded_unpaged_query(
         self,

@@ -94,6 +94,56 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/statistics:
+    get:
+      operationId: getStatistics
+      summary: Aggregate tenant-scoped security statistics over a time range
+      description: >-
+        Reduces the tenant's ledger events in [from, to) into the
+        SecurityStatistics contract (schemas/security-statistics.schema.json)
+        by joining each interaction_id across its lifecycle. Requires the
+        statistics:read scope, which grants aggregates only - not raw events.
+        Responds 422 when the range matches more events than the server's
+        configured maximum; narrow the range and retry.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: from
+          in: query
+          required: true
+          schema: {type: string, format: date-time}
+          description: Inclusive ISO 8601 lower bound on occurred_at.
+        - name: to
+          in: query
+          required: true
+          schema: {type: string, format: date-time}
+          description: Exclusive ISO 8601 upper bound on occurred_at.
+        - name: dataSource
+          in: query
+          schema: {type: string, enum: [PRODUCTION, SIMULATION, RED_TEAM, TEST]}
+          description: Restrict to one data source; omitted means all, partitioned.
+      responses:
+        '200':
+          description: Statistics for the range
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, statistics]
+                properties:
+                  from: {type: string, format: date-time}
+                  to: {type: string, format: date-time}
+                  statistics:
+                    description: SecurityStatistics value; see schemas/security-statistics.schema.json
+                    type: object
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422':
+          description: The range matches more events than the server allows in one aggregation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
 components:
   securitySchemes:
     bearerAuth:
