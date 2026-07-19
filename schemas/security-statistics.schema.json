@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://interlock.dev/schemas/security-statistics.schema.json",
+  "title": "Agent Interlock Security Statistics",
+  "description": "Aggregate security statistics reduced from ledger events by joining each interaction_id across its lifecycle (INTERACTION_REQUESTED -> CONTROL_EVALUATED -> ACTION_EXECUTED -> SECURITY_OUTCOME_SET). Events without an interaction_id do not participate. Python (agent_interlock.analytics) and the Studio offline importer MUST produce identical values for the same events; the shared golden fixture is schemas/fixtures/analytics-events.json -> analytics-statistics.json.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "interactionCount", "partitions"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "interlock.dev/v1alpha1" },
+    "kind": { "const": "SecurityStatistics" },
+    "interactionCount": { "type": "integer", "minimum": 0 },
+    "partitions": {
+      "description": "One entry per data_source present in the events (PRODUCTION / SIMULATION / RED_TEAM / TEST), sorted ascending. Sources are never merged: simulation traffic must not inflate production statistics.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/partition" }
+    }
+  },
+  "$defs": {
+    "partition": {
+      "type": "object",
+      "required": ["dataSource", "counters", "outcomes", "byRelationship", "byActor", "byPolicy", "byReasonCode", "timeSeries"],
+      "additionalProperties": false,
+      "properties": {
+        "dataSource": { "type": "string" },
+        "counters": { "$ref": "#/$defs/counters" },
+        "outcomes": {
+          "description": "Interaction count per final securityOutcome (the LAST SECURITY_OUTCOME_SET of each interaction; UNKNOWN when none was set). Keys sorted ascending.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "byRelationship": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["relationshipId", "counters"],
+            "additionalProperties": false,
+            "properties": {
+              "relationshipId": { "type": "string" },
+              "counters": { "$ref": "#/$defs/counters" }
+            }
+          }
+        },
+        "byActor": {
+          "description": "Grouped by source_actor_id (the requesting actor).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["sourceActorId", "counters"],
+            "additionalProperties": false,
+            "properties": {
+              "sourceActorId": { "type": "string" },
+              "counters": { "$ref": "#/$defs/counters" }
+            }
+          }
+        },
+        "byPolicy": {
+          "description": "Grouped by the policyId of the strongest control decision. Interactions with no CONTROL_EVALUATED event carry no policy and are omitted here (they still count everywhere else).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["policyId", "counters"],
+            "additionalProperties": false,
+            "properties": {
+              "policyId": { "type": "string" },
+              "counters": { "$ref": "#/$defs/counters" }
+            }
+          }
+        },
+        "byReasonCode": {
+          "description": "Interactions touched per reason code, deduped within an interaction. One interaction can carry several reason codes, so the sum over reason codes legitimately EXCEEDS the blocked-interaction count; never treat these as disjoint.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["reasonCode", "interactionCount"],
+            "additionalProperties": false,
+            "properties": {
+              "reasonCode": { "type": "string" },
+              "interactionCount": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "timeSeries": {
+          "description": "Hourly UTC buckets of each interaction's FIRST event time, sorted ascending. bucketStart format: YYYY-MM-DDThh:00:00Z.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["bucketStart", "counters"],
+            "additionalProperties": false,
+            "properties": {
+              "bucketStart": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:00:00Z$" },
+              "counters": { "$ref": "#/$defs/counters" }
+            }
+          }
+        }
+      }
+    },
+    "counters": {
+      "description": "Interaction-level metrics. decision = strongest_decision over the interaction's CONTROL_EVALUATED control.decision values (ALLOW < SANITIZE < HOLD < BLOCK < QUARANTINE < KILL; unknown strings rank as BLOCK). An execution attempt is an ACTION_EXECUTED with a non-null connectorExecutionId -- the enforcement ACTION_EXECUTED emitted on a block carries connectorExecutionId null and is NOT an attempt.",
+      "type": "object",
+      "required": [
+        "interactionCount",
+        "blockDecisionCount",
+        "shadowWouldBlockCount",
+        "enforcedBlockCount",
+        "executionAttemptCount",
+        "executionSuccessCount",
+        "partialOrBypassCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "interactionCount": { "type": "integer", "minimum": 0 },
+        "blockDecisionCount": {
+          "description": "Interactions whose strongest decision != ALLOW, regardless of mode. A decision-level metric: says nothing about whether execution was actually prevented.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "shadowWouldBlockCount": {
+          "description": "Non-ALLOW decisions that were NOT enforced (actualEnforced false, e.g. SHADOW/OBSERVE mode): would have been blocked under ENFORCE.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "enforcedBlockCount": {
+          "description": "Non-ALLOW decisions that were enforced AND no connector execution was attempted: the block actually held.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "executionAttemptCount": {
+          "description": "Interactions where a connector execution was attempted (ACTION_EXECUTED with non-null connectorExecutionId).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "executionSuccessCount": {
+          "description": "Interactions with at least one attempted connector execution whose result was COMPLETED.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "partialOrBypassCount": {
+          "description": "Interactions whose final securityOutcome is PARTIALLY_EXECUTED, or whose enforced non-ALLOW decision was followed by a connector execution attempt anyway (enforcement bypass).",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

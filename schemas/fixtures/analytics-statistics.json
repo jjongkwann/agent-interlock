@@ -1,0 +1,208 @@
+{
+  "apiVersion": "interlock.dev/v1alpha1",
+  "interactionCount": 6,
+  "kind": "SecurityStatistics",
+  "partitions": [
+    {
+      "byActor": [
+        {
+          "counters": {
+            "blockDecisionCount": 2,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 4,
+            "executionSuccessCount": 3,
+            "interactionCount": 5,
+            "partialOrBypassCount": 1,
+            "shadowWouldBlockCount": 1
+          },
+          "sourceActorId": "support-agent"
+        }
+      ],
+      "byPolicy": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 3,
+            "executionSuccessCount": 2,
+            "interactionCount": 4,
+            "partialOrBypassCount": 1,
+            "shadowWouldBlockCount": 0
+          },
+          "policyId": "policy.support-crm"
+        },
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 0,
+            "executionAttemptCount": 1,
+            "executionSuccessCount": 1,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 1
+          },
+          "policyId": "policy.support-web"
+        }
+      ],
+      "byReasonCode": [
+        {
+          "interactionCount": 1,
+          "reasonCode": "L1-M2-DEFINITION-DRIFT"
+        },
+        {
+          "interactionCount": 1,
+          "reasonCode": "L1-M9-NEW-DESTINATION"
+        },
+        {
+          "interactionCount": 1,
+          "reasonCode": "L1-UNDECLARED-SIDE-EFFECT"
+        }
+      ],
+      "byRelationship": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 3,
+            "executionSuccessCount": 2,
+            "interactionCount": 4,
+            "partialOrBypassCount": 1,
+            "shadowWouldBlockCount": 0
+          },
+          "relationshipId": "REL-05"
+        },
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 0,
+            "executionAttemptCount": 1,
+            "executionSuccessCount": 1,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 1
+          },
+          "relationshipId": "REL-07"
+        }
+      ],
+      "counters": {
+        "blockDecisionCount": 2,
+        "enforcedBlockCount": 1,
+        "executionAttemptCount": 4,
+        "executionSuccessCount": 3,
+        "interactionCount": 5,
+        "partialOrBypassCount": 1,
+        "shadowWouldBlockCount": 1
+      },
+      "dataSource": "PRODUCTION",
+      "outcomes": {
+        "BLOCKED": 1,
+        "PARTIALLY_EXECUTED": 1,
+        "SUCCEEDED": 1,
+        "UNKNOWN": 2
+      },
+      "timeSeries": [
+        {
+          "bucketStart": "2026-07-19T10:00:00Z",
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 1,
+            "executionSuccessCount": 1,
+            "interactionCount": 2,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          }
+        },
+        {
+          "bucketStart": "2026-07-19T11:00:00Z",
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 0,
+            "executionAttemptCount": 3,
+            "executionSuccessCount": 2,
+            "interactionCount": 3,
+            "partialOrBypassCount": 1,
+            "shadowWouldBlockCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "byActor": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 0,
+            "executionSuccessCount": 0,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          },
+          "sourceActorId": "red-team-agent"
+        }
+      ],
+      "byPolicy": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 0,
+            "executionSuccessCount": 0,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          },
+          "policyId": "policy.support-crm"
+        }
+      ],
+      "byReasonCode": [
+        {
+          "interactionCount": 1,
+          "reasonCode": "L1-M9-VOLUME-EXCEEDED"
+        }
+      ],
+      "byRelationship": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 0,
+            "executionSuccessCount": 0,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          },
+          "relationshipId": "REL-05"
+        }
+      ],
+      "counters": {
+        "blockDecisionCount": 1,
+        "enforcedBlockCount": 1,
+        "executionAttemptCount": 0,
+        "executionSuccessCount": 0,
+        "interactionCount": 1,
+        "partialOrBypassCount": 0,
+        "shadowWouldBlockCount": 0
+      },
+      "dataSource": "SIMULATION",
+      "outcomes": {
+        "BLOCKED": 1
+      },
+      "timeSeries": [
+        {
+          "bucketStart": "2026-07-19T11:00:00Z",
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 0,
+            "executionSuccessCount": 0,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -159,12 +159,15 @@ class Interlock:
         self.ledger.append(
             "CONTROL_EVALUATED",
             payload={
-                "policyId": policy.id,
-                "policyVersion": policy.version,
-                "mode": policy.mode.value,
-                "decision": decision.value,
-                "reasonCodes": reasons,
-                "actualEnforced": enforced,
+                # Same nested shape the gateway emits, so analytics reduces both.
+                "control": {
+                    "policyId": policy.id,
+                    "policyVersion": policy.version,
+                    "mode": policy.mode.value,
+                    "decision": decision.value,
+                    "reasonCodes": reasons,
+                    "actualEnforced": enforced,
+                }
             },
             severity="HIGH" if reasons else "INFO",
             **common,
@@ -177,12 +180,21 @@ class Interlock:
             )
             self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
             raise GatewayError(f"actor invocation blocked: {', '.join(reasons)}")
+        execution_id = str(uuid.uuid4())
         try:
             result = function(arguments)
         except Exception as error:
-            self.ledger.append("ACTION_EXECUTED", payload={"result": "FAILED", "failure": str(error)}, **common)
+            self.ledger.append(
+                "ACTION_EXECUTED",
+                payload={"result": "FAILED", "connectorExecutionId": execution_id, "failure": str(error)},
+                **common,
+            )
             raise
-        self.ledger.append("ACTION_EXECUTED", payload={"result": "COMPLETED"}, **common)
+        self.ledger.append(
+            "ACTION_EXECUTED",
+            payload={"result": "COMPLETED", "connectorExecutionId": execution_id},
+            **common,
+        )
         output_errors = validate_schema(result, target.spec.output_schema)
         self.ledger.append(
             "INTERACTION_COMPLETED",

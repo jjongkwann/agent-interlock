@@ -1,5 +1,6 @@
 """Public API for the Agent Interlock reference implementation."""
 
+from .analytics import InteractionRecord, reduce_interactions, summarize_security_statistics
 from .architecture import (
     ArchitectureCompileError,
     ArchitectureCompiler,
@@ -329,6 +330,7 @@ __all__ = [
     "InMemoryRuntimeConfigProbe",
     "InMemorySessionStore",
     "Interlock",
+    "InteractionRecord",
     "InvalidStateTransition",
     "InvocationBlocked",
     "InvocationIntent",
@@ -447,11 +449,13 @@ __all__ = [
     "parse_bearer_challenge",
     "pkce_s256_challenge",
     "raw_digest",
+    "reduce_interactions",
     "run_consent",
     "sha256_file",
     "sign_attestation",
     "sign_artifact_provenance",
     "sign_canonical",
+    "summarize_security_statistics",
     "validate_oauth_url",
     "verify_canonical",
 ]
