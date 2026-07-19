@@ -6,6 +6,8 @@ import threading
 import unittest
 from pathlib import Path
 
+from mcp_http_fixture import AdversarialMCPHTTPServer, tool_definition
+
 from agent_interlock import (
     ArchitectureCompiler,
     ArchitectureGraph,
@@ -25,8 +27,6 @@ from agent_interlock import (
     SideEffect,
     create_mcp_http_server,
 )
-from mcp_http_fixture import AdversarialMCPHTTPServer, tool_definition
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "examples" / "secure_multi_agent_architecture.json"
@@ -70,9 +70,7 @@ def bound_http_stack(server: AdversarialMCPHTTPServer):
         client.call,
     )
     client.set_server_message_handler(adapter.handle_server_message)
-    hidden = adapter.handle_client_message(
-        {"jsonrpc": "2.0", "id": "discover", "method": "tools/list", "params": {}}
-    )
+    hidden = adapter.handle_client_message({"jsonrpc": "2.0", "id": "discover", "method": "tools/list", "params": {}})
     if hidden["result"]["tools"]:
         raise AssertionError("unapproved Tool was exposed")
     revision = adapter.observed_revisions[0]
@@ -164,9 +162,7 @@ class StreamableHTTPClientTests(unittest.TestCase):
     def test_initialize_negotiates_version_and_binds_secure_session(self):
         with AdversarialMCPHTTPServer() as server:
             client = configured_client(server)
-            response = client.call(
-                {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-            )
+            response = client.call({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
             self.assertEqual(client.session_id, server.session_id)
             self.assertEqual(response["result"]["tools"][0]["name"], "send_email")
             self.assertEqual(server.received_sessions[0], None)
@@ -180,9 +176,7 @@ class StreamableHTTPClientTests(unittest.TestCase):
             client.set_server_message_handler(notifications.append)
             server.response_mode = "sse"
             server.emit_list_changed = True
-            response = client.call(
-                {"jsonrpc": "2.0", "id": "sse-list", "method": "tools/list", "params": {}}
-            )
+            response = client.call({"jsonrpc": "2.0", "id": "sse-list", "method": "tools/list", "params": {}})
             self.assertEqual(response["id"], "sse-list")
             self.assertEqual(notifications[0]["method"], "notifications/tools/list_changed")
 
@@ -271,9 +265,7 @@ class StreamableHTTPGatewayIntegrationTests(unittest.TestCase):
                 self.assertEqual(response["result"]["_meta"]["interlock"]["decision"], "ALLOW")
                 self.assertEqual(downstream.call_count, 1)
                 self.assertNotIn("Bearer inbound-host", downstream.received_authorizations)
-                self.assertTrue(
-                    all(item == "Bearer downstream-only" for item in downstream.received_authorizations)
-                )
+                self.assertTrue(all(item == "Bearer downstream-only" for item in downstream.received_authorizations))
                 self.assertGreaterEqual(len(gateway.ledger.all()), 8)
             finally:
                 server.shutdown()
@@ -387,9 +379,7 @@ class StreamableHTTPGatewayIntegrationTests(unittest.TestCase):
                 },
             }
             carrier.handle(
-                MCPHTTPRequest(
-                    "POST", "/mcp", host_headers(protocol=False), json.dumps(initialize).encode()
-                )
+                MCPHTTPRequest("POST", "/mcp", host_headers(protocol=False), json.dumps(initialize).encode())
             )
             carrier.handle(
                 MCPHTTPRequest(
@@ -405,9 +395,7 @@ class StreamableHTTPGatewayIntegrationTests(unittest.TestCase):
                 "method": "tools/call",
                 "params": {"name": "send_email", "arguments": {}},
             }
-            response = carrier.handle(
-                MCPHTTPRequest("POST", "/mcp", host_headers(), json.dumps(call).encode())
-            )
+            response = carrier.handle(MCPHTTPRequest("POST", "/mcp", host_headers(), json.dumps(call).encode()))
             self.assertEqual(
                 json.loads(response.body)["error"]["data"]["reasonCode"],
                 "INTERLOCK-PRINCIPAL-CONTEXT-MISMATCH",
@@ -420,17 +408,13 @@ class StreamableHTTPGatewayIntegrationTests(unittest.TestCase):
             client, _, adapter = bound_http_stack(downstream)
             carrier = make_carrier(adapter)
             malformed = {"jsonrpc": "2.0", "id": True, "method": "tools/list", "params": {}}
-            response = carrier.handle(
-                MCPHTTPRequest("POST", "/mcp", host_headers(), json.dumps(malformed).encode())
-            )
+            response = carrier.handle(MCPHTTPRequest("POST", "/mcp", host_headers(), json.dumps(malformed).encode()))
             self.assertEqual(response.status, 400)
             self.assertEqual(
                 json.loads(response.body)["error"]["data"]["reasonCode"],
                 "MCP-JSONRPC-ID-INVALID",
             )
-            query = carrier.handle(
-                MCPHTTPRequest("POST", "/mcp?debug=1", host_headers(), b"{}")
-            )
+            query = carrier.handle(MCPHTTPRequest("POST", "/mcp?debug=1", host_headers(), b"{}"))
             self.assertEqual(query.status, 404)
             client.close_session()
 

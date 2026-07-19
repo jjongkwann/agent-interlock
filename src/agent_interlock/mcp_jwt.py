@@ -17,7 +17,8 @@ import base64
 import json
 import threading
 import time
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPSHandler, Request, build_opener
 
@@ -107,7 +108,11 @@ class MCPJWKSVerifier:
         return jwk
 
     def _fetch_jwks(self) -> dict[str, Mapping[str, Any]]:
-        request = Request(self.jwks_uri, method="GET", headers={"Accept": "application/json", "Cache-Control": "no-store"})
+        request = Request(
+            self.jwks_uri,
+            method="GET",
+            headers={"Accept": "application/json", "Cache-Control": "no-store"},
+        )
         try:
             response = self._opener.open(request, timeout=self.profile.timeout_seconds)
         except HTTPError as error:
@@ -148,9 +153,10 @@ class MCPJWKSVerifier:
         if expires <= now:
             raise MCPOAuthError("MCP-OAUTH-TOKEN-EXPIRED", "verified access token is expired")
         not_before = payload.get("nbf")
-        if not_before is not None:
-            if not isinstance(not_before, int) or isinstance(not_before, bool) or not_before > now:
-                raise MCPOAuthError("MCP-OAUTH-TOKEN-NOT-YET-VALID", "verified access token is not yet valid")
+        if not_before is not None and (
+            not isinstance(not_before, int) or isinstance(not_before, bool) or not_before > now
+        ):
+            raise MCPOAuthError("MCP-OAUTH-TOKEN-NOT-YET-VALID", "verified access token is not yet valid")
         audience = _single_audience(payload.get("aud"))
         resource_value = payload.get("resource")
         if resource_value is None:
@@ -204,7 +210,9 @@ def _verify_signature(jwk: Mapping[str, Any], alg: str, signing_input: bytes, si
         elif alg == "EdDSA":
             if kty != "OKP" or jwk.get("crv") != "Ed25519":
                 raise MCPOAuthError("MCP-OAUTH-JWT-KEY-MISMATCH", "EdDSA requires an Ed25519 OKP key")
-            ed25519.Ed25519PublicKey.from_public_bytes(_b64url_bytes(_required_jwk(jwk, "x"))).verify(signature, signing_input)
+            ed25519.Ed25519PublicKey.from_public_bytes(_b64url_bytes(_required_jwk(jwk, "x"))).verify(
+                signature, signing_input
+            )
         else:  # pragma: no cover - alg already allow-listed
             raise MCPOAuthError("MCP-OAUTH-JWT-ALG-DENIED", "unsupported JWT algorithm")
     except InvalidSignature:

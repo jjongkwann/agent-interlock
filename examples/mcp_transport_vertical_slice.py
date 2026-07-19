@@ -16,7 +16,6 @@ from agent_interlock import (
 )
 from agent_interlock.security import canonical_destination
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "examples" / "secure_multi_agent_architecture.json"
 
@@ -80,9 +79,7 @@ adapter = MCPTransportAdapter(
 )
 
 # 1. Discovery observes D1, but does not expose an unapproved Tool to the model.
-hidden = adapter.handle_client_message(
-    {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-)
+hidden = adapter.handle_client_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
 assert hidden["result"]["tools"] == []
 revision = adapter.observed_revisions[0]
 

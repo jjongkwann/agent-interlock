@@ -5,8 +5,9 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from http_test_server import QuietThreadingHTTPServer
 from urllib.parse import parse_qs
+
+from http_test_server import QuietThreadingHTTPServer
 
 from agent_interlock import (
     InMemoryOAuthTransactionStore,

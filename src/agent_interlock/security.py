@@ -66,7 +66,9 @@ def validate_schema(value: Any, schema: Mapping[str, Any], path: str = "$") -> t
         "boolean": bool,
         "null": type(None),
     }
-    if expected in type_map and (not isinstance(value, type_map[expected]) or (expected in {"integer", "number"} and isinstance(value, bool))):
+    if expected in type_map and (
+        not isinstance(value, type_map[expected]) or (expected in {"integer", "number"} and isinstance(value, bool))
+    ):
         return (f"{path}: expected {expected}",)
     if expected == "object" and isinstance(value, Mapping):
         required = schema.get("required", [])

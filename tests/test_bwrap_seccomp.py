@@ -19,14 +19,13 @@ from pathlib import Path
 from agent_interlock import (
     AttestationVerifier,
     BubblewrapSandboxBackend,
-    MCPStdioError,
     MCPStdioSandboxUnavailable,
     StdioArtifactPin,
     StdioSandboxProfile,
     build_no_subprocess_seccomp,
     sha256_file,
 )
-from agent_interlock.mcp_stdio import _SECCOMP_FD_TOKEN, _RET_ALLOW, _RET_ERRNO_EPERM
+from agent_interlock.mcp_stdio import _RET_ALLOW, _RET_ERRNO_EPERM, _SECCOMP_FD_TOKEN
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "mcp_stdio_fixture_server.py"
@@ -52,9 +51,7 @@ def profile(*, allow_child_processes: bool):
 
 
 def seccomp_backend(machine="x86_64"):
-    return BubblewrapSandboxBackend(
-        launcher=launcher(), signing_key=KEY, seccomp_child_denial=True, machine=machine
-    )
+    return BubblewrapSandboxBackend(launcher=launcher(), signing_key=KEY, seccomp_child_denial=True, machine=machine)
 
 
 def unpack(program: bytes):
@@ -226,11 +223,7 @@ class BubblewrapSeccompLiveTests(unittest.TestCase):
 
     def test_fork_is_denied(self):
         result = self._run(
-            "import os\n"
-            "try:\n"
-            "    os.fork(); print('LEAKED')\n"
-            "except OSError:\n"
-            "    print('fork-denied')\n"
+            "import os\ntry:\n    os.fork(); print('LEAKED')\nexcept OSError:\n    print('fork-denied')\n"
         )
         self.assertIn("fork-denied", result.stdout)
 

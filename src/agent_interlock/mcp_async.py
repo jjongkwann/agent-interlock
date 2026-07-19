@@ -16,9 +16,10 @@ cannot consume or cancel another's task.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Callable, Mapping
+from typing import Any
 
 _PrincipalKey = tuple[str, str, str]
 

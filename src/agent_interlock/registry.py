@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Iterable, Protocol
+from typing import Protocol
 
 from .canonical import CANONICALIZER_VERSION, canonical_digest, raw_digest
 from .models import DefinitionState, ToolDefinition
@@ -197,4 +198,3 @@ class DefinitionRegistry:
         cross_ref = re.findall(r"(?:tool|server)\s+[`'\"]?([a-z0-9_.:/-]+)", description)
         if any(ref not in {own_name, definition.server_id.casefold()} for ref in cross_ref):
             yield "L1-M3-CROSS-SERVER-REFERENCE"
-

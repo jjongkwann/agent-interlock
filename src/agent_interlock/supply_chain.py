@@ -9,8 +9,9 @@ asymmetric keys.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from .canonical import canonical_digest
@@ -49,14 +50,7 @@ def _canonical_repository(value: str) -> str:
         host = (parsed.hostname or "").rstrip(".").encode("idna").decode("ascii").lower()
     except (UnicodeError, ValueError) as error:
         raise ValueError("source_repository is invalid") from error
-    if (
-        parsed.scheme != "https"
-        or not host
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("source_repository must be a credential-free HTTPS URL")
     port = f":{parsed.port}" if parsed.port and parsed.port != 443 else ""
     display_host = f"[{host}]" if ":" in host else host

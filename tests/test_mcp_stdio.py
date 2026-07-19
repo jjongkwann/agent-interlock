@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,19 +13,18 @@ from agent_interlock import (
     ArchitectureCompiler,
     ArchitectureGraph,
     DirectTestSandboxBackend,
+    MCPInvocationContext,
+    MCPServerProfile,
     MCPStdioClient,
     MCPStdioClientConfig,
     MCPStdioError,
     MCPStdioSandboxUnavailable,
-    MCPInvocationContext,
-    MCPServerProfile,
     MCPToolGateway,
     MCPTransportAdapter,
     StdioArtifactPin,
     StdioSandboxProfile,
     sha256_file,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "mcp_stdio_fixture_server.py"
@@ -131,9 +130,7 @@ class StdioProtocolTests(unittest.TestCase):
         )
         result = client.initialize()
         self.assertIn("tools", result["capabilities"])
-        response = client.call(
-            {"jsonrpc": "2.0", "id": "list", "method": "tools/list", "params": {}}
-        )
+        response = client.call({"jsonrpc": "2.0", "id": "list", "method": "tools/list", "params": {}})
         self.assertEqual(response["result"]["tools"][0]["name"], "echo")
         self.assertEqual(notifications[0]["method"], "notifications/tools/list_changed")
         deadline = time.monotonic() + 1
@@ -256,9 +253,7 @@ class StdioTransportIntegrationTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         tool = next(item for item in manifest["spec"]["nodes"] if item["id"] == "tool.send-email")
         tool["definitionDigest"] = revision.canonical_digest
-        edge = next(
-            item for item in manifest["spec"]["edges"] if item["relationshipId"] == "REL-05"
-        )
+        edge = next(item for item in manifest["spec"]["edges"] if item["relationshipId"] == "REL-05")
         edge["policy"]["externalWriteRequiresApproval"] = False
         compiled = ArchitectureCompiler().compile(ArchitectureGraph.from_dict(manifest))
         adapter.bind_compiled_architecture(

@@ -104,7 +104,7 @@ class LoopbackCallbackReceiver:
         self._server.server_close()
         self._thread.join(timeout=2)
 
-    def __enter__(self) -> "LoopbackCallbackReceiver":
+    def __enter__(self) -> LoopbackCallbackReceiver:
         return self
 
     def __exit__(self, *_args) -> None:

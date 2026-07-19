@@ -16,7 +16,6 @@ from agent_interlock import (
     compile_destination_egress_policy,
 )
 
-
 ARTIFACT = "sha256:" + "a" * 64
 PROVENANCE = "sha256:" + "b" * 64
 SANDBOX = "sha256:" + "c" * 64
@@ -111,9 +110,7 @@ class DestinationEgressGuardTests(unittest.TestCase):
             ("sandbox_profile_digest", "sha256:" + "f" * 64),
         ):
             with self.subTest(field=field):
-                receipt = self.guard.execute(
-                    request("https://mail-api.example", **{field: value})
-                )
+                receipt = self.guard.execute(request("https://mail-api.example", **{field: value}))
                 self.assertEqual(receipt.decision, ControlDecision.BLOCK)
                 self.assertIn("L1-M4-EGRESS-BINDING-MISMATCH", receipt.reason_codes)
         self.assertEqual(self.backend.connections, ())

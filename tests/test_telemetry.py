@@ -12,7 +12,6 @@ from agent_interlock import (
     import_runtime_telemetry,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ARCHITECTURE = ROOT / "examples" / "secure_multi_agent_architecture.json"
 OTLP_DRIFT = ROOT / "examples" / "runtime_drift_otlp.json"
@@ -82,9 +81,7 @@ class RuntimeTelemetryImportTests(unittest.TestCase):
         self.assertEqual(len(imported.control_evaluated_interactions), 2)
         self.assertEqual(imported.issues, ())
 
-        diff = compare_observed_runtime(
-            graph(), imported.observations, imported.control_evaluated_interactions
-        )
+        diff = compare_observed_runtime(graph(), imported.observations, imported.control_evaluated_interactions)
         self.assertFalse(diff.conforms)
         self.assertEqual(len(diff.undeclared_edges), 1)
         self.assertEqual(diff.undeclared_edges[0].target, "external.unknown")
@@ -138,9 +135,7 @@ class RuntimeTelemetryImportTests(unittest.TestCase):
             ]
         }
         imported = import_runtime_telemetry(payload)
-        diff = compare_observed_runtime(
-            graph(), imported.observations, imported.control_evaluated_interactions
-        )
+        diff = compare_observed_runtime(graph(), imported.observations, imported.control_evaluated_interactions)
         self.assertEqual(diff.control_bypass_interactions, ("span-bypass",))
 
 

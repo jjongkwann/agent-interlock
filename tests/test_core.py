@@ -11,7 +11,6 @@ from agent_interlock import (
     CredentialClaims,
     DefinitionRegistry,
     DefinitionState,
-    InMemoryLedger,
     Interlock,
     InvocationBlocked,
     InvocationIntent,
@@ -26,7 +25,6 @@ from agent_interlock import (
 )
 from agent_interlock.gateway import GatewayError
 from agent_interlock.security import canonical_destination, validate_authorization_url
-
 
 INPUT_SCHEMA = {
     "type": "object",
@@ -45,7 +43,10 @@ OUTPUT_SCHEMA = {
 }
 
 
-def tool_definition(description: str = "Send a message to an approved recipient.", endpoint: str = "https://mcp.example.com") -> ToolDefinition:
+def tool_definition(
+    description: str = "Send a message to an approved recipient.",
+    endpoint: str = "https://mcp.example.com",
+) -> ToolDefinition:
     return ToolDefinition(
         server_id="tenant-a/prod/trusted-mail",
         tool_name="send_email",
@@ -173,7 +174,9 @@ class GatewayPolicyTests(unittest.TestCase):
             source_actor_id=source.id,
             revision_id=revision.revision_id,
             intent=InvocationIntent(
-                purpose="reply", expected_audience="https://mail-api.example", expected_resource="mail"
+                purpose="reply",
+                expected_audience="https://mail-api.example",
+                expected_resource="mail",
             ),
             arguments={"to": "a@customer.example", "body": "hello"},
             credential=credential,
@@ -383,7 +386,8 @@ class GatewayPolicyTests(unittest.TestCase):
         detection = [e for e in gateway.ledger.all() if e.event_type == "DETECTION_RAISED"][-1]
         self.assertEqual(detection.payload["response"], "REVOKE")
         revoke = [
-            e for e in gateway.ledger.all()
+            e
+            for e in gateway.ledger.all()
             if e.event_type == "ACTION_EXECUTED" and e.payload.get("actionType") == "REVOKE"
         ][-1]
         self.assertEqual(revoke.payload["result"], "COMPLETED")
@@ -453,7 +457,11 @@ class SDKTests(unittest.TestCase):
                 owner="support",
                 identity="spiffe://tool/lookup",
                 data_access=frozenset({"D3"}),
-                input_schema={"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+                input_schema={
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {"id": {"type": "string"}},
+                },
                 output_schema={"type": "object"},
             )
         )

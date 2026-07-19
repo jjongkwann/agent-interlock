@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .canonical import canonical_digest
 from .signing import sign_canonical, verify_canonical
@@ -46,7 +47,7 @@ class DeploymentBundle:
     body: Mapping[str, Any]
 
     @classmethod
-    def from_compile_output(cls, value: Mapping[str, Any]) -> "DeploymentBundle":
+    def from_compile_output(cls, value: Mapping[str, Any]) -> DeploymentBundle:
         if not value.get("deployable", False):
             raise StudioDeploymentError(REASON_BUNDLE_UNKNOWN, "compile output is not a deployable bundle")
         body = {
@@ -61,9 +62,7 @@ class DeploymentBundle:
         return cls(value["architectureId"], str(value["version"]), recomputed, body)
 
 
-def deployment_approval_statement(
-    bundle: DeploymentBundle, *, from_digest: str | None, to_mode: str
-) -> dict[str, Any]:
+def deployment_approval_statement(bundle: DeploymentBundle, *, from_digest: str | None, to_mode: str) -> dict[str, Any]:
     """The exact context each approver signs: bundle identity, base, and target mode."""
     return {
         "purpose": "studio-architecture-deploy",
@@ -101,9 +100,7 @@ def _verify_two_person(
         approvers.add(approval.approver_id)
         keys.add(approval.key_id)
     if len(approvers) < 2 or len(keys) < 2:
-        raise StudioDeploymentError(
-            REASON_TWO_PERSON_REQUIRED, "promotion requires two distinct signed approvals"
-        )
+        raise StudioDeploymentError(REASON_TWO_PERSON_REQUIRED, "promotion requires two distinct signed approvals")
 
 
 def _git(repo: Path, *args: str) -> str:

@@ -11,7 +11,8 @@ from an older instrumentation still reconciles. Pass the result to
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 # alias attribute key -> canonical attribute key the importer reads.
 SEMCONV_ALIASES: dict[str, str] = {
@@ -100,7 +101,12 @@ def normalize_otlp_semconv(
             spans = []
             for span in scope.get("spans", []) or []:
                 if isinstance(span, Mapping) and "attributes" in span:
-                    spans.append({**span, "attributes": _normalize_attribute_list(span["attributes"], aliases)})
+                    spans.append(
+                        {
+                            **span,
+                            "attributes": _normalize_attribute_list(span["attributes"], aliases),
+                        }
+                    )
                 else:
                     spans.append(span)
             scopes.append({**scope, "spans": spans})

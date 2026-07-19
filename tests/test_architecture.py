@@ -15,7 +15,6 @@ from agent_interlock import (
     compare_runtime,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "secure_multi_agent_architecture.json"
 
@@ -94,62 +93,48 @@ class ArchitectureSecurityLintTests(unittest.TestCase):
     def test_prevent_control_cannot_run_only_after_execution(self):
         value = manifest()
         value["spec"]["edges"][0]["controls"][0]["timing"] = "POST_EXECUTION"
-        codes = {
-            item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
-        }
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertIn("ARCH-PREVENT-AFTER-EXECUTION", codes)
 
     def test_tool_digest_pin_requires_declared_digest(self):
         value = manifest()
         tool = next(item for item in value["spec"]["nodes"] if item["id"] == "tool.send-email")
         tool.pop("definitionDigest")
-        codes = {
-            item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
-        }
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertIn("ARCH-TOOL-DIGEST-UNPINNED", codes)
 
     def test_delegation_depth_cannot_exceed_actor_limit(self):
         value = manifest()
         supervisor = next(item for item in value["spec"]["nodes"] if item["id"] == "agent.support")
         supervisor["maxDelegationDepth"] = 1
-        codes = {
-            item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
-        }
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertIn("ARCH-DELEGATION-DEPTH-EXCEEDS-ACTOR", codes)
 
     def test_dynamic_target_pattern_cannot_be_unbounded(self):
         value = manifest()
         edge = next(item for item in value["spec"]["edges"] if item["relationshipId"] == "REL-06")
         edge["targetSelector"]["idPattern"] = "*"
-        codes = {
-            item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
-        }
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertIn("ARCH-DYNAMIC-TARGET-UNBOUNDED", codes)
 
     def test_dynamic_target_capability_cannot_be_unbounded(self):
         value = manifest()
         edge = next(item for item in value["spec"]["edges"] if item["relationshipId"] == "REL-06")
         edge["targetSelector"]["requiredCapabilities"] = []
-        codes = {
-            item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
-        }
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertIn("ARCH-DYNAMIC-CAPABILITY-UNBOUNDED", codes)
 
     def test_relationship_id_must_match_relationship_type(self):
         value = manifest()
         value["spec"]["edges"][0]["relationship"] = "INVOKES"
-        codes = {
-            item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
-        }
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertIn("ARCH-RELATIONSHIP-ID-MISMATCH", codes)
 
 
 class RuntimeGraphDiffTests(unittest.TestCase):
     def test_dynamic_subagent_instance_matches_declared_contract(self):
         value = manifest()
-        value["spec"]["edges"] = [
-            next(item for item in value["spec"]["edges"] if item["relationshipId"] == "REL-06")
-        ]
+        value["spec"]["edges"] = [next(item for item in value["spec"]["edges"] if item["relationshipId"] == "REL-06")]
         dynamic_graph = ArchitectureGraph.from_dict(value)
         ledger = InMemoryLedger()
         common = {

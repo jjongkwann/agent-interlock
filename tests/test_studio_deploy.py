@@ -112,8 +112,12 @@ class StudioDeploymentTests(unittest.TestCase):
             second.bundle_digest,
             tuple(
                 sign_deployment_approval(
-                    second, from_digest=first_digest, to_mode="ENFORCE",
-                    approver_id=approver, key_id=key_id, key=TRUSTED_KEYS[key_id],
+                    second,
+                    from_digest=first_digest,
+                    to_mode="ENFORCE",
+                    approver_id=approver,
+                    key_id=key_id,
+                    key=TRUSTED_KEYS[key_id],
                 )
                 for approver, key_id in (("alice", "key-a"), ("bob", "key-b"))
             ),

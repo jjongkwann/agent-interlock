@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from http_test_server import QuietThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs
+
+from http_test_server import QuietThreadingHTTPServer
 
 
 class AdversarialOAuthServer:
@@ -41,7 +42,7 @@ class AdversarialOAuthServer:
     def resource_metadata_url(self) -> str:
         return f"{self.base_url}/.well-known/oauth-protected-resource/mcp"
 
-    def start(self) -> "AdversarialOAuthServer":
+    def start(self) -> AdversarialOAuthServer:
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -124,7 +125,7 @@ class AdversarialOAuthServer:
                 if payload:
                     self.wfile.write(payload)
 
-            def log_message(self, format: str, *args: Any) -> None:
+            def log_message(self, fmt: str, *args: Any) -> None:
                 return
 
         self._server = QuietThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -144,7 +145,7 @@ class AdversarialOAuthServer:
         self._server = None
         self._thread = None
 
-    def __enter__(self) -> "AdversarialOAuthServer":
+    def __enter__(self) -> AdversarialOAuthServer:
         return self.start()
 
     def __exit__(self, exc_type, exc, traceback) -> None:  # noqa: ANN001

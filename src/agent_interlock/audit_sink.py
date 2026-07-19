@@ -16,9 +16,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from .canonical import canonical_json, raw_digest
 from .ledger import Event, verify_event
@@ -207,7 +208,7 @@ class FileWORMAuditStore:
             return
         entries: list[WORMEntry] = []
         with self._path.open("r", encoding="utf-8") as stream:
-            for line_number, line in enumerate(stream):
+            for _line_number, line in enumerate(stream):
                 line = line.strip()
                 if not line:
                     continue

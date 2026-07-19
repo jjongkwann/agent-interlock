@@ -148,8 +148,7 @@ class FakeExternalReceiptStore:
                     "committed transaction was not found",
                 )
             if any(
-                item.compensation_for == committed.receipt_id
-                and item.status == ReceiptStatus.COMPENSATED
+                item.compensation_for == committed.receipt_id and item.status == ReceiptStatus.COMPENSATED
                 for item in self._receipts
             ):
                 raise ReceiptError(
@@ -184,8 +183,7 @@ class FakeExternalReceiptStore:
             return tuple(
                 item
                 for item in self._receipts
-                if item.tenant_id == tenant_id
-                and item.connector_execution_id == connector_execution_id
+                if item.tenant_id == tenant_id and item.connector_execution_id == connector_execution_id
             )
 
     def all(self, tenant_id: str) -> tuple[FakeExternalReceipt, ...]:
@@ -209,9 +207,7 @@ class FakeExternalReceiptStore:
             if item.status == ReceiptStatus.COMPENSATED and item.compensation_for
         }
         side_effect = _strongest_side_effect(item.side_effect for item in committed)
-        destinations = tuple(
-            dict.fromkeys(destination for item in committed for destination in item.destinations)
-        )
+        destinations = tuple(dict.fromkeys(destination for item in committed for destination in item.destinations))
         return ReceiptSummary(
             tenant_id=tenant_id,
             connector_execution_id=connector_execution_id,
@@ -223,8 +219,7 @@ class FakeExternalReceiptStore:
             downstream_receipt_count=len(committed),
             byte_count=sum(item.byte_count for item in committed),
             record_count=sum(item.record_count for item in committed),
-            compensation_completed=bool(committed)
-            and all(item.receipt_id in compensated_ids for item in committed),
+            compensation_completed=bool(committed) and all(item.receipt_id in compensated_ids for item in committed),
         )
 
 

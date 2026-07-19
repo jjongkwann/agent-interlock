@@ -14,7 +14,6 @@ from agent_interlock import (
     sign_artifact_provenance,
 )
 
-
 PUBLISHER_KEY = b"platform-publisher-signing-key-v1"
 ARTIFACT_DIGEST = "sha256:" + "a" * 64
 REPOSITORY = "https://github.example/platform/trusted-mail"

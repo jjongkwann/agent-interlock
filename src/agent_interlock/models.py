@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
 
 
 class ActorType(StrEnum):

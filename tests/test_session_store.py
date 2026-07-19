@@ -54,12 +54,19 @@ def headers(*, protocol=True, session_id=None, last_event_id=None):
 
 def post(carrier, message, *, protocol=True, session_id=None):
     return carrier.handle(
-        MCPHTTPRequest("POST", "/mcp", headers(protocol=protocol, session_id=session_id), json.dumps(message).encode())
+        MCPHTTPRequest(
+            "POST",
+            "/mcp",
+            headers(protocol=protocol, session_id=session_id),
+            json.dumps(message).encode(),
+        )
     )
 
 
 def get(carrier, *, session_id=None, last_event_id=None):
-    return carrier.handle(MCPHTTPRequest("GET", "/mcp", headers(session_id=session_id, last_event_id=last_event_id), b""))
+    return carrier.handle(
+        MCPHTTPRequest("GET", "/mcp", headers(session_id=session_id, last_event_id=last_event_id), b"")
+    )
 
 
 def open_session(carrier) -> str:
@@ -67,7 +74,11 @@ def open_session(carrier) -> str:
         "jsonrpc": "2.0",
         "id": "init-1",
         "method": "initialize",
-        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}},
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "t", "version": "1"},
+        },
     }
     response = post(carrier, init, protocol=False)
     assert response.status == 200, response.status
@@ -82,7 +93,11 @@ class SessionLifecycleTests(unittest.TestCase):
         carrier = make_carrier(InMemorySessionStore())
         session_id = open_session(carrier)
         self.assertTrue(session_id)
-        listed = post(carrier, {"jsonrpc": "2.0", "id": "tl", "method": "tools/list", "params": {}}, session_id=session_id)
+        listed = post(
+            carrier,
+            {"jsonrpc": "2.0", "id": "tl", "method": "tools/list", "params": {}},
+            session_id=session_id,
+        )
         self.assertEqual(listed.status, 200)
 
     def test_tools_call_without_session_is_not_ready(self):
@@ -95,7 +110,11 @@ class SessionLifecycleTests(unittest.TestCase):
     def test_initialized_without_matching_session_is_rejected(self):
         carrier = make_carrier(InMemorySessionStore())
         # notifications/initialized referencing an unknown session id
-        ack = post(carrier, {"jsonrpc": "2.0", "method": "notifications/initialized"}, session_id="not-a-real-session")
+        ack = post(
+            carrier,
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            session_id="not-a-real-session",
+        )
         body = json.loads(ack.body)
         self.assertEqual(body["error"]["data"]["reasonCode"], "MCP-LIFECYCLE-ORDER-INVALID")
 
@@ -155,7 +174,11 @@ class MultiInstanceTests(unittest.TestCase):
         self.assertEqual(replay.status, 200)
         self.assertIn("notifications/tools/list_changed", replay.body.decode())
         # A ready session on the shared store also serves tools on B.
-        listed = post(carrier_b, {"jsonrpc": "2.0", "id": "tl", "method": "tools/list", "params": {}}, session_id=session_id)
+        listed = post(
+            carrier_b,
+            {"jsonrpc": "2.0", "id": "tl", "method": "tools/list", "params": {}},
+            session_id=session_id,
+        )
         self.assertEqual(listed.status, 200)
 
 

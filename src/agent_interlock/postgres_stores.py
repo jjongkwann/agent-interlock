@@ -11,10 +11,11 @@ LEVEL SECURITY, checked at the start of every transaction.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 from .canonical import canonical_digest, canonical_json
 from .config_guard import (
@@ -88,9 +89,7 @@ class _PostgreSQLStoreBase:
             finally:
                 cursor.close()
             if row is None or row[0] != self.bound_tenant_id:
-                raise LedgerTenantMismatch(
-                    "authenticated PostgreSQL role does not match the store tenant binding"
-                )
+                raise LedgerTenantMismatch("authenticated PostgreSQL role does not match the store tenant binding")
             yield connection
             connection.commit()
         except Exception:
@@ -99,9 +98,7 @@ class _PostgreSQLStoreBase:
         finally:
             connection.close()
 
-    def _execute(
-        self, connection: Connection, query: str, parameters: tuple[Any, ...]
-    ) -> tuple[Any, ...] | None:
+    def _execute(self, connection: Connection, query: str, parameters: tuple[Any, ...]) -> tuple[Any, ...] | None:
         cursor = connection.cursor()
         try:
             cursor.execute(query, parameters)
@@ -109,9 +106,7 @@ class _PostgreSQLStoreBase:
         finally:
             cursor.close()
 
-    def _execute_all(
-        self, connection: Connection, query: str, parameters: tuple[Any, ...]
-    ) -> list[tuple[Any, ...]]:
+    def _execute_all(self, connection: Connection, query: str, parameters: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         cursor = connection.cursor()
         try:
             cursor.execute(query, parameters)
@@ -201,7 +196,12 @@ class PostgreSQLSessionStore(_PostgreSQLStoreBase):
             self._execute_none(
                 connection,
                 _INSERT_SESSION_EVENT,
-                (session_id, principal_key[0], sequence, canonical_json(dict(message)).decode("utf-8")),
+                (
+                    session_id,
+                    principal_key[0],
+                    sequence,
+                    canonical_json(dict(message)).decode("utf-8"),
+                ),
             )
         return sequence
 
@@ -212,9 +212,7 @@ class PostgreSQLSessionStore(_PostgreSQLStoreBase):
         with self._transaction() as connection:
             if self._execute(connection, _SESSION_STATE, (session_id, *principal_key)) is None:
                 return ()
-            rows = self._execute_all(
-                connection, _REPLAY_EVENTS, (session_id, principal_key[0], after or 0)
-            )
+            rows = self._execute_all(connection, _REPLAY_EVENTS, (session_id, principal_key[0], after or 0))
         return tuple((int(seq), json.loads(message)) for seq, message in rows)
 
     def delete(self, session_id: str, principal_key: _PrincipalKey) -> bool:
@@ -328,7 +326,8 @@ WHERE tenant_id = %s AND config_id = %s AND revision_id = %s
 """.strip()
 
 _UPSERT_REVISION = """
-INSERT INTO interlock.agent_config_revisions (tenant_id, config_id, revision_id, config_digest, state, revision)
+INSERT INTO interlock.agent_config_revisions
+    (tenant_id, config_id, revision_id, config_digest, state, revision)
 VALUES (%s, %s, %s, %s, 'ACTIVE', %s::jsonb)
 ON CONFLICT (tenant_id, config_id, revision_id)
     DO UPDATE SET state = 'ACTIVE', revision = EXCLUDED.revision

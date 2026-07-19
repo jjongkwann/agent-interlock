@@ -10,9 +10,10 @@ import secrets
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from .canonical import canonical_digest, canonical_json
 from .models import DataSource, Environment
@@ -232,11 +233,7 @@ def decode_event_cursor(cursor: str) -> tuple[str, str]:
         value = json.loads(decoded)
     except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("cursor is invalid") from error
-    if (
-        not isinstance(value, list)
-        or len(value) != 2
-        or not all(isinstance(item, str) and item for item in value)
-    ):
+    if not isinstance(value, list) or len(value) != 2 or not all(isinstance(item, str) and item for item in value):
         raise ValueError("cursor is invalid")
     try:
         datetime.fromisoformat(value[0].replace("Z", "+00:00"))
@@ -299,9 +296,7 @@ class InMemoryLedger:
                 if existing is not None:
                     existing_digest, existing_event = existing
                     if existing_digest != digest:
-                        raise LedgerIdempotencyConflict(
-                            "idempotency key is already bound to another event"
-                        )
+                        raise LedgerIdempotencyConflict("idempotency key is already bound to another event")
                     return existing_event
                 self._idempotency[key] = (digest, event)
             self._events.append(event)
@@ -315,11 +310,7 @@ class InMemoryLedger:
         with self._lock:
             return tuple(
                 sorted(
-                    (
-                        event
-                        for event in self._events
-                        if event.tenant_id == tenant_id and event.trace_id == trace_id
-                    ),
+                    (event for event in self._events if event.tenant_id == tenant_id and event.trace_id == trace_id),
                     key=lambda item: (item.occurred_at, item.event_id),
                 )
             )

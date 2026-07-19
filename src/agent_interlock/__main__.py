@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
 
 from .architecture import ArchitectureCompiler, ArchitectureGraph, FindingSeverity, compare_observed_runtime
 from .canonical import canonical_digest
@@ -132,8 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "unobservedEdgeIds": list(diff.unobserved_edge_ids),
                     "controlBypassInteractions": list(diff.control_bypass_interactions),
                     "importIssues": [
-                        {"code": item.code, "message": item.message, "spanId": item.span_id}
-                        for item in imported.issues
+                        {"code": item.code, "message": item.message, "spanId": item.span_id} for item in imported.issues
                     ],
                 },
                 ensure_ascii=False,
@@ -147,9 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "architectureId": graph.id,
                     "version": graph.version,
-                    "valid": not any(
-                        item.severity == FindingSeverity.CRITICAL for item in findings
-                    ),
+                    "valid": not any(item.severity == FindingSeverity.CRITICAL for item in findings),
                     "findings": [_finding_value(item) for item in findings],
                 },
                 ensure_ascii=False,

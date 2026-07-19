@@ -18,7 +18,6 @@ from agent_interlock import (
     ConfigRevision,
     ConfigRevisionState,
     ConfiguredTool,
-    ControlDecision,
     DataSource,
     Environment,
     Ledger,
@@ -189,12 +188,16 @@ def assert_events_intact_and_ordered(test, ledger: Ledger, interaction_id: str, 
     test.assertEqual(timestamps, sorted(timestamps), "interaction events are not time-ordered")
 
 
-def assert_reason_and_policy_recorded(test, ledger: Ledger, interaction_id: str, expected_reason: str, tenant_id: str = TENANT) -> None:
+def assert_reason_and_policy_recorded(
+    test, ledger: Ledger, interaction_id: str, expected_reason: str, tenant_id: str = TENANT
+) -> None:
     """Assertion 6: expected reason code + policy version present on the decision."""
     controls = [
         event
         for event in ledger.interaction(tenant_id, interaction_id)
-        if event.event_type == "CONTROL_EVALUATED" and "control" in event.payload and "policyVersion" in event.payload["control"]
+        if event.event_type == "CONTROL_EVALUATED"
+        and "control" in event.payload
+        and "policyVersion" in event.payload["control"]
     ]
     test.assertTrue(controls, "no policy CONTROL_EVALUATED event recorded")
     control = controls[-1].payload["control"]
@@ -204,7 +207,9 @@ def assert_reason_and_policy_recorded(test, ledger: Ledger, interaction_id: str,
 
 def assert_no_downstream_receipt(test, receipt_store, tenant_id: str = TENANT) -> None:
     """Assertion 4: a BLOCK/QUARANTINE/HOLD produced no committed external receipt."""
-    committed = [item for item in receipt_store.all(tenant_id) if item.byte_count >= 0 and item.status.value == "COMMITTED"]
+    committed = [
+        item for item in receipt_store.all(tenant_id) if item.byte_count >= 0 and item.status.value == "COMMITTED"
+    ]
     test.assertEqual(committed, [], "blocked invocation still produced an external receipt")
 
 

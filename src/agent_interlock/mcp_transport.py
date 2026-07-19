@@ -187,8 +187,7 @@ class MCPTransportAdapter:
     @property
     def observed_revisions(self) -> tuple[ToolRevision, ...]:
         return tuple(
-            self.gateway.registry.get(revision_id)
-            for _, revision_id in sorted(self._observed_by_name.items())
+            self.gateway.registry.get(revision_id) for _, revision_id in sorted(self._observed_by_name.items())
         )
 
     def handle_client_message(
@@ -256,9 +255,7 @@ class MCPTransportAdapter:
                 ),
             )
 
-    def handle_server_message(
-        self, value: bytes | str | Mapping[str, Any]
-    ) -> dict[str, Any] | None:
+    def handle_server_message(self, value: bytes | str | Mapping[str, Any]) -> dict[str, Any] | None:
         """Refresh definitions before forwarding a Tool list-changed notification."""
 
         message = self._parse_message(value)
@@ -345,13 +342,9 @@ class MCPTransportAdapter:
                 DefinitionState.APPROVED,
                 DefinitionState.ACTIVE,
             }:
-                raise MCPArchitectureBindingError(
-                    f"Tool {tool_name!r} cannot activate from {revision.state.value}"
-                )
+                raise MCPArchitectureBindingError(f"Tool {tool_name!r} cannot activate from {revision.state.value}")
             matching_edges = tuple(
-                edge
-                for edge in compiled.graph.edges
-                if edge.relationship_id == "REL-05" and edge.target == actor_id
+                edge for edge in compiled.graph.edges if edge.relationship_id == "REL-05" and edge.target == actor_id
             )
             if not matching_edges:
                 raise MCPArchitectureBindingError(f"Tool actor {actor_id!r} has no REL-05 edge")
@@ -404,9 +397,7 @@ class MCPTransportAdapter:
             result["nextCursor"] = next_cursor
         return {"jsonrpc": "2.0", "id": request["id"], "result": result}
 
-    def _handle_tools_call(
-        self, request: Mapping[str, Any], context: MCPInvocationContext
-    ) -> dict[str, Any]:
+    def _handle_tools_call(self, request: Mapping[str, Any], context: MCPInvocationContext) -> dict[str, Any]:
         if context.tenant_id != self.profile.tenant_id:
             raise MCPTransportError(
                 _INTERLOCK_NOT_CONFIGURED,
@@ -470,7 +461,10 @@ class MCPTransportAdapter:
             if "error" in response:
                 error_value = response["error"]
                 if not isinstance(error_value, Mapping):
-                    error_value = {"code": _INTERLOCK_DOWNSTREAM_ERROR, "message": "invalid downstream error"}
+                    error_value = {
+                        "code": _INTERLOCK_DOWNSTREAM_ERROR,
+                        "message": "invalid downstream error",
+                    }
                 raise _DownstreamCallError(error_value)
             result = response.get("result")
             if not isinstance(result, Mapping) or not isinstance(result.get("content"), list):

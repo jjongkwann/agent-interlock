@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -30,9 +31,7 @@ _DANGEROUS_ENV = re.compile(
     r"PATH|PYTHONPATH|PYTHONHOME|NODE_OPTIONS|RUBYOPT|PERL5OPT|BASH_ENV|ENV|SHELLOPTS|"
     r"LD_PRELOAD|LD_LIBRARY_PATH|DYLD_.*|GIT_.*|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)$"
 )
-_SHELL_EXECUTABLES = frozenset(
-    {"sh", "bash", "zsh", "fish", "dash", "ksh", "cmd", "cmd.exe", "powershell", "pwsh"}
-)
+_SHELL_EXECUTABLES = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "cmd", "cmd.exe", "powershell", "pwsh"})
 _EOF = object()
 
 
@@ -125,8 +124,7 @@ class StdioSandboxProfile:
                 "executable": {"path": self.executable.path, "digest": self.executable.digest},
                 "arguments": list(self.arguments),
                 "additionalArtifacts": [
-                    {"path": item.path, "digest": item.digest}
-                    for item in self.additional_artifacts
+                    {"path": item.path, "digest": item.digest} for item in self.additional_artifacts
                 ],
                 "workingDirectory": self.working_directory,
                 "environment": dict(self.environment),
@@ -149,10 +147,7 @@ class StdioSandboxProfile:
     @property
     def artifact_set_digest(self) -> str:
         return canonical_digest(
-            [
-                {"path": item.path, "digest": item.digest}
-                for item in (self.executable, *self.additional_artifacts)
-            ]
+            [{"path": item.path, "digest": item.digest} for item in (self.executable, *self.additional_artifacts)]
         )
 
 
@@ -334,8 +329,8 @@ _CLONE_THREAD = 0x00010000
 # clone3 is always denied — its args live behind a pointer seccomp can't read;
 # glibc thread creation uses clone (flag-checked), not clone3.
 _SECCOMP_ARCH_TABLE = {
-    "x86_64": (_AUDIT_ARCH_X86_64, (57, 58, 435), 56),   # fork, vfork, clone3 | clone
-    "aarch64": (_AUDIT_ARCH_AARCH64, (435,), 220),       # clone3 | clone
+    "x86_64": (_AUDIT_ARCH_X86_64, (57, 58, 435), 56),  # fork, vfork, clone3 | clone
+    "aarch64": (_AUDIT_ARCH_AARCH64, (435,), 220),  # clone3 | clone
     "arm64": (_AUDIT_ARCH_AARCH64, (435,), 220),
 }
 
@@ -363,11 +358,11 @@ def build_no_subprocess_seccomp(machine: str) -> bytes:
 
     # Layout: arch guard, load nr, clone→handler, always-deny checks, allow,
     # clone handler (allow only CLONE_THREAD else EPERM).
-    handler = 4 + 1 + len(deny_nrs) + 1          # first instruction of the clone handler
-    deny_index = handler + 3                     # RET EPERM (shared deny target)
+    handler = 4 + 1 + len(deny_nrs) + 1  # first instruction of the clone handler
+    deny_index = handler + 3  # RET EPERM (shared deny target)
     program = [
         _bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARCH),
-        _bpf(_BPF_JEQ_K, 1, 0, arch),            # arch ok → skip kill
+        _bpf(_BPF_JEQ_K, 1, 0, arch),  # arch ok → skip kill
         _bpf(_BPF_RET_K, 0, 0, _RET_KILL_PROCESS),
         _bpf(_BPF_LD_ABS_W, 0, 0, _OFF_NR),
     ]
@@ -375,12 +370,12 @@ def build_no_subprocess_seccomp(machine: str) -> bytes:
     for offset, nr in enumerate(deny_nrs):
         index = 5 + offset
         program.append(_bpf(_BPF_JEQ_K, deny_index - index - 1, 0, nr))  # match → EPERM
-    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))               # non-process syscall
+    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))  # non-process syscall
     # clone handler
-    program.append(_bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARG0_LO))          # index `handler`
+    program.append(_bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARG0_LO))  # index `handler`
     program.append(_bpf(_BPF_AND_K, 0, 0, _CLONE_THREAD))
-    program.append(_bpf(_BPF_JEQ_K, 1, 0, _CLONE_THREAD))            # CLONE_THREAD → allow
-    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ERRNO_EPERM))         # index `deny_index`
+    program.append(_bpf(_BPF_JEQ_K, 1, 0, _CLONE_THREAD))  # CLONE_THREAD → allow
+    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ERRNO_EPERM))  # index `deny_index`
     program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))
     return b"".join(program)
 
@@ -465,7 +460,18 @@ class BubblewrapSandboxBackend:
         argv += ["--cap-drop", "ALL", "--die-with-parent", "--new-session", "--clearenv"]
         for key in sorted(profile.environment):
             argv += ["--setenv", key, profile.environment[key]]
-        argv += ["--proc", "/proc", "--dev", "/dev", "--perms", "1777", "--tmpfs", "/tmp", "--dir", profile.working_directory]
+        argv += [
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--perms",
+            "1777",
+            "--tmpfs",
+            "/tmp",
+            "--dir",
+            profile.working_directory,
+        ]
         for path in profile.writable_paths:
             argv += ["--bind", path, path]
         for path in profile.read_only_paths:
@@ -658,7 +664,7 @@ class MCPStdioServerCaller:
 
     __slots__ = ("_client", "artifact_set_digest", "server_id")
 
-    def __init__(self, client: "MCPStdioClient", profile: MCPServerProfile) -> None:
+    def __init__(self, client: MCPStdioClient, profile: MCPServerProfile) -> None:
         self._client = client
         self.artifact_set_digest = client.config.sandbox_profile.artifact_set_digest
         self.server_id = profile.server_id
@@ -885,10 +891,8 @@ class MCPStdioClient:
             self._server_capabilities = {}
             process = self._process
             if process is not None and process.stdin is not None:
-                try:
+                with contextlib.suppress(OSError):
                     process.stdin.close()
-                except OSError:
-                    pass
             if process is not None:
                 try:
                     process.wait(timeout=self.config.sandbox_profile.termination_grace_seconds)
@@ -920,7 +924,7 @@ class MCPStdioClient:
                 process = self._process
                 if process is not None and process.poll() is not None:
                     self._raise_reader_failure()
-                    raise MCPStdioError("MCP-STDIO-PROCESS-EXITED", "stdio server exited before responding")
+                    raise MCPStdioError("MCP-STDIO-PROCESS-EXITED", "stdio server exited before responding") from None
                 continue
             if item is _EOF:
                 self._raise_reader_failure()
@@ -1104,12 +1108,15 @@ class MCPStdioClient:
                 "MCP-STDIO-SANDBOX-ATTESTATION-INVALID",
                 "partial sandbox attestation cannot use the test-only exception",
             )
-        if self._attestation_verifier is not None and not profile.allow_unenforced_test_mode:
-            if not self._attestation_verifier.verify(attestation):
-                raise MCPStdioError(
-                    "MCP-STDIO-SANDBOX-ATTESTATION-UNSIGNED",
-                    "sandbox attestation is not signed by a trusted backend key",
-                )
+        if (
+            self._attestation_verifier is not None
+            and not profile.allow_unenforced_test_mode
+            and not self._attestation_verifier.verify(attestation)
+        ):
+            raise MCPStdioError(
+                "MCP-STDIO-SANDBOX-ATTESTATION-UNSIGNED",
+                "sandbox attestation is not signed by a trusted backend key",
+            )
 
     def _set_reader_failure(self, reason_code: str, message: str) -> None:
         with self._reader_lock:
@@ -1160,10 +1167,8 @@ class MCPStdioClient:
                         process.kill()
                 except (ProcessLookupError, OSError):
                     pass
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass
         self._close_process_streams(process)
         self._join_readers()
 
@@ -1171,10 +1176,8 @@ class MCPStdioClient:
     def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
-                try:
+                with contextlib.suppress(OSError):
                     stream.close()
-                except OSError:
-                    pass
 
     def _join_readers(self) -> None:
         current = threading.current_thread()
@@ -1259,12 +1262,7 @@ def _resolved_existing_path(value: str) -> str:
 
 def _validate_arguments(values: Sequence[str]) -> None:
     if any(
-        not isinstance(item, str)
-        or not item
-        or "\x00" in item
-        or "\r" in item
-        or "\n" in item
-        or len(item) > 4096
+        not isinstance(item, str) or not item or "\x00" in item or "\r" in item or "\n" in item or len(item) > 4096
         for item in values
     ):
         raise ValueError("process arguments must be bounded strings without control delimiters")
@@ -1307,16 +1305,12 @@ def _valid_jsonrpc_message(value: Mapping[str, Any], *, client_message: bool) ->
     if value.get("jsonrpc") != "2.0":
         return False
     request_id = value.get("id")
-    if "id" in value and (
-        not isinstance(request_id, (str, int)) or isinstance(request_id, bool)
-    ):
+    if "id" in value and (not isinstance(request_id, (str, int)) or isinstance(request_id, bool)):
         return False
     if "method" in value:
         if not isinstance(value.get("method"), str) or not value["method"]:
             return False
-        if "params" in value and not isinstance(value["params"], Mapping):
-            return False
-        return True
+        return not ("params" in value and not isinstance(value["params"], Mapping))
     if client_message or "id" not in value:
         return False
     if ("result" in value) == ("error" in value):

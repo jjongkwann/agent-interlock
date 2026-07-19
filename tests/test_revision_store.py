@@ -11,6 +11,8 @@ import os
 import unittest
 import uuid
 
+from test_postgres_stores import ScriptedConnection
+
 from agent_interlock import (
     DefinitionRegistry,
     DefinitionState,
@@ -22,8 +24,6 @@ from agent_interlock import (
 from agent_interlock.canonical import canonical_json
 from agent_interlock.postgres_ledger import LedgerTenantMismatch
 from agent_interlock.postgres_stores import _revision_record_from, _revision_record_value
-
-from test_postgres_stores import ScriptedConnection
 
 TENANT_A = "tenant-a"
 
@@ -110,8 +110,7 @@ class PostgreSQLRevisionStoreUnitTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_A")
-    and os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"),
+    os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_A") and os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"),
     "set tenant PostgreSQL DSNs to run the live revision-store integration",
 )
 class PostgreSQLRevisionStoreIntegrationTests(unittest.TestCase):

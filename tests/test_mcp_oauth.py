@@ -4,6 +4,9 @@ import time
 import unittest
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from mcp_http_fixture import AdversarialMCPHTTPServer
+from mcp_oauth_fixture import AdversarialOAuthServer
+
 from agent_interlock import (
     MCPAuthorizationCodeFlow,
     MCPAuthorizationCodeTokenClient,
@@ -17,8 +20,6 @@ from agent_interlock import (
     pkce_s256_challenge,
     validate_oauth_url,
 )
-from mcp_oauth_fixture import AdversarialOAuthServer
-from mcp_http_fixture import AdversarialMCPHTTPServer
 
 
 def security_profile(**overrides) -> OAuthSecurityProfile:
@@ -72,7 +73,9 @@ def authorized_transaction(server: AdversarialOAuthServer):
 class BearerChallengeTests(unittest.TestCase):
     def test_parses_mixed_challenges_and_authoritative_scope(self):
         challenge = parse_bearer_challenge(
-            'Basic realm="legacy", Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/mcp", scope="mcp.read mcp.call", error="insufficient_scope"'
+            'Basic realm="legacy", Bearer resource_metadata='
+            '"https://mcp.example/.well-known/oauth-protected-resource/mcp", '
+            'scope="mcp.read mcp.call", error="insufficient_scope"'
         )
         self.assertEqual(challenge.scopes, ("mcp.read", "mcp.call"))
         self.assertEqual(challenge.error, "insufficient_scope")
@@ -133,9 +136,7 @@ class OAuthDiscoverySecurityTests(unittest.TestCase):
             with self.assertRaises(MCPOAuthError) as issuer_error:
                 discover(
                     server,
-                    allowed_authorization_server_issuers=frozenset(
-                        {f"{server.base_url}/other-tenant"}
-                    ),
+                    allowed_authorization_server_issuers=frozenset({f"{server.base_url}/other-tenant"}),
                 )
             self.assertEqual(issuer_error.exception.reason_code, "MCP-OAUTH-ISSUER-NOT-ALLOWED")
 
@@ -165,7 +166,10 @@ class OAuthDiscoverySecurityTests(unittest.TestCase):
             server.requested_paths.clear()
             _, result = discover(server, challenge, max_redirect_hops=1)
             self.assertEqual(result.protected_resource.resource, server.endpoint)
-            self.assertEqual(server.requested_paths[:2], ["/redirect-metadata", "/.well-known/oauth-protected-resource/mcp"])
+            self.assertEqual(
+                server.requested_paths[:2],
+                ["/redirect-metadata", "/.well-known/oauth-protected-resource/mcp"],
+            )
 
 
 class AuthorizationCodeFlowTests(unittest.TestCase):

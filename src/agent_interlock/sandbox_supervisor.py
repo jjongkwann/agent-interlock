@@ -15,11 +15,13 @@ rather than silently keep a weaker sandbox running.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from enum import StrEnum
-from typing import Callable, Protocol
+from typing import Protocol
 
 from .ledger import InMemoryLedger, Ledger
 from .mcp_stdio import SandboxAttestation
@@ -147,11 +149,9 @@ class SandboxSupervisor:
             return self._state
 
     def stop(self) -> None:
-        with self._lock:
-            try:
-                self._process.close()
-            except Exception:  # noqa: BLE001 - stopping must not raise
-                pass
+        # stopping must not raise
+        with self._lock, contextlib.suppress(Exception):
+            self._process.close()
 
     # ------------------------------------------------------------------ #
 
@@ -172,10 +172,8 @@ class SandboxSupervisor:
 
     def _restart(self) -> None:
         self._restart_count += 1
-        try:
+        with contextlib.suppress(Exception):
             self._process.close()
-        except Exception:  # noqa: BLE001
-            pass
         try:
             attestation = self._process.start()
         except Exception:  # noqa: BLE001 - failed restart: back off and retry later
@@ -186,10 +184,8 @@ class SandboxSupervisor:
             self._emit(SandboxHealth.DEGRADED, REASON_ATTESTATION_DRIFT, severity="HIGH")
             self._state = SandboxHealth.DEGRADED
             self._restart_count = self._max_restarts  # stop restarting into a swap
-            try:
+            with contextlib.suppress(Exception):
                 self._process.close()
-            except Exception:  # noqa: BLE001
-                pass
             return
         self._attestation = attestation
         self._schedule_backoff()

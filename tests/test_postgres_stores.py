@@ -34,7 +34,12 @@ from agent_interlock import (
 )
 from agent_interlock.canonical import canonical_json
 from agent_interlock.postgres_ledger import LedgerTenantMismatch
-from agent_interlock.postgres_stores import _revision_from, _revision_value, _transaction_from, _transaction_value
+from agent_interlock.postgres_stores import (
+    _revision_from,
+    _revision_value,
+    _transaction_from,
+    _transaction_value,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "migrations/postgresql/0002_distributed_stores.sql"
@@ -44,7 +49,7 @@ PRINCIPAL = (TENANT_A, "agent-1", "subject-1")
 
 
 class ScriptedCursor:
-    def __init__(self, connection: "ScriptedConnection") -> None:
+    def __init__(self, connection: ScriptedConnection) -> None:
         self.connection = connection
 
     def execute(self, query: str, parameters: tuple = ()) -> None:
@@ -137,9 +142,11 @@ def sample_revision() -> ConfigRevision:
 class DriverAndBindingTests(unittest.TestCase):
     def test_from_dsn_without_psycopg_names_the_extra_not_the_dsn(self):
         for cls in (PostgreSQLSessionStore, PostgreSQLOAuthTransactionStore, PostgreSQLConfigStore):
-            with patch.dict(sys.modules, {"psycopg": None}):
-                with self.assertRaises(PostgreSQLDriverUnavailable) as raised:
-                    cls.from_dsn("postgresql://user:hunter2@db/x", bound_tenant_id=TENANT_A)
+            with (
+                patch.dict(sys.modules, {"psycopg": None}),
+                self.assertRaises(PostgreSQLDriverUnavailable) as raised,
+            ):
+                cls.from_dsn("postgresql://user:hunter2@db/x", bound_tenant_id=TENANT_A)
             self.assertIn(cls.__name__, str(raised.exception))
             self.assertNotIn("hunter2", str(raised.exception))
 
@@ -203,7 +210,9 @@ class SessionStoreUnitTests(unittest.TestCase):
 
     def test_replay_parses_messages_after_floor(self):
         connection = ScriptedConnection(
-            (TENANT_A,), ("READY",), [(1, '{"jsonrpc":"2.0","method":"a"}'), (2, '{"jsonrpc":"2.0","method":"b"}')]
+            (TENANT_A,),
+            ("READY",),
+            [(1, '{"jsonrpc":"2.0","method":"a"}'), (2, '{"jsonrpc":"2.0","method":"b"}')],
         )
         events = session_store(connection).replay("sid", PRINCIPAL, None)
         self.assertEqual(
@@ -295,8 +304,7 @@ class MigrationContractTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_A")
-    and os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"),
+    os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_A") and os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"),
     "set tenant PostgreSQL DSNs to run the live store integration",
 )
 class PostgreSQLStoresIntegrationTests(unittest.TestCase):

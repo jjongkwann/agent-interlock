@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Mapping
+from typing import Any
 
 from .canonical import canonical_digest
 from .config_guard import ConfigDecision, ConfigGuard, ConfigPrincipal, ConfigRole, RuntimeConfigProbe
@@ -190,7 +191,10 @@ class MCPToolGateway:
             payload={
                 "mcp": {"serverId": revision.definition.server_id, "method": "tools/call"},
                 "toolDefinition": {"toolId": revision.tool_id, "revisionId": revision.revision_id},
-                "invocation": {"purpose": intent.purpose, "argumentsHash": canonical_digest(arguments)},
+                "invocation": {
+                    "purpose": intent.purpose,
+                    "argumentsHash": canonical_digest(arguments),
+                },
             },
             environment=environment,
             data_source=data_source,
@@ -308,11 +312,7 @@ class MCPToolGateway:
             raise
         self._append_action(pending, ActionResult.COMPLETED, execution_id)
         clean_result, labels = self.inspect_result(pending, execution_id, raw_result)
-        outcome = (
-            SecurityOutcome.SUCCEEDED
-            if decision.decision != ControlDecision.ALLOW
-            else SecurityOutcome.UNKNOWN
-        )
+        outcome = SecurityOutcome.SUCCEEDED if decision.decision != ControlDecision.ALLOW else SecurityOutcome.UNKNOWN
         self._append_outcome(pending, outcome, execution_id)
         result = InvocationResult(clean_result, decision, execution_id, labels)
         self._idempotency[cache_key] = (request_fingerprint, result)
@@ -340,9 +340,7 @@ class MCPToolGateway:
     ) -> tuple[Any, tuple[str, ...]]:
         clean, secret_detected = sanitize_secrets(raw_result)
         schema_value = (
-            clean["structuredContent"]
-            if isinstance(clean, Mapping) and "structuredContent" in clean
-            else clean
+            clean["structuredContent"] if isinstance(clean, Mapping) and "structuredContent" in clean else clean
         )
         schema_errors = validate_schema(schema_value, pending.revision.definition.output_schema)
         labels = ["UNTRUSTED_TOOL_RESULT"]
@@ -350,9 +348,7 @@ class MCPToolGateway:
             labels.append("D5_REDACTED")
         if schema_errors:
             labels.append("SCHEMA_INVALID")
-            if isinstance(clean, Mapping) and any(
-                key in clean for key in ("content", "structuredContent", "isError")
-            ):
+            if isinstance(clean, Mapping) and any(key in clean for key in ("content", "structuredContent", "isError")):
                 clean = {
                     "content": [
                         {
@@ -560,7 +556,11 @@ class MCPToolGateway:
         )
 
     def _append_action(
-        self, pending: _Pending, result: ActionResult, connector_id: str | None, failure: str | None = None
+        self,
+        pending: _Pending,
+        result: ActionResult,
+        connector_id: str | None,
+        failure: str | None = None,
     ) -> None:
         self.ledger.append(
             "ACTION_EXECUTED",
@@ -570,7 +570,11 @@ class MCPToolGateway:
             interaction_id=pending.decision.interaction_id,
             source_actor_id=pending.source.id,
             target_actor_id=pending.target.id,
-            payload={"result": result.value, "connectorExecutionId": connector_id, "failure": failure},
+            payload={
+                "result": result.value,
+                "connectorExecutionId": connector_id,
+                "failure": failure,
+            },
             environment=pending.environment,
             data_source=pending.data_source,
         )

@@ -245,12 +245,16 @@ class MCPProtectedResourceDiscovery:
                 "MCP-OAUTH-RESOURCE-MISMATCH",
                 "protected resource metadata does not identify the configured MCP endpoint",
             )
-        if challenge and challenge.scopes and protected_resource.scopes_supported:
-            if not set(challenge.scopes).issubset(protected_resource.scopes_supported):
-                raise MCPOAuthError(
-                    "MCP-OAUTH-SCOPE-UNSUPPORTED",
-                    "Bearer challenge requests an unsupported scope",
-                )
+        if (
+            challenge
+            and challenge.scopes
+            and protected_resource.scopes_supported
+            and not set(challenge.scopes).issubset(protected_resource.scopes_supported)
+        ):
+            raise MCPOAuthError(
+                "MCP-OAUTH-SCOPE-UNSUPPORTED",
+                "Bearer challenge requests an unsupported scope",
+            )
         issuer = protected_resource.authorization_servers[0]
         server_value: Mapping[str, Any] | None = None
         server_metadata_url = ""
@@ -632,9 +636,8 @@ class MCPAuthorizationCodeTokenClient:
         if not authorization_code or "\r" in authorization_code or "\n" in authorization_code:
             raise MCPOAuthError("MCP-OAUTH-CODE-INVALID", "authorization code is invalid")
         code_digest = hashlib.sha256(authorization_code.encode("utf-8")).hexdigest()
-        if (
-            transaction.authorization_code_digest is None
-            or not secrets.compare_digest(code_digest, transaction.authorization_code_digest)
+        if transaction.authorization_code_digest is None or not secrets.compare_digest(
+            code_digest, transaction.authorization_code_digest
         ):
             raise MCPOAuthError(
                 "MCP-OAUTH-CODE-MISMATCH",
@@ -940,9 +943,13 @@ def validate_oauth_url(
     if not allow_query and parsed.query:
         raise MCPOAuthError("MCP-OAUTH-URL-UNSAFE", "OAuth URL query is not allowed here")
     explicit_loopback = _is_loopback_host(host)
-    if parsed.scheme.casefold() == "https":
-        pass
-    elif parsed.scheme.casefold() == "http" and profile.allow_loopback_http and explicit_loopback and port is not None:
+    if (
+        parsed.scheme.casefold() == "https"
+        or parsed.scheme.casefold() == "http"
+        and profile.allow_loopback_http
+        and explicit_loopback
+        and port is not None
+    ):
         pass
     else:
         raise MCPOAuthError("MCP-OAUTH-URL-UNSAFE", "OAuth URL must use HTTPS")
@@ -1041,8 +1048,10 @@ def _parse_scope(value: str) -> tuple[str, ...]:
 
 
 def _validate_scope_token(value: str) -> None:
-    if not isinstance(value, str) or not value or any(
-        ord(character) < 0x21 or character in {'"', "\\"} for character in value
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(ord(character) < 0x21 or character in {'"', "\\"} for character in value)
     ):
         raise MCPOAuthError("MCP-OAUTH-SCOPE-INVALID", "OAuth scope token is invalid")
 
@@ -1158,7 +1167,10 @@ def _append_oauth_query(endpoint: str, parameters: Mapping[str, str]) -> str:
     existing = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
     protected_names = set(parameters)
     if any(name in protected_names for name, _ in existing):
-        raise MCPOAuthError("MCP-OAUTH-AUTHORIZATION-ENDPOINT-INVALID", "authorization endpoint overrides OAuth parameters")
+        raise MCPOAuthError(
+            "MCP-OAUTH-AUTHORIZATION-ENDPOINT-INVALID",
+            "authorization endpoint overrides OAuth parameters",
+        )
     query = urlencode([*existing, *parameters.items()])
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
 

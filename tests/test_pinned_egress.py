@@ -107,9 +107,7 @@ class PinnedSocketEgressTests(unittest.TestCase):
 
     def test_allowed_destination_connects_pinned_and_hands_off_the_socket(self):
         calls: list[str] = []
-        backend = PinnedSocketEgressBackend(
-            resolver=resolver_to("127.0.0.1", calls), require_global_addresses=False
-        )
+        backend = PinnedSocketEgressBackend(resolver=resolver_to("127.0.0.1", calls), require_global_addresses=False)
         self.addCleanup(backend.close_all)
         receipt = self.guard(backend, self.fixture.port).execute(request(self.fixture.port))
         self.assertEqual(receipt.decision, ControlDecision.ALLOW)
@@ -144,9 +142,7 @@ class PinnedSocketEgressTests(unittest.TestCase):
         probe.bind(("127.0.0.1", 0))
         closed_port = probe.getsockname()[1]
         probe.close()
-        backend = PinnedSocketEgressBackend(
-            resolver=resolver_to("127.0.0.1", []), require_global_addresses=False
-        )
+        backend = PinnedSocketEgressBackend(resolver=resolver_to("127.0.0.1", []), require_global_addresses=False)
         receipt = self.guard(backend, closed_port).execute(request(closed_port))
         self.assertEqual(receipt.decision, ControlDecision.BLOCK)
         self.assertIn("L1-M4-EGRESS-BACKEND-INVALID", receipt.reason_codes)
@@ -154,9 +150,7 @@ class PinnedSocketEgressTests(unittest.TestCase):
 
     def test_denied_destination_never_reaches_dns_or_socket(self):
         calls: list[str] = []
-        backend = PinnedSocketEgressBackend(
-            resolver=resolver_to("127.0.0.1", calls), require_global_addresses=False
-        )
+        backend = PinnedSocketEgressBackend(resolver=resolver_to("127.0.0.1", calls), require_global_addresses=False)
         denied = EgressRequest(
             tenant_id=TENANT,
             workload_id=WORKLOAD,

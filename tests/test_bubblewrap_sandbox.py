@@ -39,7 +39,13 @@ def launcher() -> StdioArtifactPin:
     return StdioArtifactPin(sys.executable, sha256_file(sys.executable))
 
 
-def profile(*, allow_network=False, allow_child_processes=True, writable_paths=(), read_only_paths=(str(FIXTURE),)):
+def profile(
+    *,
+    allow_network=False,
+    allow_child_processes=True,
+    writable_paths=(),
+    read_only_paths=(str(FIXTURE),),
+):
     return StdioSandboxProfile(
         profile_id="bwrap-fixture",
         executable=StdioArtifactPin(sys.executable, sha256_file(sys.executable)),
@@ -62,14 +68,22 @@ class BubblewrapArgvTests(unittest.TestCase):
         plan = backend().prepare(profile())
         argv = plan.argv
         self.assertEqual(argv[0], RESOLVED_EXE)
-        for flag in ("--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session", "--clearenv", "--remount-ro"):
+        for flag in (
+            "--unshare-all",
+            "--unshare-user",
+            "--disable-userns",
+            "--die-with-parent",
+            "--new-session",
+            "--clearenv",
+            "--remount-ro",
+        ):
             self.assertIn(flag, argv)
         self.assertNotIn("--share-net", argv)  # network denied by default
         # Pinned executable and fixture are read-only bound.
         self.assertIn("--ro-bind", argv)
         # Command is passed after the argument separator, unchanged.
         separator = argv.index("--")
-        self.assertEqual(argv[separator + 1:], (RESOLVED_EXE, str(FIXTURE), "normal", "-", "-"))
+        self.assertEqual(argv[separator + 1 :], (RESOLVED_EXE, str(FIXTURE), "normal", "-", "-"))
 
     def test_environment_is_reconstructed_and_equals_the_profile(self):
         secure_profile = profile()

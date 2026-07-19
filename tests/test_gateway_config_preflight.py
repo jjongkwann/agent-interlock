@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import unittest
 
+from l1_harness import TENANT, agent_config, build_gateway, seed_revision
+from test_l1_matrix import BENIGN_ARGS
+
 from agent_interlock import (
     AgentConfig,
     ConfigGuard,
@@ -13,10 +16,6 @@ from agent_interlock import (
     InMemoryRuntimeConfigProbe,
     MCPToolGateway,
 )
-
-from l1_harness import TENANT, agent_config, build_gateway, seed_revision
-from test_l1_matrix import BENIGN_ARGS
-
 from agent_interlock.models import InvocationIntent
 
 

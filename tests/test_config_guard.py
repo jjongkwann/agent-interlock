@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import unittest
 
+from l1_harness import (
+    CONFIG_TRUSTED_KEYS,
+    TENANT,
+    agent_config,
+    config_approval,
+    seed_revision,
+)
+
 from agent_interlock import (
     ConfigGuard,
     ConfigGuardError,
@@ -11,14 +19,6 @@ from agent_interlock import (
     ControlDecision,
     InMemoryConfigStore,
     InMemoryRuntimeConfigProbe,
-)
-
-from l1_harness import (
-    CONFIG_TRUSTED_KEYS,
-    TENANT,
-    agent_config,
-    config_approval,
-    seed_revision,
 )
 
 OPERATOR = ConfigPrincipal(TENANT, "operator", ConfigRole.OPERATOR)
@@ -38,14 +38,30 @@ class ConfigGuardBase(unittest.TestCase):
 
     def two_valid_approvals(self, candidate, *, commit="c1", rollback_ref=None):
         return (
-            config_approval(candidate, before_digest=self.base.digest, commit=commit, rollback_ref=rollback_ref, approver_id="alice", key_id="key-a"),
-            config_approval(candidate, before_digest=self.base.digest, commit=commit, rollback_ref=rollback_ref, approver_id="bob", key_id="key-b"),
+            config_approval(
+                candidate,
+                before_digest=self.base.digest,
+                commit=commit,
+                rollback_ref=rollback_ref,
+                approver_id="alice",
+                key_id="key-a",
+            ),
+            config_approval(
+                candidate,
+                before_digest=self.base.digest,
+                commit=commit,
+                rollback_ref=rollback_ref,
+                approver_id="bob",
+                key_id="key-b",
+            ),
         )
 
 
 class ReadProjectionTests(ConfigGuardBase):
     def test_agent_role_read_is_minimized(self):
-        view, decision = self.guard.read(ConfigPrincipal(TENANT, "agent.support", ConfigRole.AGENT), self.base.config_id)
+        view, decision = self.guard.read(
+            ConfigPrincipal(TENANT, "agent.support", ConfigRole.AGENT), self.base.config_id
+        )
         self.assertEqual(decision.decision, ControlDecision.SANITIZE)
         self.assertIn("L1-M7-CONFIG-READ-MINIMIZED", decision.reason_codes)
         self.assertNotIn("secretRefs", view)
@@ -81,9 +97,24 @@ class DeployTests(ConfigGuardBase):
 
     def test_single_approval_is_two_person_denied(self):
         changed = self.changed()
-        approvals = (config_approval(changed, before_digest=self.base.digest, commit="c1", rollback_ref=None, approver_id="alice", key_id="key-a"),)
+        approvals = (
+            config_approval(
+                changed,
+                before_digest=self.base.digest,
+                commit="c1",
+                rollback_ref=None,
+                approver_id="alice",
+                key_id="key-a",
+            ),
+        )
         with self.assertRaises(ConfigGuardError) as raised:
-            self.guard.deploy(OPERATOR, changed, commit="c1", approvals=approvals, expected_active_digest=self.base.digest)
+            self.guard.deploy(
+                OPERATOR,
+                changed,
+                commit="c1",
+                approvals=approvals,
+                expected_active_digest=self.base.digest,
+            )
         self.assertIn("L1-M7-TWO-PERSON-APPROVAL-REQUIRED", raised.exception.decision.reason_codes)
         self.assertEqual(self.store.write_count, 0)
         self.assertEqual(self.store.active(TENANT, self.base.config_id).config_digest, self.base.digest)
@@ -91,20 +122,60 @@ class DeployTests(ConfigGuardBase):
     def test_two_signatures_from_one_person_are_insufficient(self):
         changed = self.changed()
         approvals = (
-            config_approval(changed, before_digest=self.base.digest, commit="c1", rollback_ref=None, approver_id="alice", key_id="key-a"),
-            config_approval(changed, before_digest=self.base.digest, commit="c1", rollback_ref=None, approver_id="alice", key_id="key-b"),
+            config_approval(
+                changed,
+                before_digest=self.base.digest,
+                commit="c1",
+                rollback_ref=None,
+                approver_id="alice",
+                key_id="key-a",
+            ),
+            config_approval(
+                changed,
+                before_digest=self.base.digest,
+                commit="c1",
+                rollback_ref=None,
+                approver_id="alice",
+                key_id="key-b",
+            ),
         )
         with self.assertRaises(ConfigGuardError) as raised:
-            self.guard.deploy(OPERATOR, changed, commit="c1", approvals=approvals, expected_active_digest=self.base.digest)
+            self.guard.deploy(
+                OPERATOR,
+                changed,
+                commit="c1",
+                approvals=approvals,
+                expected_active_digest=self.base.digest,
+            )
         self.assertIn("L1-M7-TWO-PERSON-APPROVAL-REQUIRED", raised.exception.decision.reason_codes)
 
     def test_forged_signature_is_rejected(self):
         changed = self.changed()
         # Signed for a different commit than the deploy actually uses.
-        forged = config_approval(changed, before_digest=self.base.digest, commit="OTHER", rollback_ref=None, approver_id="alice", key_id="key-a")
-        good = config_approval(changed, before_digest=self.base.digest, commit="c1", rollback_ref=None, approver_id="bob", key_id="key-b")
+        forged = config_approval(
+            changed,
+            before_digest=self.base.digest,
+            commit="OTHER",
+            rollback_ref=None,
+            approver_id="alice",
+            key_id="key-a",
+        )
+        good = config_approval(
+            changed,
+            before_digest=self.base.digest,
+            commit="c1",
+            rollback_ref=None,
+            approver_id="bob",
+            key_id="key-b",
+        )
         with self.assertRaises(ConfigGuardError) as raised:
-            self.guard.deploy(OPERATOR, changed, commit="c1", approvals=(good, forged), expected_active_digest=self.base.digest)
+            self.guard.deploy(
+                OPERATOR,
+                changed,
+                commit="c1",
+                approvals=(good, forged),
+                expected_active_digest=self.base.digest,
+            )
         self.assertIn("L1-M7-CONFIG-SIGNATURE-INVALID", raised.exception.decision.reason_codes)
         self.assertEqual(self.store.write_count, 0)
 

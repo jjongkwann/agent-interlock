@@ -182,8 +182,7 @@ class SupervisorHealthTests(unittest.TestCase):
         supervisor = make(process)
         supervisor.start()
         event = [
-            e for e in supervisor.ledger.trace(TENANT, supervisor._trace_id)
-            if e.event_type == "CONTROL_HEALTH_CHANGED"
+            e for e in supervisor.ledger.trace(TENANT, supervisor._trace_id) if e.event_type == "CONTROL_HEALTH_CHANGED"
         ][0]
         self.assertEqual(event.payload["control"]["policyId"], "sandbox-supervisor")
         self.assertEqual(event.relationship_id, "REL-11")

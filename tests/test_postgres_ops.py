@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-import uuid
 from datetime import date
 from pathlib import Path
 

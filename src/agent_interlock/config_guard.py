@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from .canonical import canonical_digest
 from .ledger import InMemoryLedger, Ledger
@@ -62,7 +63,10 @@ class ConfiguredTool:
     requires_approval: bool = True
 
     def canonical_value(self) -> dict[str, Any]:
-        return {"definition": self.definition.canonical_value(), "requiresApproval": self.requires_approval}
+        return {
+            "definition": self.definition.canonical_value(),
+            "requiresApproval": self.requires_approval,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +211,17 @@ class InMemoryRuntimeConfigProbe:
 # --------------------------------------------------------------------------- #
 
 _ALL_FIELDS = frozenset(
-    {"toolEndpoints", "requiresApproval", "triggerRefs", "promptRefs", "secretRefs", "digest", "commit", "rollbackRef", "approvals"}
+    {
+        "toolEndpoints",
+        "requiresApproval",
+        "triggerRefs",
+        "promptRefs",
+        "secretRefs",
+        "digest",
+        "commit",
+        "rollbackRef",
+        "approvals",
+    }
 )
 
 
@@ -219,15 +233,17 @@ def _project(revision: ConfigRevision, role: ConfigRole) -> tuple[dict[str, Any]
         "agentId": config.agent_id,
     }
     returned: set[str] = set()
-    minimal_tools = [
-        {"toolId": tool.definition.tool_id, "title": tool.definition.title} for tool in config.tools
-    ]
+    minimal_tools = [{"toolId": tool.definition.tool_id, "title": tool.definition.title} for tool in config.tools]
     if role is ConfigRole.AGENT:
         view["tools"] = minimal_tools
     else:
         view["tools"] = [
-            {**base, "endpoint": tool.definition.endpoint, "requiresApproval": tool.requires_approval}
-            for base, tool in zip(minimal_tools, config.tools)
+            {
+                **base,
+                "endpoint": tool.definition.endpoint,
+                "requiresApproval": tool.requires_approval,
+            }
+            for base, tool in zip(minimal_tools, config.tools, strict=False)
         ]
         returned |= {"toolEndpoints", "requiresApproval", "triggerRefs", "promptRefs", "secretRefs"}
         view["triggerRefs"] = list(config.trigger_refs)
@@ -238,9 +254,7 @@ def _project(revision: ConfigRevision, role: ConfigRole) -> tuple[dict[str, Any]
         view["digest"] = revision.config_digest
         view["commit"] = revision.commit
         view["rollbackRef"] = revision.rollback_ref
-        view["approvals"] = [
-            {"approverId": item.approver_id, "keyId": item.key_id} for item in revision.approvals
-        ]
+        view["approvals"] = [{"approverId": item.approver_id, "keyId": item.key_id} for item in revision.approvals]
     return view, frozenset(_ALL_FIELDS - returned)
 
 
@@ -263,7 +277,9 @@ class ConfigGuard:
         self.ledger = ledger or InMemoryLedger()
         self._trusted_keys = {key_id: key for key_id, key in (trusted_keys or {}).items() if key}
 
-    def read(self, principal: ConfigPrincipal, config_id: str, *, trace_id: str | None = None) -> tuple[dict[str, Any], ConfigDecision]:
+    def read(
+        self, principal: ConfigPrincipal, config_id: str, *, trace_id: str | None = None
+    ) -> tuple[dict[str, Any], ConfigDecision]:
         revision = self.store.active(principal.tenant_id, config_id)
         if revision is None:
             decision = self._decision(ControlDecision.BLOCK, (REASON_WRITE_DENIED,), {"reason": "config not found"})
@@ -342,7 +358,11 @@ class ConfigGuard:
         decision = self._decision(
             ControlDecision.ALLOW,
             (),
-            {**evidence, "approvers": sorted(a.approver_id for a in valid), "keyIds": sorted(a.key_id for a in valid)},
+            {
+                **evidence,
+                "approvers": sorted(a.approver_id for a in valid),
+                "keyIds": sorted(a.key_id for a in valid),
+            },
         )
         self._emit(principal, candidate.config_id, decision, trace_id)
         return active
@@ -367,10 +387,18 @@ class ConfigGuard:
         self._emit(principal, config_id, decision, trace_id)
         return decision
 
-    def _decision(self, decision: ControlDecision, reasons: tuple[str, ...], evidence: Mapping[str, Any]) -> ConfigDecision:
+    def _decision(
+        self, decision: ControlDecision, reasons: tuple[str, ...], evidence: Mapping[str, Any]
+    ) -> ConfigDecision:
         return ConfigDecision(decision, reasons, dict(evidence), interaction_id=str(uuid.uuid4()))
 
-    def _emit(self, principal: ConfigPrincipal, config_id: str, decision: ConfigDecision, trace_id: str | None) -> None:
+    def _emit(
+        self,
+        principal: ConfigPrincipal,
+        config_id: str,
+        decision: ConfigDecision,
+        trace_id: str | None,
+    ) -> None:
         self.ledger.append(
             "CONTROL_EVALUATED",
             tenant_id=principal.tenant_id,

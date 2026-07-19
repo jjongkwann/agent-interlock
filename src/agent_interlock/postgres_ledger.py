@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any, Callable, Iterator, Mapping, Protocol
+from typing import Any, Protocol
 
 from .canonical import canonical_json
 from .ledger import (
@@ -117,7 +118,7 @@ class PostgreSQLLedger:
         bound_tenant_id: str,
         max_unpaged_events: int = 5_000,
         connect_timeout_seconds: int = 5,
-    ) -> "PostgreSQLLedger":
+    ) -> PostgreSQLLedger:
         if not dsn:
             raise ValueError("dsn is required")
         if not 1 <= connect_timeout_seconds <= 30:
@@ -170,9 +171,7 @@ class PostgreSQLLedger:
     ) -> Event:
         self._require_bound_tenant(tenant_id)
         if idempotency_key is not None and (
-            not isinstance(idempotency_key, str)
-            or not idempotency_key
-            or len(idempotency_key) > 200
+            not isinstance(idempotency_key, str) or not idempotency_key or len(idempotency_key) > 200
         ):
             raise ValueError("idempotency_key must be between 1 and 200 characters")
         event = build_event(
@@ -227,9 +226,7 @@ class PostgreSQLLedger:
                         if existing is None:
                             raise LedgerError("idempotency reservation is not visible")
                         if existing[2] != request_hash:
-                            raise LedgerIdempotencyConflict(
-                                "idempotency key is already bound to another event"
-                            )
+                            raise LedgerIdempotencyConflict("idempotency key is already bound to another event")
                         loaded = self._load_event(cursor, tenant_id, existing[0], existing[1])
                         if loaded is None:
                             raise LedgerError("idempotency record has no event")
@@ -316,9 +313,7 @@ class PostgreSQLLedger:
             finally:
                 cursor.close()
         if len(rows) > self.max_unpaged_events:
-            raise LedgerQueryLimitExceeded(
-                "unpaged Ledger query exceeded max_unpaged_events; use query_trace"
-            )
+            raise LedgerQueryLimitExceeded("unpaged Ledger query exceeded max_unpaged_events; use query_trace")
         return tuple(_event_from_row(row) for row in rows)
 
     @staticmethod
@@ -354,9 +349,7 @@ class PostgreSQLLedger:
             finally:
                 cursor.close()
             if row is None or row[0] != self.bound_tenant_id:
-                raise LedgerTenantMismatch(
-                    "authenticated PostgreSQL role does not match the Ledger tenant binding"
-                )
+                raise LedgerTenantMismatch("authenticated PostgreSQL role does not match the Ledger tenant binding")
             yield connection
             connection.commit()
         except Exception:

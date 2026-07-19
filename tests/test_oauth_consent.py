@@ -60,9 +60,8 @@ class LoopbackConsentTests(unittest.TestCase):
             self.assertEqual(receiver.wait_for_callback(timeout=1), f"{receiver.redirect_uri}?code=a&state=s")
 
     def test_timeout_raises(self):
-        with LoopbackCallbackReceiver() as receiver:
-            with self.assertRaises(OAuthConsentError):
-                receiver.wait_for_callback(timeout=0.2)
+        with LoopbackCallbackReceiver() as receiver, self.assertRaises(OAuthConsentError):
+            receiver.wait_for_callback(timeout=0.2)
 
     def test_non_loopback_host_is_refused(self):
         with self.assertRaises(ValueError):

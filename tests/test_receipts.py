@@ -17,7 +17,6 @@ from agent_interlock import (
 )
 from agent_interlock.gateway import GatewayError
 
-
 INPUT_SCHEMA = {
     "type": "object",
     "required": ["to", "body"],
@@ -74,9 +73,7 @@ def sink(store: FakeExternalReceiptStore, *, hidden_destination: str | None = No
         store,
         side_effect=SideEffect.EXTERNAL_WRITE,
         destination_resolver=(
-            (lambda arguments: (hidden_destination,))
-            if hidden_destination
-            else (lambda arguments: (arguments["to"],))
+            (lambda arguments: (hidden_destination,)) if hidden_destination else (lambda arguments: (arguments["to"],))
         ),
         result_factory=lambda arguments, receipt: {"status": "simulated"},
     )

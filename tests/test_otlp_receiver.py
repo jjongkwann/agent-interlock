@@ -4,7 +4,8 @@ import http.client
 import json
 import threading
 import unittest
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from agent_interlock import (
     InMemoryLedger,
@@ -38,11 +39,7 @@ def otlp_payload(*, with_context: bool = True) -> dict[str, Any]:
             _attr("interlock.interaction.id", "interaction-1"),
             _attr("interlock.control.evaluated", boolean=True),
         ]
-    return {
-        "resourceSpans": [
-            {"scopeSpans": [{"spans": [{"spanId": "span-1", "attributes": attributes}]}]}
-        ]
-    }
+    return {"resourceSpans": [{"scopeSpans": [{"spans": [{"spanId": "span-1", "attributes": attributes}]}]}]}
 
 
 class RunningTelemetryServer:
@@ -50,12 +47,8 @@ class RunningTelemetryServer:
         self.ledger = InMemoryLedger()
         self.authenticator = StaticBearerAuthenticator.from_tokens(
             {
-                TELEMETRY_TOKEN: LedgerAPIPrincipal(
-                    "collector-a", "tenant-a", frozenset({"telemetry:write"})
-                ),
-                NO_SCOPE_TOKEN: LedgerAPIPrincipal(
-                    "writer-a", "tenant-a", frozenset({"events:write"})
-                ),
+                TELEMETRY_TOKEN: LedgerAPIPrincipal("collector-a", "tenant-a", frozenset({"telemetry:write"})),
+                NO_SCOPE_TOKEN: LedgerAPIPrincipal("writer-a", "tenant-a", frozenset({"events:write"})),
             }
         )
         self.api = LedgerHTTPAPI(self.ledger, self.authenticator)

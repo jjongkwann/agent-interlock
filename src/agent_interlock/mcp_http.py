@@ -461,9 +461,8 @@ class MCPHTTPGatewayConfig:
 
 
 InboundAuthenticator = Callable[[str | None], MCPHTTPPrincipal | None]
-InvocationContextResolver = Callable[
-    [MCPHTTPPrincipal, Mapping[str, Any]], MCPInvocationContext | None
-]
+InvocationContextResolver = Callable[[MCPHTTPPrincipal, Mapping[str, Any]], MCPInvocationContext | None]
+
 
 @dataclass(slots=True)
 class _StoredSession:
@@ -932,7 +931,7 @@ def create_mcp_http_server(
             if response.body:
                 self.wfile.write(response.body)
 
-        def log_message(self, format: str, *args: Any) -> None:
+        def log_message(self, fmt: str, *args: Any) -> None:
             return
 
     return ThreadingHTTPServer((host, port), Handler)
@@ -992,9 +991,7 @@ def _jsonrpc_shape_error(message: Mapping[str, Any]) -> str | None:
     if not isinstance(method, str) or not method:
         return "MCP-JSONRPC-METHOD-INVALID"
     request_id = message.get("id")
-    if "id" in message and (
-        not isinstance(request_id, (str, int)) or isinstance(request_id, bool)
-    ):
+    if "id" in message and (not isinstance(request_id, (str, int)) or isinstance(request_id, bool)):
         return "MCP-JSONRPC-ID-INVALID"
     if "params" in message and not isinstance(message["params"], Mapping):
         return "MCP-JSONRPC-PARAMS-INVALID"
@@ -1027,7 +1024,7 @@ def _new_session_id() -> str:
 
 def _sse_frame(event_id: int, message: Mapping[str, Any]) -> bytes:
     data = json.dumps(message, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-    return f"id: {event_id}\ndata: {data}\n\n".encode("utf-8")
+    return f"id: {event_id}\ndata: {data}\n\n".encode()
 
 
 def _parse_last_event_id(value: str | None) -> int | None:

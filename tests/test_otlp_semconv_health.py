@@ -51,12 +51,30 @@ class OtlpNormalizationTests(unittest.TestCase):
                                 {
                                     "spanId": "s1",
                                     "attributes": [
-                                        {"key": "interlock.source_actor_id", "value": {"stringValue": "agent.support"}},
-                                        {"key": "interlock.target_actor_id", "value": {"stringValue": "tool.send-email"}},
-                                        {"key": "interlock.relationship_type", "value": {"stringValue": "INVOKES"}},
-                                        {"key": "interlock.relationship_id", "value": {"stringValue": "REL-05"}},
-                                        {"key": "interlock.interaction_id", "value": {"stringValue": "i1"}},
-                                        {"key": "interlock.control_evaluated", "value": {"boolValue": True}},
+                                        {
+                                            "key": "interlock.source_actor_id",
+                                            "value": {"stringValue": "agent.support"},
+                                        },
+                                        {
+                                            "key": "interlock.target_actor_id",
+                                            "value": {"stringValue": "tool.send-email"},
+                                        },
+                                        {
+                                            "key": "interlock.relationship_type",
+                                            "value": {"stringValue": "INVOKES"},
+                                        },
+                                        {
+                                            "key": "interlock.relationship_id",
+                                            "value": {"stringValue": "REL-05"},
+                                        },
+                                        {
+                                            "key": "interlock.interaction_id",
+                                            "value": {"stringValue": "i1"},
+                                        },
+                                        {
+                                            "key": "interlock.control_evaluated",
+                                            "value": {"boolValue": True},
+                                        },
                                     ],
                                 }
                             ]
@@ -92,7 +110,9 @@ class ControlHealthReporterTests(unittest.TestCase):
 
     def test_import_issues_emit_degraded(self):
         result = RuntimeTelemetryImport(
-            "OTLP_JSON", (), frozenset(),
+            "OTLP_JSON",
+            (),
+            frozenset(),
             (TelemetryImportIssue("TELEMETRY_INTEGRITY_INVALID", "bad"),),
         )
         event_id = self.reporter.report_telemetry_import(result)

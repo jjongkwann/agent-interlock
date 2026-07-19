@@ -14,7 +14,6 @@ from agent_interlock import (
     SideEffect,
 )
 
-
 INPUT_SCHEMA = {
     "type": "object",
     "required": ["to", "body"],
@@ -286,9 +285,7 @@ class MCPTransportVerticalSliceTests(unittest.TestCase):
     def test_list_changed_refresh_quarantines_removed_active_tool(self):
         adapter, gateway, server, _, revision = bound_adapter()
         server.tools = []
-        notification = adapter.handle_server_message(
-            {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
-        )
+        notification = adapter.handle_server_message({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
         self.assertEqual(notification["method"], "notifications/tools/list_changed")
         self.assertEqual(gateway.registry.get(revision.revision_id).state, DefinitionState.QUARANTINED)
         self.assertIn(

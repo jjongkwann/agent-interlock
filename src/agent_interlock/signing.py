@@ -47,9 +47,7 @@ def _require_cryptography() -> None:
     try:
         import cryptography  # noqa: F401
     except ImportError:
-        raise SigningBackendUnavailable(
-            "asymmetric signing requires the 'jwt' extra (cryptography)"
-        ) from None
+        raise SigningBackendUnavailable("asymmetric signing requires the 'jwt' extra (cryptography)") from None
 
 
 def sign_canonical_ed25519(value: Any, private_key: bytes) -> str:
@@ -78,7 +76,7 @@ def verify_canonical_ed25519(value: Any, signature: str, public_key: bytes) -> b
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     try:
-        raw = bytes.fromhex(signature[len(prefix):])
+        raw = bytes.fromhex(signature[len(prefix) :])
         Ed25519PublicKey.from_public_bytes(public_key).verify(raw, canonical_json(value))
         return True
     except (InvalidSignature, ValueError):

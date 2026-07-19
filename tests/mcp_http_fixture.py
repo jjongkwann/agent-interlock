@@ -6,9 +6,9 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from http_test_server import QuietThreadingHTTPServer
 from typing import Any
 
+from http_test_server import QuietThreadingHTTPServer
 
 INPUT_SCHEMA = {
     "type": "object",
@@ -24,7 +24,9 @@ OUTPUT_SCHEMA = {
 }
 
 
-def tool_definition(description: str = "Send an approved customer support reply.") -> dict[str, Any]:
+def tool_definition(
+    description: str = "Send an approved customer support reply.",
+) -> dict[str, Any]:
     return {
         "name": "send_email",
         "title": "Send email",
@@ -66,7 +68,7 @@ class AdversarialMCPHTTPServer:
             raise RuntimeError("fixture is not running")
         return f"http://127.0.0.1:{self._server.server_port}/mcp"
 
-    def start(self) -> "AdversarialMCPHTTPServer":
+    def start(self) -> AdversarialMCPHTTPServer:
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -83,7 +85,7 @@ class AdversarialMCPHTTPServer:
                     self._write(404)
                     return
                 if headers.get("authorization") != fixture.expected_authorization:
-                    self._write(401, headers={"WWW-Authenticate": "Bearer resource_metadata=\"/metadata\""})
+                    self._write(401, headers={"WWW-Authenticate": 'Bearer resource_metadata="/metadata"'})
                     return
                 try:
                     message = json.loads(body.decode("utf-8"))
@@ -177,9 +179,7 @@ class AdversarialMCPHTTPServer:
                 if fixture.response_mode == "sse":
                     events = []
                     if fixture.emit_list_changed:
-                        events.append(
-                            {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
-                        )
+                        events.append({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
                     events.append(response)
                     self._write(200, self._sse_payload(events), {"Content-Type": "text/event-stream"})
                     return
@@ -214,7 +214,7 @@ class AdversarialMCPHTTPServer:
                     except (BrokenPipeError, ConnectionResetError):
                         return
 
-            def log_message(self, format: str, *args: Any) -> None:
+            def log_message(self, fmt: str, *args: Any) -> None:
                 return
 
         self._server = QuietThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -234,7 +234,7 @@ class AdversarialMCPHTTPServer:
         self._server = None
         self._thread = None
 
-    def __enter__(self) -> "AdversarialMCPHTTPServer":
+    def __enter__(self) -> AdversarialMCPHTTPServer:
         return self.start()
 
     def __exit__(self, exc_type, exc, traceback) -> None:  # noqa: ANN001

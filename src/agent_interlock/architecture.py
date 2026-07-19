@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from fnmatch import fnmatchcase
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from .ledger import Event, Ledger
 from .models import ActorSpec, ActorType, ControlDecision, FailureMode, LinkPolicy, PolicyMode, SideEffect
@@ -152,7 +153,7 @@ class ArchitectureGraph:
         return {node.id: node for node in self.nodes}
 
     @classmethod
-    def from_dict(cls, manifest: Mapping[str, Any]) -> "ArchitectureGraph":
+    def from_dict(cls, manifest: Mapping[str, Any]) -> ArchitectureGraph:
         if manifest.get("apiVersion") != "interlock.dev/v1alpha1":
             raise ValueError("manifest apiVersion must be interlock.dev/v1alpha1")
         if manifest.get("kind") != "Architecture":
@@ -161,9 +162,7 @@ class ArchitectureGraph:
         spec = _mapping(manifest.get("spec"), "spec")
         nodes = tuple(_parse_node(item) for item in _sequence(spec.get("nodes"), "spec.nodes"))
         node_types = {node.id: node.actor.type for node in nodes}
-        edges = tuple(
-            _parse_edge(item, node_types) for item in _sequence(spec.get("edges"), "spec.edges")
-        )
+        edges = tuple(_parse_edge(item, node_types) for item in _sequence(spec.get("edges"), "spec.edges"))
         return cls(
             id=_required_string(metadata, "id"),
             version=_required_string(metadata, "version"),
@@ -231,9 +230,7 @@ class CompiledArchitecture:
 
     def build_interlock(self, ledger: Ledger | None = None) -> Interlock:
         runtime = Interlock(ledger)
-        actor_handles = {
-            actor_id: runtime.define_actor(actor) for actor_id, actor in self.actors.items()
-        }
+        actor_handles = {actor_id: runtime.define_actor(actor) for actor_id, actor in self.actors.items()}
         for edge in self.graph.edges:
             actor_handles[edge.source].connect(actor_handles[edge.target], self.links[edge.id])
         return runtime
@@ -273,9 +270,7 @@ class ArchitectureLinter:
         findings.extend(self._delegation_cycles(graph))
         return tuple(findings)
 
-    def _lint_edge(
-        self, edge: ArchitectureEdge, nodes: Mapping[str, ArchitectureNode]
-    ) -> list[ArchitectureFinding]:
+    def _lint_edge(self, edge: ArchitectureEdge, nodes: Mapping[str, ArchitectureNode]) -> list[ArchitectureFinding]:
         findings: list[ArchitectureFinding] = []
         source = nodes[edge.source].actor
         target = nodes[edge.target].actor
@@ -296,7 +291,7 @@ class ArchitectureLinter:
                     FindingSeverity.CRITICAL,
                     "relationship has no declared security control",
                     edge_id=edge.id,
-                    remediation="Attach a control with an explicit enforcement point and assurance level.",
+                    remediation=("Attach a control with an explicit enforcement point and assurance level."),
                 )
             )
             return findings
@@ -308,8 +303,7 @@ class ArchitectureLinter:
             else {AssuranceLevel.ENFORCED, AssuranceLevel.RECONCILED}
         )
         if required and not any(
-            control.enforcement_point == required
-            and control.assurance in acceptable_assurance
+            control.enforcement_point == required and control.assurance in acceptable_assurance
             for control in edge.controls
         ):
             findings.append(
@@ -339,7 +333,7 @@ class ArchitectureLinter:
                         FindingSeverity.WARNING,
                         f"control {control.id} is declared but has no runtime assurance",
                         edge_id=edge.id,
-                        remediation="Connect the declared control to an enforcement or observation adapter.",
+                        remediation=("Connect the declared control to an enforcement or observation adapter."),
                     )
                 )
             if control.objective == SecurityObjective.PREVENT and control.timing == ControlTiming.POST_EXECUTION:
@@ -349,7 +343,7 @@ class ArchitectureLinter:
                         FindingSeverity.CRITICAL,
                         f"control {control.id} cannot prevent an action after execution",
                         edge_id=edge.id,
-                        remediation="Move it to PRE_EXECUTION or change the objective to DETECT/RESPOND.",
+                        remediation=("Move it to PRE_EXECUTION or change the objective to DETECT/RESPOND."),
                     )
                 )
 
@@ -360,7 +354,7 @@ class ArchitectureLinter:
                     FindingSeverity.CRITICAL,
                     "credential data class D5 is allowed across the relationship",
                     edge_id=edge.id,
-                    remediation="Deny D5 and use opaque credential references with a credential broker.",
+                    remediation=("Deny D5 and use opaque credential references with a credential broker."),
                 )
             )
         if edge.relationship_id in self._high_risk_relationships:
@@ -433,9 +427,7 @@ class ArchitectureLinter:
                     )
                 )
             if not (
-                edge.policy.require_actor_binding
-                and edge.policy.require_audience
-                and edge.policy.require_resource
+                edge.policy.require_actor_binding and edge.policy.require_audience and edge.policy.require_resource
             ):
                 findings.append(
                     ArchitectureFinding(
@@ -543,7 +535,7 @@ class ArchitectureLinter:
                         FindingSeverity.HIGH,
                         f"delegation cycle detected at {node}",
                         node_id=node,
-                        remediation="Break the cycle or require a strict decreasing delegation budget.",
+                        remediation=("Break the cycle or require a strict decreasing delegation budget."),
                     )
                 )
                 return
@@ -617,9 +609,7 @@ def compare_runtime(graph: ArchitectureGraph, events: Iterable[Event]) -> Runtim
         )
         observed.append(item)
     evaluated = {
-        event.interaction_id
-        for event in event_list
-        if event.event_type == "CONTROL_EVALUATED" and event.interaction_id
+        event.interaction_id for event in event_list if event.event_type == "CONTROL_EVALUATED" and event.interaction_id
     }
     return compare_observed_runtime(graph, observed, evaluated)
 
@@ -640,20 +630,14 @@ def compare_observed_runtime(
             return False
         if not edge.dynamic:
             return edge.target == item.target
-        return bool(
-            edge.target_selector and fnmatchcase(item.target, edge.target_selector.id_pattern)
-        )
+        return bool(edge.target_selector and fnmatchcase(item.target, edge.target_selector.id_pattern))
 
     undeclared = tuple(item for item in observed if not any(matches(edge, item) for edge in graph.edges))
-    unobserved = tuple(
-        edge.id for edge in graph.edges if not any(matches(edge, item) for item in observed)
-    )
+    unobserved = tuple(edge.id for edge in graph.edges if not any(matches(edge, item) for item in observed))
     evaluated = set(control_evaluated_interactions)
     bypass = tuple(
         dict.fromkeys(
-            item.interaction_id
-            for item in observed
-            if item.interaction_id and item.interaction_id not in evaluated
+            item.interaction_id for item in observed if item.interaction_id and item.interaction_id not in evaluated
         )
     )
     return RuntimeGraphDiff(undeclared, unobserved, bypass)
@@ -674,9 +658,7 @@ def _parse_node(value: Any) -> ArchitectureNode:
             identity=_required_string(item, "identity"),
             capabilities=frozenset(_strings(item.get("capabilities", []), "capabilities")),
             data_access=frozenset(_strings(item.get("dataAccess", []), "dataAccess")),
-            side_effects=frozenset(
-                SideEffect(value) for value in _strings(item.get("sideEffects", []), "sideEffects")
-            ),
+            side_effects=frozenset(SideEffect(value) for value in _strings(item.get("sideEffects", []), "sideEffects")),
             input_schema=_mapping(item.get("inputSchema", {}), "inputSchema"),
             output_schema=_mapping(item.get("outputSchema", {}), "outputSchema"),
             tenant_mode=str(item.get("tenantMode", "REQUIRED")),
@@ -718,9 +700,7 @@ def _parse_edge(value: Any, node_types: Mapping[str, ActorType]) -> Architecture
         require_resource=bool(policy_value.get("requireResource", True)),
         require_actor_binding=bool(policy_value.get("requireActorBinding", True)),
         max_delegation_depth=int(policy_value.get("maxDelegationDepth", 1)),
-        external_write_requires_approval=bool(
-            policy_value.get("externalWriteRequiresApproval", True)
-        ),
+        external_write_requires_approval=bool(policy_value.get("externalWriteRequiresApproval", True)),
         failure_mode=FailureMode(str(policy_value.get("failureMode", "FAIL_CLOSED"))),
         decision_ttl_seconds=int(policy_value.get("decisionTtlSeconds", 30)),
     )
@@ -731,8 +711,7 @@ def _parse_edge(value: Any, node_types: Mapping[str, ActorType]) -> Architecture
         selector_map = _mapping(selector_value, "edge.targetSelector")
         selector = DynamicTargetSelector(
             actor_types=frozenset(
-                ActorType(value)
-                for value in _strings(selector_map.get("types", []), "targetSelector.types")
+                ActorType(value) for value in _strings(selector_map.get("types", []), "targetSelector.types")
             ),
             required_capabilities=frozenset(
                 _strings(

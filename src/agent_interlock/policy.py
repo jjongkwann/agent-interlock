@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from .canonical import canonical_digest
 from .models import (
@@ -82,7 +83,11 @@ def evaluate(policy: LinkPolicy, value: EvaluationInput) -> PolicyDecisionRecord
         if destination_domain(destination) not in allowed_domains:
             reasons.append("L1-M9-NEW-DESTINATION")
             decisions.append(policy.new_destination_action)
-    if policy.require_explicit_destination and value.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE and not canonical_destinations:
+    if (
+        policy.require_explicit_destination
+        and value.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE
+        and not canonical_destinations
+    ):
         reasons.append("L1-M9-NEW-DESTINATION")
         decisions.append(policy.new_destination_action)
     if (policy.max_export_records and value.intent.estimated_record_count > policy.max_export_records) or (
@@ -113,10 +118,18 @@ def evaluate(policy: LinkPolicy, value: EvaluationInput) -> PolicyDecisionRecord
         if not policy.token_passthrough and not credential.exchanged:
             reasons.append("L1-M5-TOKEN-PASSTHROUGH")
             decisions.append(ControlDecision.BLOCK)
-        if policy.require_audience and value.intent.expected_audience and credential.audience != value.intent.expected_audience:
+        if (
+            policy.require_audience
+            and value.intent.expected_audience
+            and credential.audience != value.intent.expected_audience
+        ):
             reasons.append("L1-M5-TOKEN-AUDIENCE-MISMATCH")
             decisions.append(ControlDecision.BLOCK)
-        if policy.require_resource and value.intent.expected_resource and credential.resource != value.intent.expected_resource:
+        if (
+            policy.require_resource
+            and value.intent.expected_resource
+            and credential.resource != value.intent.expected_resource
+        ):
             reasons.append("L1-M5-TOKEN-AUDIENCE-MISMATCH")
             decisions.append(ControlDecision.BLOCK)
         if policy.require_actor_binding and credential.actor != value.source.id:

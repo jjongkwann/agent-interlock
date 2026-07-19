@@ -9,6 +9,7 @@ unit-tests against fakes and runs live against a real database.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import threading
@@ -77,9 +78,7 @@ class PostgreSQLMigrationRunner:
                 checksum = self._checksum(sql)
                 if version in recorded:
                     if recorded[version] != checksum:
-                        raise MigrationError(
-                            f"migration {version} changed after being applied (checksum drift)"
-                        )
+                        raise MigrationError(f"migration {version} changed after being applied (checksum drift)")
                     continue
                 cursor = connection.cursor()
                 try:
@@ -100,7 +99,7 @@ class PostgreSQLMigrationRunner:
             connection.close()
 
     @classmethod
-    def from_dsn(cls, migrations_dir: str | Path, dsn: str) -> "PostgreSQLMigrationRunner":
+    def from_dsn(cls, migrations_dir: str | Path, dsn: str) -> PostgreSQLMigrationRunner:
         return cls(migrations_dir, _dsn_factory(dsn, "agent-interlock-migrate"))
 
 
@@ -121,7 +120,10 @@ class PartitionMaintenance:
             for _ in range(months_ahead + 1):
                 cursor = connection.cursor()
                 try:
-                    cursor.execute("SELECT interlock.create_security_events_partition(%s::date)", (month.isoformat(),))
+                    cursor.execute(
+                        "SELECT interlock.create_security_events_partition(%s::date)",
+                        (month.isoformat(),),
+                    )
                     row = cursor.fetchone()
                     if row:
                         created.append(str(row[0]))
@@ -174,7 +176,8 @@ class PartitionMaintenance:
         try:
             cursor.execute(
                 "DELETE FROM interlock.event_ingest_keys "
-                "WHERE event_occurred_at >= %s::timestamptz AND event_occurred_at < %s::timestamptz",
+                "WHERE event_occurred_at >= %s::timestamptz "
+                "AND event_occurred_at < %s::timestamptz",
                 (month.isoformat(), next_month.isoformat()),
             )
             cursor.execute(f'ALTER TABLE interlock.security_events DETACH PARTITION interlock."{name}"')
@@ -209,7 +212,7 @@ class _PooledConnection:
 
     __slots__ = ("_real", "_pool", "_released")
 
-    def __init__(self, real: Connection, pool: "PostgreSQLConnectionPool") -> None:
+    def __init__(self, real: Connection, pool: PostgreSQLConnectionPool) -> None:
         self._real = real
         self._pool = pool
         self._released = False
@@ -304,10 +307,8 @@ def _partition_month(name: str) -> date | None:
 
 
 def _safe_close(connection: Connection) -> None:
-    try:
+    with contextlib.suppress(Exception):
         connection.close()
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _dsn_factory(dsn: str, application_name: str) -> ConnectionFactory:

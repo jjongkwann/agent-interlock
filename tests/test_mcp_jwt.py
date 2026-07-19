@@ -5,7 +5,8 @@ import json
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
 from http_test_server import QuietThreadingHTTPServer
 
 from agent_interlock import MCPJWKSVerifier, MCPOAuthError, OAuthSecurityProfile
@@ -113,14 +114,24 @@ class JWKSVerifierTests(unittest.TestCase):
 
     def _ec_jwk(self, kid="ec-1"):
         numbers = self.ec.public_key().public_numbers()
-        return {"kty": "EC", "crv": "P-256", "kid": kid, "x": _b64url_int(numbers.x, 32), "y": _b64url_int(numbers.y, 32)}
+        return {
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": kid,
+            "x": _b64url_int(numbers.x, 32),
+            "y": _b64url_int(numbers.y, 32),
+        }
 
     def _ed_jwk(self, kid="ed-1"):
         raw = self.ed.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         return {"kty": "OKP", "crv": "Ed25519", "kid": kid, "x": _b64url(raw)}
 
     def _rs256(self, payload, kid="rsa-1"):
-        return _make_jwt({"alg": "RS256", "kid": kid}, payload, lambda data: self.rsa.sign(data, padding.PKCS1v15(), hashes.SHA256()))
+        return _make_jwt(
+            {"alg": "RS256", "kid": kid},
+            payload,
+            lambda data: self.rsa.sign(data, padding.PKCS1v15(), hashes.SHA256()),
+        )
 
     def _es256(self, payload, kid="ec-1"):
         def sign(data):
@@ -156,13 +167,22 @@ class JWKSVerifierTests(unittest.TestCase):
 
     def test_signature_from_a_different_key_is_rejected(self):
         other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        forged = _make_jwt({"alg": "RS256", "kid": "rsa-1"}, _payload(), lambda d: other.sign(d, padding.PKCS1v15(), hashes.SHA256()))
+        forged = _make_jwt(
+            {"alg": "RS256", "kid": "rsa-1"},
+            _payload(),
+            lambda d: other.sign(d, padding.PKCS1v15(), hashes.SHA256()),
+        )
         with _JWKSServer([self._rsa_jwk()]) as server, self.assertRaises(MCPOAuthError) as raised:
             self._verifier(server)(forged)
         self.assertEqual(raised.exception.reason_code, "MCP-OAUTH-JWT-SIGNATURE-INVALID")
 
     def test_alg_none_is_denied(self):
-        token = _b64url(json.dumps({"alg": "none", "kid": "rsa-1"}).encode()) + "." + _b64url(json.dumps(_payload()).encode()) + "."
+        token = (
+            _b64url(json.dumps({"alg": "none", "kid": "rsa-1"}).encode())
+            + "."
+            + _b64url(json.dumps(_payload()).encode())
+            + "."
+        )
         with _JWKSServer([self._rsa_jwk()]) as server, self.assertRaises(MCPOAuthError) as raised:
             self._verifier(server)(token)
         self.assertEqual(raised.exception.reason_code, "MCP-OAUTH-JWT-ALG-DENIED")

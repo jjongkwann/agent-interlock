@@ -6,10 +6,10 @@ import hashlib
 import ipaddress
 import json
 import re
-import socket
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .ledger import Ledger, LedgerError, LedgerIdempotencyConflict
@@ -75,10 +75,7 @@ class LedgerAPIPrincipal:
             raise ValueError("principal subject and tenant_id are required")
         if any(not isinstance(scope, str) or not scope for scope in self.scopes):
             raise ValueError("principal scopes must be non-empty strings")
-        if any(
-            not isinstance(actor_id, str) or not actor_id
-            for actor_id in self.allowed_source_actor_ids
-        ):
+        if any(not isinstance(actor_id, str) or not actor_id for actor_id in self.allowed_source_actor_ids):
             raise ValueError("allowed source actor IDs must be non-empty strings")
 
 
@@ -101,7 +98,7 @@ class StaticBearerAuthenticator:
     def from_tokens(
         cls,
         principals_by_token: Mapping[str, LedgerAPIPrincipal],
-    ) -> "StaticBearerAuthenticator":
+    ) -> StaticBearerAuthenticator:
         values: dict[str, LedgerAPIPrincipal] = {}
         for token, principal in principals_by_token.items():
             if not isinstance(token, str) or not token or len(token) > 4096:
@@ -214,9 +211,7 @@ class LedgerHTTPAPI:
         principal: LedgerAPIPrincipal,
     ) -> None:
         idempotency_key = _single_header(handler, "Idempotency-Key", required=True)
-        if not 1 <= len(idempotency_key) <= 200 or any(
-            not 33 <= ord(char) <= 126 for char in idempotency_key
-        ):
+        if not 1 <= len(idempotency_key) <= 200 or any(not 33 <= ord(char) <= 126 for char in idempotency_key):
             raise LedgerAPIError(
                 400,
                 "LEDGER-IDEMPOTENCY-KEY-INVALID",
@@ -252,9 +247,7 @@ class LedgerHTTPAPI:
                 "relationship_id is invalid",
             )
         environment = Environment(_optional_string(value, "environment", "DEV", maximum=16))
-        data_source = DataSource(
-            _optional_string(value, "data_source", "PRODUCTION", maximum=16)
-        )
+        data_source = DataSource(_optional_string(value, "data_source", "PRODUCTION", maximum=16))
         payload = value["payload"]
         if not isinstance(payload, Mapping):
             raise LedgerAPIError(400, "LEDGER-PAYLOAD-INVALID", "payload must be an object")
@@ -358,12 +351,16 @@ class LedgerHTTPAPI:
             or any(ord(char) < 32 for char in trace_id)
         ):
             raise LedgerAPIError(400, "LEDGER-TRACE-ID-INVALID", "trace_id is invalid")
-        parameters = parse_qs(
-            query,
-            keep_blank_values=True,
-            strict_parsing=True,
-            max_num_fields=2,
-        ) if query else {}
+        parameters = (
+            parse_qs(
+                query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=2,
+            )
+            if query
+            else {}
+        )
         if set(parameters) - {"limit", "cursor"} or any(len(values) != 1 for values in parameters.values()):
             raise LedgerAPIError(400, "LEDGER-QUERY-INVALID", "query parameters are invalid")
         limit_value = parameters.get("limit", [str(self.config.default_page_size)])[0]
@@ -408,7 +405,7 @@ class LedgerHTTPAPI:
             raise LedgerAPIError(413, "LEDGER-BODY-TOO-LARGE", "request body is too large")
         try:
             raw = handler.rfile.read(length)
-        except (socket.timeout, TimeoutError) as error:
+        except TimeoutError as error:
             raise LedgerAPIError(408, "LEDGER-REQUEST-TIMEOUT", "request body timed out") from error
         if len(raw) != length:
             raise LedgerAPIError(400, "LEDGER-BODY-INCOMPLETE", "request body is incomplete")

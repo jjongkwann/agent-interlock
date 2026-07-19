@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
 MARKER = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] != "-" else None
 CHILD_PID = Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != "-" else None

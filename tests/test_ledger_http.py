@@ -4,7 +4,8 @@ import http.client
 import json
 import threading
 import unittest
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from agent_interlock import (
     InMemoryLedger,
@@ -15,7 +16,6 @@ from agent_interlock import (
     StaticBearerAuthenticator,
     create_ledger_http_server,
 )
-
 
 TOKEN_A = "tenant-a-ledger-token-canary"
 TOKEN_B = "tenant-b-ledger-token-canary"
@@ -103,7 +103,11 @@ class RunningLedgerServer:
             response = connection.getresponse()
             raw = response.read()
             value = json.loads(raw) if raw else {}
-            return response.status, value, {key.casefold(): item for key, item in response.getheaders()}
+            return (
+                response.status,
+                value,
+                {key.casefold(): item for key, item in response.getheaders()},
+            )
         finally:
             connection.close()
 

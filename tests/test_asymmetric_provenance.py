@@ -11,7 +11,6 @@ from agent_interlock import (
     ControlDecision,
     Ed25519PublisherVerifier,
     HMACPublisherVerifier,
-    SigningBackendUnavailable,
     sign_artifact_provenance,
     sign_artifact_provenance_ed25519,
     sign_canonical_ed25519,
@@ -49,9 +48,7 @@ def keypair():
         serialization.PrivateFormat.Raw,
         serialization.NoEncryption(),
     )
-    raw_public = private.public_key().public_bytes(
-        serialization.Encoding.Raw, serialization.PublicFormat.Raw
-    )
+    raw_public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     return raw_private, raw_public
 
 
@@ -60,9 +57,7 @@ class Ed25519AdmissionTests(unittest.TestCase):
     def test_valid_ed25519_signature_is_admitted(self):
         private, public = keypair()
         signature = sign_artifact_provenance_ed25519(provenance(), key_id="k1", private_key=private)
-        policy = ArtifactAdmissionPolicy(
-            publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": public})}
-        )
+        policy = ArtifactAdmissionPolicy(publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": public})})
         decision = policy.admit(provenance(), signature)
         self.assertEqual(decision.decision, ControlDecision.ALLOW)
         self.assertTrue(decision.evidence["signatureVerified"])
@@ -71,9 +66,7 @@ class Ed25519AdmissionTests(unittest.TestCase):
     def test_signature_from_a_different_key_is_quarantined(self):
         signing_private, _ = keypair()
         _, other_public = keypair()
-        signature = sign_artifact_provenance_ed25519(
-            provenance(), key_id="k1", private_key=signing_private
-        )
+        signature = sign_artifact_provenance_ed25519(provenance(), key_id="k1", private_key=signing_private)
         policy = ArtifactAdmissionPolicy(
             publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": other_public})}
         )
@@ -84,9 +77,7 @@ class Ed25519AdmissionTests(unittest.TestCase):
     def test_tampered_provenance_breaks_the_signature(self):
         private, public = keypair()
         signature = sign_artifact_provenance_ed25519(provenance(), key_id="k1", private_key=private)
-        policy = ArtifactAdmissionPolicy(
-            publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": public})}
-        )
+        policy = ArtifactAdmissionPolicy(publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": public})})
         tampered = ArtifactProvenance(
             server_id="tenant-a/prod/mail",
             publisher=PUBLISHER,
@@ -102,9 +93,7 @@ class Ed25519AdmissionTests(unittest.TestCase):
     def test_hmac_signature_is_not_accepted_by_the_ed25519_verifier(self):
         _, public = keypair()
         hmac_signature = sign_artifact_provenance(provenance(), key_id="k1", key=b"shared-secret-key")
-        policy = ArtifactAdmissionPolicy(
-            publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": public})}
-        )
+        policy = ArtifactAdmissionPolicy(publisher_verifiers={PUBLISHER: Ed25519PublisherVerifier({"k1": public})})
         decision = policy.admit(provenance(), hmac_signature)
         self.assertEqual(decision.decision, ControlDecision.QUARANTINE)
         self.assertIn("L1-M4-SIGNATURE-INVALID", decision.reason_codes)

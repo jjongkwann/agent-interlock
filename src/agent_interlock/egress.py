@@ -13,9 +13,9 @@ import re
 import socket
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
 
 from .canonical import canonical_digest
@@ -148,8 +148,7 @@ def compile_destination_egress_policy(
     if not target.allowed_domains:
         raise ValueError("REL-07 target must declare allowed domains")
     if not allowed_ports or any(
-        not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535
-        for port in allowed_ports
+        not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535 for port in allowed_ports
     ):
         raise ValueError("allowed_ports must contain valid TCP ports")
     destinations = frozenset(
@@ -398,10 +397,7 @@ class DestinationEgressGuard:
             destination = canonical_network_destination(request.destination)
         except ValueError:
             return self._blocked(request, None, (REASON_EGRESS_DENIED,))
-        if (
-            request.tenant_id != self.policy.tenant_id
-            or request.workload_id not in self.policy.allowed_workload_ids
-        ):
+        if request.tenant_id != self.policy.tenant_id or request.workload_id not in self.policy.allowed_workload_ids:
             return self._blocked(request, destination, (REASON_EGRESS_BINDING_MISMATCH,))
         if destination not in self.policy.allowed_destinations:
             return self._blocked(request, destination, (REASON_EGRESS_DENIED,))

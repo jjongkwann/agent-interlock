@@ -17,7 +17,6 @@ from agent_interlock import (
 )
 from agent_interlock.postgres_ledger import _event_from_row
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "migrations/postgresql/0001_interaction_ledger.sql"
 
@@ -94,9 +93,11 @@ class PostgreSQLLedgerUnitTests(unittest.TestCase):
 
     def test_dsn_error_and_repr_do_not_expose_credentials(self):
         dsn = "postgresql://ledger:super-secret@db.example/interlock"
-        with patch.dict(sys.modules, {"psycopg": None}):
-            with self.assertRaises(PostgreSQLDriverUnavailable) as raised:
-                PostgreSQLLedger.from_dsn(dsn, bound_tenant_id="tenant-a")
+        with (
+            patch.dict(sys.modules, {"psycopg": None}),
+            self.assertRaises(PostgreSQLDriverUnavailable) as raised,
+        ):
+            PostgreSQLLedger.from_dsn(dsn, bound_tenant_id="tenant-a")
         self.assertNotIn("super-secret", str(raised.exception))
         ledger = PostgreSQLLedger(
             lambda: RecordingConnection("tenant-a"),
@@ -157,8 +158,7 @@ class PostgreSQLLedgerUnitTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_A")
-    and os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"),
+    os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_A") and os.environ.get("INTERLOCK_TEST_POSTGRES_DSN_TENANT_B"),
     "set tenant PostgreSQL DSNs to run the live adapter integration",
 )
 class PostgreSQLLedgerIntegrationTests(unittest.TestCase):
@@ -248,41 +248,44 @@ class PostgreSQLLedgerIntegrationTests(unittest.TestCase):
             idempotency_key="live-boundary-seed",
         )
         dsn = os.environ["INTERLOCK_TEST_POSTGRES_DSN_TENANT_A"]
-        with psycopg.connect(dsn) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SET app.tenant_id = 'tenant-b'")
-                cursor.execute(
-                    "SELECT DISTINCT tenant_id FROM interlock.security_events ORDER BY tenant_id"
-                )
-                self.assertEqual(cursor.fetchall(), [("tenant-a",)])
+        with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+            cursor.execute("SET app.tenant_id = 'tenant-b'")
+            cursor.execute("SELECT DISTINCT tenant_id FROM interlock.security_events ORDER BY tenant_id")
+            self.assertEqual(cursor.fetchall(), [("tenant-a",)])
 
-        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
-            with psycopg.connect(dsn) as connection:
-                connection.execute("SET ROLE tenant_b_app")
+        with (
+            self.assertRaises(psycopg.errors.InsufficientPrivilege),
+            psycopg.connect(dsn) as connection,
+        ):
+            connection.execute("SET ROLE tenant_b_app")
 
-        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
-            with psycopg.connect(dsn) as connection:
-                connection.execute(
-                    "UPDATE interlock.security_events SET severity = 'LOW' WHERE tenant_id = %s",
-                    ("tenant-a",),
-                )
+        with (
+            self.assertRaises(psycopg.errors.InsufficientPrivilege),
+            psycopg.connect(dsn) as connection,
+        ):
+            connection.execute(
+                "UPDATE interlock.security_events SET severity = 'LOW' WHERE tenant_id = %s",
+                ("tenant-a",),
+            )
 
-        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
-            with psycopg.connect(dsn) as connection:
-                connection.execute(
-                    """
+        with (
+            self.assertRaises(psycopg.errors.InsufficientPrivilege),
+            psycopg.connect(dsn) as connection,
+        ):
+            connection.execute(
+                """
                     INSERT INTO interlock.event_ingest_keys (
                         tenant_id, idempotency_key, request_hash,
                         event_id, event_occurred_at
                     ) VALUES (%s, %s, %s, %s::uuid, now())
                     """,
-                    (
-                        "tenant-b",
-                        "cross-tenant-attempt",
-                        "sha256:" + "0" * 64,
-                        "00000000-0000-7000-8000-000000000000",
-                    ),
-                )
+                (
+                    "tenant-b",
+                    "cross-tenant-attempt",
+                    "sha256:" + "0" * 64,
+                    "00000000-0000-7000-8000-000000000000",
+                ),
+            )
 
 
 if __name__ == "__main__":

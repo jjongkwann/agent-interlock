@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import functools
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from .canonical import canonical_digest
 from .gateway import GatewayError
@@ -21,9 +22,9 @@ class UndeclaredRelationship(GatewayError):
 @dataclass(frozen=True, slots=True)
 class Actor:
     spec: ActorSpec
-    _interlock: "Interlock"
+    _interlock: Interlock
 
-    def connect(self, target: "Actor", policy: LinkPolicy) -> None:
+    def connect(self, target: Actor, policy: LinkPolicy) -> None:
         self._interlock.connect(self, target, policy)
 
     def wrap(self, function: Callable[[Mapping[str, Any]], Any]) -> Callable[..., Any]:
@@ -169,7 +170,11 @@ class Interlock:
             **common,
         )
         if reasons and enforced:
-            self.ledger.append("ACTION_EXECUTED", payload={"result": "COMPLETED", "connectorExecutionId": None}, **common)
+            self.ledger.append(
+                "ACTION_EXECUTED",
+                payload={"result": "COMPLETED", "connectorExecutionId": None},
+                **common,
+            )
             self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
             raise GatewayError(f"actor invocation blocked: {', '.join(reasons)}")
         try:

@@ -10,7 +10,8 @@ one place that understands the interlock relationship contract.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from .telemetry import RuntimeTelemetryImport, import_runtime_telemetry
 
@@ -39,11 +40,7 @@ def _otlp_span(span_id: str, attributes: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _wrap_spans(spans: list[dict[str, Any]], scope_name: str) -> dict[str, Any]:
-    return {
-        "resourceSpans": [
-            {"scopeSpans": [{"scope": {"name": scope_name}, "spans": spans}]}
-        ]
-    }
+    return {"resourceSpans": [{"scopeSpans": [{"scope": {"name": scope_name}, "spans": spans}]}]}
 
 
 def langfuse_traces_to_otlp(payload: Any) -> dict[str, Any]:
@@ -84,10 +81,7 @@ def langsmith_runs_to_otlp(payload: Any) -> dict[str, Any]:
     """
     runs: list[Any] = []
     if isinstance(payload, Mapping):
-        if "runs" in payload:
-            runs = _sequence(payload.get("runs"))
-        else:
-            runs = [payload]
+        runs = _sequence(payload.get("runs")) if "runs" in payload else [payload]
     else:
         runs = _sequence(payload)
 
