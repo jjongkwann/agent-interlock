@@ -8,15 +8,7 @@ from fnmatch import fnmatchcase
 from typing import Any, Iterable, Mapping
 
 from .ledger import Event, Ledger
-from .models import (
-    ActorSpec,
-    ActorType,
-    ControlDecision,
-    FailureMode,
-    LinkPolicy,
-    PolicyMode,
-    SideEffect,
-)
+from .models import ActorSpec, ActorType, ControlDecision, FailureMode, LinkPolicy, PolicyMode, SideEffect
 from .sdk import Interlock
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, PointerEvent as ReactPointerEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   computeRuntimeDiff,
   demoRuntimeTelemetry,
@@ -14,6 +14,8 @@ type Mode = "OBSERVE" | "SHADOW" | "ENFORCE";
 type Assurance = "DECLARED" | "OBSERVED" | "ENFORCED" | "RECONCILED";
 type EnforcementPoint = "INPUT_GATEWAY" | "RAG_GATEWAY" | "MCP_GATEWAY" | "A2A_BROKER" | "EGRESS_GATEWAY" | "SANDBOX" | "AUDIT_SINK";
 type GraphView = "design" | "runtime" | "drift";
+type Selection = { kind: "node" | "edge"; id: string };
+type MobilePanel = "palette" | "inspector" | null;
 type VisualEdge = Pick<ArchitectureEdge, "id" | "source" | "target" | "relationship" | "relationshipId" | "mode"> & {
   visualState: "design" | "observed" | "unobserved" | "bypass" | "undeclared";
   interactionId?: string;
@@ -58,6 +60,11 @@ type ArchitectureEdge = {
   controls: Control[];
 };
 
+type ArchitectureSnapshot = {
+  nodes: ArchitectureNode[];
+  edges: ArchitectureEdge[];
+};
+
 const initialNodes: ArchitectureNode[] = [
   { id: "user.customer", label: "Customer", type: "USER", owner: "Customer Platform", identity: "oidc://customer", capabilities: ["SUPPORT_REQUEST"], tenantMode: "REQUIRED", maxDelegationDepth: 0, x: 42, y: 255 },
   { id: "agent.support", label: "Support Agent", type: "AGENT", owner: "Customer Platform", identity: "spiffe://prod/agent/support", capabilities: ["SUPPORT_REPLY", "DELEGATE_RESEARCH"], tenantMode: "REQUIRED", maxDelegationDepth: 2, x: 286, y: 255 },
@@ -83,6 +90,17 @@ const initialEdges: ArchitectureEdge[] = [
 const nodeTone: Record<NodeType, string> = {
   USER: "slate", AGENT: "violet", SUBAGENT: "indigo", RAG: "cyan", TOOL: "amber", MEMORY: "emerald", EXTERNAL: "rose",
 };
+
+const GRAPH_BOARD_MIN_WIDTH = 1050;
+const GRAPH_BOARD_MIN_HEIGHT = 660;
+const ACTOR_NODE_WIDTH = 174;
+const ACTOR_NODE_HEIGHT = 76;
+const GRAPH_BOARD_PADDING = 12;
+const GRAPH_BOARD_GROWTH_MARGIN = 24;
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 1.35;
+const ZOOM_STEP = 0.1;
+const HISTORY_LIMIT = 40;
 
 function edgeDefaults(source: ArchitectureNode, target: ArchitectureNode, index: number): ArchitectureEdge {
   let relationshipId = "REL-10";
@@ -124,13 +142,20 @@ function edgeDefaults(source: ArchitectureNode, target: ArchitectureNode, index:
 export default function Home() {
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
-  const [selected, setSelected] = useState<{ kind: "node" | "edge"; id: string }>({ kind: "edge", id: "edge.support-research" });
+  const [selected, setSelected] = useState<Selection>({ kind: "edge", id: "edge.support-research" });
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [dragging, setDragging] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [notice, setNotice] = useState("Architecture v1.0.0 · all changes are local drafts");
   const [activeGraph, setActiveGraph] = useState<GraphView>("design");
   const [runtimeImport, setRuntimeImport] = useState<RuntimeImport | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  const [past, setPast] = useState<ArchitectureSnapshot[]>([]);
+  const [future, setFuture] = useState<ArchitectureSnapshot[]>([]);
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const telemetryInput = useRef<HTMLInputElement>(null);
+  const canvasScroll = useRef<HTMLDivElement>(null);
+  const dragCheckpointed = useRef(false);
 
   const nodeMap = useMemo(() => Object.fromEntries(nodes.map((node) => [node.id, node])), [nodes]);
   const selectedNode = selected.kind === "node" ? nodeMap[selected.id] : undefined;
@@ -156,7 +181,12 @@ export default function Home() {
     const runtimeOnly = runtimeNodes.filter((node) => !nodeMap[node.id]);
     return [...nodes, ...runtimeOnly];
   }, [activeGraph, nodes, runtimeNodes, nodeMap]);
+  const boardSize = useMemo(() => ({
+    width: Math.max(GRAPH_BOARD_MIN_WIDTH, ...visualNodes.map((node) => node.x + ACTOR_NODE_WIDTH + GRAPH_BOARD_GROWTH_MARGIN)),
+    height: Math.max(GRAPH_BOARD_MIN_HEIGHT, ...visualNodes.map((node) => node.y + ACTOR_NODE_HEIGHT + GRAPH_BOARD_GROWTH_MARGIN)),
+  }), [visualNodes]);
   const visualNodeMap = useMemo(() => Object.fromEntries(visualNodes.map((node) => [node.id, node])), [visualNodes]);
+  const runtimeResultCount = runtimeImport ? runtimeDiff.undeclared.length + runtimeDiff.controlBypassInteractionIds.length + runtimeDiff.unobservedEdgeIds.length : 0;
 
   const visualEdges = useMemo((): VisualEdge[] => {
     const observed = (runtimeImport?.observations ?? []).map((item): VisualEdge => {
@@ -180,7 +210,7 @@ export default function Home() {
       relationship: edge.relationship,
       relationshipId: edge.relationshipId,
       mode: edge.mode,
-      visualState: activeGraph === "drift" && runtimeDiff.unobservedEdgeIds.includes(edge.id) ? "unobserved" : "design",
+        visualState: activeGraph === "drift" && runtimeImport && runtimeDiff.unobservedEdgeIds.includes(edge.id) ? "unobserved" : "design",
     }));
     return activeGraph === "drift" ? [...designed, ...observed] : designed;
   }, [activeGraph, edges, runtimeImport, runtimeDiff.unobservedEdgeIds]);
@@ -211,13 +241,131 @@ export default function Home() {
   const score = Math.max(0, 100 - criticalCount * 18 - warningCount * 6);
   const coverage = allControls.length ? Math.round((assuredControls / allControls.length) * 100) : 0;
 
+  function checkpoint() {
+    setPast((items) => [...items.slice(-(HISTORY_LIMIT - 1)), { nodes, edges }]);
+    setFuture([]);
+  }
+
+  function restoreSnapshot(snapshot: ArchitectureSnapshot) {
+    setNodes(snapshot.nodes);
+    setEdges(snapshot.edges);
+    const selectionStillExists = selected.kind === "node"
+      ? snapshot.nodes.some((node) => node.id === selected.id)
+      : snapshot.edges.some((edge) => edge.id === selected.id);
+    if (!selectionStillExists) {
+      if (snapshot.edges[0]) setSelected({ kind: "edge", id: snapshot.edges[0].id });
+      else if (snapshot.nodes[0]) setSelected({ kind: "node", id: snapshot.nodes[0].id });
+      else setSelected({ kind: "node", id: "" });
+    }
+    setConnectFrom(null);
+    setDragging(null);
+  }
+
+  function undo() {
+    const snapshot = past[past.length - 1];
+    if (!snapshot) return;
+    setPast((items) => items.slice(0, -1));
+    setFuture((items) => [{ nodes, edges }, ...items].slice(0, HISTORY_LIMIT));
+    restoreSnapshot(snapshot);
+    setNotice("Last architecture change undone");
+  }
+
+  function redo() {
+    const snapshot = future[0];
+    if (!snapshot) return;
+    setFuture((items) => items.slice(1));
+    setPast((items) => [...items.slice(-(HISTORY_LIMIT - 1)), { nodes, edges }]);
+    restoreSnapshot(snapshot);
+    setNotice("Architecture change restored");
+  }
+
+  function resetDraft() {
+    checkpoint();
+    restoreSnapshot({ nodes: initialNodes, edges: initialEdges });
+    setSelected({ kind: "edge", id: "edge.support-research" });
+    setNotice("Draft reset to the secure reference architecture · Undo is available");
+  }
+
+  function changeZoom(nextZoom: number) {
+    const viewport = canvasScroll.current;
+    const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
+    if (!viewport) {
+      setZoom(clamped);
+      return;
+    }
+    const centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / zoom;
+    const centerY = (viewport.scrollTop + viewport.clientHeight / 2) / zoom;
+    setZoom(clamped);
+    requestAnimationFrame(() => viewport.scrollTo({
+      left: Math.max(0, centerX * clamped - viewport.clientWidth / 2),
+      top: Math.max(0, centerY * clamped - viewport.clientHeight / 2),
+      behavior: "smooth",
+    }));
+  }
+
+  function fitGraph() {
+    const viewport = canvasScroll.current;
+    if (!viewport) return;
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(1, (viewport.clientWidth - 48) / boardSize.width, (viewport.clientHeight - 48) / boardSize.height));
+    setZoom(nextZoom);
+    requestAnimationFrame(() => viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" }));
+    setNotice(`Graph fitted to viewport · ${Math.round(nextZoom * 100)}%`);
+  }
+
+  function focusNode(nodeId: string, announce = true) {
+    const node = visualNodeMap[nodeId];
+    const viewport = canvasScroll.current;
+    if (!node || !viewport) return;
+    setFocusedNodeId(nodeId);
+    viewport.scrollTo({
+      left: Math.max(0, (node.x + ACTOR_NODE_WIDTH / 2) * zoom - viewport.clientWidth / 2),
+      top: Math.max(0, (node.y + ACTOR_NODE_HEIGHT / 2) * zoom - viewport.clientHeight / 2),
+      behavior: "smooth",
+    });
+    if (announce) setNotice(`${node.label} centered in the graph`);
+  }
+
+  useEffect(() => {
+    if (activeGraph === "design" || !runtimeImport) return;
+    const anomalyId = runtimeDiff.undeclared[0]?.target
+      ?? runtimeImport.observations.find((item) => runtimeDiff.controlBypassInteractionIds.includes(item.interactionId))?.target;
+    const node = anomalyId ? visualNodeMap[anomalyId] : undefined;
+    const viewport = canvasScroll.current;
+    if (!node || !viewport) return;
+    const frame = requestAnimationFrame(() => {
+      setFocusedNodeId(node.id);
+      viewport.scrollTo({
+        left: Math.max(0, (node.x + ACTOR_NODE_WIDTH / 2) * zoom - viewport.clientWidth / 2),
+        top: Math.max(0, (node.y + ACTOR_NODE_HEIGHT / 2) * zoom - viewport.clientHeight / 2),
+        behavior: "smooth",
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeGraph, runtimeImport, runtimeDiff.undeclared, runtimeDiff.controlBypassInteractionIds, visualNodeMap, zoom]);
+
+  function focusCurrentContext() {
+    if (activeGraph === "design") {
+      if (selectedNode) focusNode(selectedNode.id);
+      else if (selectedEdge) focusNode(selectedEdge.target);
+      else fitGraph();
+      return;
+    }
+    const anomalyId = runtimeDiff.undeclared[0]?.target
+      ?? runtimeImport?.observations.find((item) => runtimeDiff.controlBypassInteractionIds.includes(item.interactionId))?.target
+      ?? visualNodes[0]?.id;
+    if (anomalyId) focusNode(anomalyId);
+    else fitGraph();
+  }
+
   function updateNode(patch: Partial<ArchitectureNode>) {
     if (!selectedNode) return;
+    checkpoint();
     setNodes((items) => items.map((item) => item.id === selectedNode.id ? { ...item, ...patch } : item));
   }
 
   function updateEdge(patch: Partial<ArchitectureEdge>) {
     if (!selectedEdge) return;
+    checkpoint();
     setEdges((items) => items.map((item) => item.id === selectedEdge.id ? { ...item, ...patch } : item));
   }
 
@@ -227,25 +375,67 @@ export default function Home() {
   }
 
   function addNode(type: NodeType) {
+    checkpoint();
     const count = nodes.filter((node) => node.type === type).length + 1;
     const id = `${type.toLowerCase()}.new-${count}`;
-    const node: ArchitectureNode = { id, label: `New ${type.replace("SUBAGENT", "Sub-Agent")}`, type, owner: "Unassigned", identity: `unbound://${id}`, capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: type === "AGENT" || type === "SUBAGENT" ? 1 : 0, allowedDomains: type === "EXTERNAL" ? [] : undefined, x: 90 + (nodes.length % 4) * 220, y: 80 + Math.floor(nodes.length / 4) * 150 };
+    const viewport = canvasScroll.current;
+    const offset = nodes.filter((node) => node.id.includes(".new-")).length % 5;
+    const visibleCenterX = ((viewport?.scrollLeft ?? 0) + (viewport?.clientWidth ?? GRAPH_BOARD_MIN_WIDTH) / 2) / zoom;
+    const visibleCenterY = ((viewport?.scrollTop ?? 0) + (viewport?.clientHeight ?? GRAPH_BOARD_MIN_HEIGHT) / 2) / zoom;
+    const x = Math.max(GRAPH_BOARD_PADDING, visibleCenterX - ACTOR_NODE_WIDTH / 2 + offset * 22);
+    const y = Math.max(GRAPH_BOARD_PADDING, visibleCenterY - ACTOR_NODE_HEIGHT / 2 + offset * 22);
+    const node: ArchitectureNode = { id, label: `New ${type.replace("SUBAGENT", "Sub-Agent")}`, type, owner: "Unassigned", identity: `unbound://${id}`, capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: type === "AGENT" || type === "SUBAGENT" ? 1 : 0, allowedDomains: type === "EXTERNAL" ? [] : undefined, x, y };
     setNodes((items) => [...items, node]);
     setSelected({ kind: "node", id });
+    setFocusedNodeId(id);
+    setMobilePanel("inspector");
     setNotice(`${node.label} added · connect it to define a security boundary`);
+  }
+
+  function removeSelectedNode() {
+    if (!selectedNode) return;
+    checkpoint();
+    const nodeId = selectedNode.id;
+    const remainingNodes = nodes.filter((node) => node.id !== nodeId);
+    const removedEdges = edges.filter((edge) => edge.source === nodeId || edge.target === nodeId);
+    const remainingEdges = edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+    setNodes(remainingNodes);
+    setEdges(remainingEdges);
+    if (connectFrom === nodeId) setConnectFrom(null);
+    setDragging(null);
+    if (remainingNodes[0]) setSelected({ kind: "node", id: remainingNodes[0].id });
+    else if (remainingEdges[0]) setSelected({ kind: "edge", id: remainingEdges[0].id });
+    else setSelected({ kind: "node", id: "" });
+    setNotice(`${selectedNode.label} removed · ${removedEdges.length} connected relationship${removedEdges.length === 1 ? "" : "s"} removed`);
+  }
+
+  function removeSelectedEdge() {
+    if (!selectedEdge) return;
+    checkpoint();
+    const edgeId = selectedEdge.id;
+    const remainingEdges = edges.filter((edge) => edge.id !== edgeId);
+    setEdges(remainingEdges);
+    if (remainingEdges[0]) setSelected({ kind: "edge", id: remainingEdges[0].id });
+    else if (nodes[0]) setSelected({ kind: "node", id: nodes[0].id });
+    else setSelected({ kind: "node", id: "" });
+    setNotice(`${selectedEdge.relationship} relationship removed`);
   }
 
   function selectNode(node: ArchitectureNode) {
     if (connectFrom && connectFrom !== node.id) {
       const source = nodeMap[connectFrom];
       const edge = edgeDefaults(source, node, edges.length + 1);
+      checkpoint();
       setEdges((items) => [...items, edge]);
       setSelected({ kind: "edge", id: edge.id });
       setConnectFrom(null);
+      setMobilePanel("inspector");
       setNotice("Relationship created in SHADOW · attach the declared control before enforcement");
       return;
     }
     setSelected({ kind: "node", id: node.id });
+    setFocusedNodeId(node.id);
+    setMobilePanel("inspector");
   }
 
   function beginConnection() {
@@ -261,14 +451,21 @@ export default function Home() {
     if (connectFrom || activeGraph !== "design") return;
     const rect = event.currentTarget.getBoundingClientRect();
     event.currentTarget.setPointerCapture(event.pointerId);
+    dragCheckpointed.current = false;
     setDragging({ id: node.id, dx: event.clientX - rect.left, dy: event.clientY - rect.top });
   }
 
   function onCanvasMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (!dragging || activeGraph !== "design") return;
+    if (!dragCheckpointed.current) {
+      checkpoint();
+      dragCheckpointed.current = true;
+    }
     const rect = event.currentTarget.getBoundingClientRect();
-    const x = Math.max(12, Math.min(980, event.clientX - rect.left + event.currentTarget.scrollLeft - dragging.dx));
-    const y = Math.max(12, Math.min(600, event.clientY - rect.top + event.currentTarget.scrollTop - dragging.dy));
+    const maxX = boardSize.width - ACTOR_NODE_WIDTH - GRAPH_BOARD_PADDING;
+    const maxY = boardSize.height - ACTOR_NODE_HEIGHT - GRAPH_BOARD_PADDING;
+    const x = Math.max(GRAPH_BOARD_PADDING, Math.min(maxX, (event.clientX - rect.left + event.currentTarget.scrollLeft - dragging.dx) / zoom));
+    const y = Math.max(GRAPH_BOARD_PADDING, Math.min(maxY, (event.clientY - rect.top + event.currentTarget.scrollTop - dragging.dy) / zoom));
     setNodes((items) => items.map((node) => node.id === dragging.id ? { ...node, x, y } : node));
   }
 
@@ -278,6 +475,7 @@ export default function Home() {
       setRuntimeImport(imported);
       setActiveGraph("runtime");
       setConnectFrom(null);
+      setMobilePanel(null);
       const diff = computeRuntimeDiff(edges, imported.observations);
       setNotice(`${source} imported · ${imported.observations.length} relationships · ${diff.undeclared.length} undeclared · ${diff.controlBypassInteractionIds.length} bypass`);
     } catch (error) {
@@ -303,6 +501,7 @@ export default function Home() {
   function selectGraph(view: GraphView) {
     setActiveGraph(view);
     setConnectFrom(null);
+    setMobilePanel(null);
     if (view !== "design" && !runtimeImport) setNotice("Import Ledger or OTLP JSON telemetry to build the runtime graph");
   }
 
@@ -368,11 +567,13 @@ export default function Home() {
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">AI</span><div><strong>Agent Interlock</strong><span>Security Architecture Studio</span></div></div>
         <div className="architecture-title"><span className="draft-dot" />Customer Support Architecture <small>v1.0.0 draft</small></div>
-        <div className="top-actions"><button className="quiet-button" onClick={() => activeGraph === "design" ? setNotice(`${findings.length} findings · ${criticalCount} require attention`) : setNotice(`${runtimeDiff.undeclared.length} undeclared · ${runtimeDiff.controlBypassInteractionIds.length} control bypass · ${runtimeImport?.issues.length ?? 0} import issues`)}>{activeGraph === "design" ? "Run security check" : "Run drift check"}</button><button className="primary-button" onClick={exportManifest}>Export manifest</button></div>
+        <div className="top-actions"><button className="quiet-button" onClick={() => activeGraph === "design" ? setNotice(`${findings.length} findings · ${criticalCount} require attention`) : setNotice(runtimeImport ? `${runtimeDiff.undeclared.length} undeclared · ${runtimeDiff.controlBypassInteractionIds.length} control bypass · ${runtimeImport.issues.length} import issues` : "Import telemetry before running a drift check")}>{activeGraph === "design" ? "Run security check" : "Run drift check"}</button><button className="primary-button" onClick={exportManifest}>Export manifest</button></div>
       </header>
 
       <section className="workspace">
-        <aside className="toolbox">
+        {mobilePanel && <button className="mobile-scrim" aria-label="Close side panel" onClick={() => setMobilePanel(null)} />}
+        <aside className={`toolbox ${mobilePanel === "palette" ? "mobile-open" : ""}`} aria-label={activeGraph === "design" ? "Actor palette" : "Runtime telemetry"}>
+          <button className="panel-close" aria-label="Close actor palette" onClick={() => setMobilePanel(null)}>×</button>
           {activeGraph === "design" ? <>
             <div className="panel-heading"><span>BUILD</span><strong>Actor palette</strong></div>
             <p className="panel-note">Add a security-aware building block, then connect its trust boundary.</p>
@@ -399,44 +600,54 @@ export default function Home() {
         </aside>
 
         <section className="canvas-region">
-          <div className="canvas-toolbar"><div><button className={activeGraph === "design" ? "active" : ""} onClick={() => selectGraph("design")}>Design graph</button><button className={activeGraph === "runtime" ? "active" : ""} onClick={() => selectGraph("runtime")}>Runtime graph</button><button className={activeGraph === "drift" ? "active" : ""} onClick={() => selectGraph("drift")}>Drift</button></div><div className="canvas-stats">{activeGraph === "design" ? <><span>{nodes.length} actors</span><span>{edges.length} relationships</span><span>{coverage}% enforced</span></> : activeGraph === "runtime" ? <><span>{runtimeNodes.length} runtime actors</span><span>{runtimeImport?.observations.length ?? 0} calls</span><span>{runtimeImport?.observations.filter((item) => item.controlEvaluated).length ?? 0} controlled</span></> : <><span>{runtimeDiff.undeclared.length} undeclared</span><span>{runtimeDiff.unobservedEdgeIds.length} unobserved</span><span>{runtimeDiff.controlBypassInteractionIds.length} bypass</span></>}</div></div>
-          <div className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerMove={onCanvasMove} onPointerUp={() => setDragging(null)} onPointerCancel={() => setDragging(null)}>
-            <div className="graph-board">
+          <div className="canvas-toolbar">
+            <div className="graph-tabs"><button aria-pressed={activeGraph === "design"} className={activeGraph === "design" ? "active" : ""} onClick={() => selectGraph("design")}>Design graph</button><button aria-pressed={activeGraph === "runtime"} className={activeGraph === "runtime" ? "active" : ""} onClick={() => selectGraph("runtime")}>Runtime graph</button><button aria-pressed={activeGraph === "drift"} className={activeGraph === "drift" ? "active" : ""} onClick={() => selectGraph("drift")}>Drift</button></div>
+            <div className="mobile-panel-actions"><button onClick={() => setMobilePanel("palette")}>{activeGraph === "design" ? "Actors" : "Telemetry"}</button><button onClick={() => setMobilePanel("inspector")}>Inspect</button></div>
+            <div className="canvas-toolbar-right">
+              <div className="canvas-stats">{activeGraph === "design" ? <><span>{nodes.length} actors</span><span>{edges.length} relationships</span><span>{coverage}% enforced</span></> : activeGraph === "runtime" ? <><span>{runtimeNodes.length} runtime actors</span><span>{runtimeImport?.observations.length ?? 0} calls</span><span>{runtimeImport?.observations.filter((item) => item.controlEvaluated).length ?? 0} controlled</span></> : <><span>{runtimeImport ? runtimeDiff.undeclared.length : 0} undeclared</span><span>{runtimeImport ? runtimeDiff.unobservedEdgeIds.length : 0} unobserved</span><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : 0} bypass</span></>}</div>
+              <div className="view-controls" aria-label="Graph view controls"><button aria-label="Zoom out" onClick={() => changeZoom(zoom - ZOOM_STEP)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => changeZoom(zoom + ZOOM_STEP)}>+</button><button onClick={fitGraph}>Fit</button><button onClick={focusCurrentContext}>Focus</button></div>
+            </div>
+          </div>
+          <div ref={canvasScroll} className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerMove={onCanvasMove} onPointerUp={() => { setDragging(null); dragCheckpointed.current = false; }} onPointerCancel={() => { setDragging(null); dragCheckpointed.current = false; }}>
+            <div className="graph-surface" style={{ width: boardSize.width * zoom, height: boardSize.height * zoom }}>
+            <div className="graph-board" style={{ width: boardSize.width, height: boardSize.height, transform: `scale(${zoom})` }}>
               <div className="trust-zone zone-internal"><span>INTERNAL TRUST ZONE</span></div>
               <div className="trust-zone zone-external"><span>EXTERNAL</span></div>
               {activeGraph !== "design" && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>No runtime telemetry</strong><p>Import Ledger events or OTLP JSON to reconcile actual calls with this architecture.</p><button onClick={() => applyTelemetry(demoRuntimeTelemetry, "Drift demo")}>Load drift demo</button></div>}
-              <svg className="edge-layer" viewBox="0 0 1050 660" aria-label="Architecture relationships">
+              <svg className="edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label="Architecture relationships">
                 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" /></marker></defs>
                 {visualEdges.map((edge) => {
                   const source = visualNodeMap[edge.source]; const target = visualNodeMap[edge.target]; if (!source || !target) return null;
-                  const x1 = source.x + 174, y1 = source.y + 38, x2 = target.x, y2 = target.y + 38, bend = Math.max(45, Math.abs(x2 - x1) * .46);
+                  const x1 = source.x + ACTOR_NODE_WIDTH, y1 = source.y + ACTOR_NODE_HEIGHT / 2, x2 = target.x, y2 = target.y + ACTOR_NODE_HEIGHT / 2, bend = Math.max(45, Math.abs(x2 - x1) * .46);
                   const selectedLine = activeGraph === "design" && selected.kind === "edge" && selected.id === edge.id;
                   return <path key={edge.id} className={`edge-path ${selectedLine ? "selected" : ""} mode-${edge.mode.toLowerCase()} visual-${edge.visualState}`} d={`M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`} markerEnd="url(#arrow)" />;
                 })}
               </svg>
               {visualEdges.map((edge) => {
                 const source = visualNodeMap[edge.source]; const target = visualNodeMap[edge.target]; if (!source || !target) return null;
-                const left = (source.x + 174 + target.x) / 2 - 48; const top = (source.y + target.y) / 2 + 19;
-                return <button key={edge.id} style={{ left, top }} className={`edge-label visual-${edge.visualState} ${activeGraph === "design" && selected.kind === "edge" && selected.id === edge.id ? "selected" : ""}`} onClick={() => activeGraph === "design" ? setSelected({ kind: "edge", id: edge.id }) : setNotice(`${edge.relationshipId} ${edge.source} → ${edge.target} · ${edge.visualState}`)}><span>{edge.relationship}</span><small>{edge.relationshipId}{edge.visualState === "bypass" || edge.visualState === "undeclared" ? " !" : ""}</small></button>;
+                const left = (source.x + ACTOR_NODE_WIDTH + target.x) / 2 - 48; const top = (source.y + target.y) / 2 + 19;
+                return <button key={edge.id} title={`${edge.source} → ${edge.target}`} style={{ left, top }} className={`edge-label visual-${edge.visualState} ${activeGraph === "design" && selected.kind === "edge" && selected.id === edge.id ? "selected" : ""}`} onClick={() => { if (activeGraph === "design") { setSelected({ kind: "edge", id: edge.id }); setMobilePanel("inspector"); } else { focusNode(edge.target); setNotice(`${edge.relationshipId} ${edge.source} → ${edge.target} · ${edge.visualState}`); } }}><span>{edge.relationship}</span><small>{edge.relationshipId}{edge.visualState === "bypass" || edge.visualState === "undeclared" ? " !" : ""}</small></button>;
               })}
-              {visualNodes.map((node) => { const runtimeOnly = !nodeMap[node.id]; return <button key={node.id} style={{ left: node.x, top: node.y }} className={`actor-node tone-${nodeTone[node.type]} ${activeGraph === "design" && selected.kind === "node" && selected.id === node.id ? "selected" : ""} ${connectFrom === node.id ? "connect-source" : ""} ${runtimeOnly ? "runtime-only" : ""}`} onPointerDown={(event) => onNodePointerDown(event, node)} onClick={() => activeGraph === "design" ? selectNode(node) : setNotice(`${node.id} observed at runtime${runtimeOnly ? " · not an exact design node" : ""}`)} aria-label={`${node.label}, ${node.type}`}><span className="node-icon">{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span className="node-copy"><strong>{node.label}</strong><small>{runtimeOnly ? node.id : `${node.type} · ${node.owner}`}</small></span><i className={`node-status ${runtimeOnly ? "warning" : ""}`} /></button>; })}
+              {visualNodes.map((node) => { const runtimeOnly = !nodeMap[node.id]; return <button key={node.id} title={`${node.label} · ${runtimeOnly ? node.id : `${node.type} · ${node.owner}`}`} style={{ left: node.x, top: node.y }} className={`actor-node tone-${nodeTone[node.type]} ${activeGraph === "design" && selected.kind === "node" && selected.id === node.id ? "selected" : ""} ${focusedNodeId === node.id ? "focused" : ""} ${dragging?.id === node.id ? "dragging" : ""} ${connectFrom === node.id ? "connect-source" : ""} ${runtimeOnly ? "runtime-only" : ""}`} onPointerDown={(event) => onNodePointerDown(event, node)} onLostPointerCapture={() => { setDragging(null); dragCheckpointed.current = false; }} onClick={() => activeGraph === "design" ? selectNode(node) : focusNode(node.id)} aria-label={`${node.label}, ${node.type}`}><span className="node-icon">{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span className="node-copy"><strong>{node.label}</strong><small>{runtimeOnly ? node.id : `${node.type} · ${node.owner}`}</small></span><i className={`node-status ${runtimeOnly ? "warning" : ""}`} /></button>; })}
+            </div>
             </div>
           </div>
-          <div className="notice-bar"><span>●</span>{notice}</div>
+          <div className="notice-bar"><div className="notice-copy"><span>●</span>{notice}</div><div className="draft-actions"><button disabled={!past.length} onClick={undo}>Undo</button><button disabled={!future.length} onClick={redo}>Redo</button><button onClick={resetDraft}>Reset draft</button></div></div>
         </section>
 
-        <aside className="inspector">
+        <aside className={`inspector ${mobilePanel === "inspector" ? "mobile-open" : ""}`} aria-label="Architecture inspector">
+          <button className="panel-close" aria-label="Close inspector" onClick={() => setMobilePanel(null)}>×</button>
           <div className="panel-heading"><span>INSPECT</span><strong>{activeGraph === "design" ? selectedEdge ? "Relationship security" : "Actor contract" : "Runtime reconciliation"}</strong></div>
           {activeGraph !== "design" ? <>
             <div className="inspector-body runtime-inspector">
-              <div className="runtime-health"><span className={runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "unsafe" : "safe"}>{runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "!" : "✓"}</span><div><strong>{runtimeImport ? runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "Runtime drift detected" : "Runtime conforms" : "Awaiting telemetry"}</strong><small>{runtimeImport?.format ?? "Ledger or OTLP JSON"}</small></div></div>
-              <div className="runtime-metrics"><div><span>{runtimeImport?.observations.length ?? 0}</span><small>Observed</small></div><div><span>{runtimeDiff.undeclared.length}</span><small>Undeclared</small></div><div><span>{runtimeDiff.controlBypassInteractionIds.length}</span><small>Bypass</small></div></div>
-              <div className="control-heading"><span>Reconciliation results</span><small>{runtimeDiff.undeclared.length + runtimeDiff.controlBypassInteractionIds.length + runtimeDiff.unobservedEdgeIds.length}</small></div>
+              <div className="runtime-health"><span className={!runtimeImport ? "pending" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "unsafe" : "safe"}>{!runtimeImport ? "·" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "!" : "✓"}</span><div><strong>{runtimeImport ? runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "Runtime drift detected" : "Runtime conforms" : "Awaiting telemetry"}</strong><small>{runtimeImport?.format ?? "Ledger or OTLP JSON"}</small></div></div>
+              <div className="runtime-metrics"><div><span>{runtimeImport?.observations.length ?? 0}</span><small>Observed</small></div><div><span>{runtimeImport ? runtimeDiff.undeclared.length : 0}</span><small>Undeclared</small></div><div><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : 0}</span><small>Bypass</small></div></div>
+              <div className="control-heading"><span>Reconciliation results</span><small>{runtimeResultCount}</small></div>
               {!runtimeImport && <div className="runtime-empty-note">Import telemetry or load the drift demo to see actual relationship evidence.</div>}
-              {runtimeDiff.undeclared.map((item) => <div className="drift-card critical" key={`undeclared-${item.interactionId}`}><i>!</i><div><strong>Undeclared relationship</strong><small>{item.source} → {item.target}</small><code>{item.relationshipId} · {item.interactionId}</code></div></div>)}
-              {runtimeDiff.controlBypassInteractionIds.map((id) => <div className="drift-card critical" key={`bypass-${id}`}><i>!</i><div><strong>Control evaluation missing</strong><small>Interaction reached runtime without control evidence</small><code>{id}</code></div></div>)}
-              {runtimeDiff.unobservedEdgeIds.slice(0, 4).map((id) => <div className="drift-card warning" key={`unobserved-${id}`}><i>–</i><div><strong>Design edge not observed</strong><small>No matching call in this telemetry set</small><code>{id}</code></div></div>)}
-              {(runtimeImport?.issues ?? []).map((issue, index) => <div className="drift-card warning" key={`${issue.code}-${index}`}><i>?</i><div><strong>{issue.code}</strong><small>{issue.message}</small><code>{issue.spanId ?? "no span id"}</code></div></div>)}
+              {runtimeImport && runtimeDiff.undeclared.map((item) => <button className="drift-card critical" key={`undeclared-${item.interactionId}`} onClick={() => { focusNode(item.target); setMobilePanel(null); }}><i>!</i><span><strong>Undeclared relationship</strong><small>{item.source} → {item.target}</small><code>{item.relationshipId} · {item.interactionId}</code></span></button>)}
+              {runtimeImport && runtimeDiff.controlBypassInteractionIds.map((id) => { const observation = runtimeImport.observations.find((item) => item.interactionId === id); return <button className="drift-card critical" key={`bypass-${id}`} onClick={() => { if (observation) focusNode(observation.target); setMobilePanel(null); }}><i>!</i><span><strong>Control evaluation missing</strong><small>Interaction reached runtime without control evidence</small><code>{id}</code></span></button>; })}
+              {runtimeImport && runtimeDiff.unobservedEdgeIds.slice(0, 4).map((id) => { const edge = edges.find((item) => item.id === id); return <button className="drift-card warning" key={`unobserved-${id}`} onClick={() => { if (edge) focusNode(edge.target); setMobilePanel(null); }}><i>–</i><span><strong>Design edge not observed</strong><small>No matching call in this telemetry set</small><code>{id}</code></span></button>; })}
+              {(runtimeImport?.issues ?? []).map((issue, index) => <div className="drift-card warning" key={`${issue.code}-${index}`}><i>?</i><span><strong>{issue.code}</strong><small>{issue.message}</small><code>{issue.spanId ?? "no span id"}</code></span></div>)}
             </div>
             <div className="runtime-boundary-note"><strong>No inferred security facts</strong><span>Standard GenAI fields classify spans. Exact drift decisions require explicit <code>interlock.*</code> attributes.</span></div>
           </> : <>
@@ -446,10 +657,11 @@ export default function Home() {
               <label>Enforcement mode<select value={selectedEdge.mode} onChange={(e) => updateEdge({ mode: e.target.value as Mode })}><option>OBSERVE</option><option>SHADOW</option><option>ENFORCE</option></select></label>
               <label>Failure mode<select value={selectedEdge.failureMode} onChange={(e) => updateEdge({ failureMode: e.target.value as ArchitectureEdge["failureMode"] })}><option>FAIL_CLOSED</option><option>DEGRADE_READ_ONLY</option><option>FAIL_OPEN</option></select></label>
               <div className="field-group"><span>Allowed data</span><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} className={selectedEdge.allowedData.includes(item) ? "chip selected" : "chip"} onClick={() => updateEdge({ allowedData: selectedEdge.allowedData.includes(item) ? selectedEdge.allowedData.filter((value) => value !== item) : [...selectedEdge.allowedData, item] })}>{item}</button>)}</div></div>
-              <div className="toggle-row"><div><strong>Human approval</strong><small>Required before high-impact execution</small></div><button className={`toggle ${selectedEdge.approvalRequired ? "on" : ""}`} onClick={() => updateEdge({ approvalRequired: !selectedEdge.approvalRequired })}><i /></button></div>
-              {selectedEdge.relationshipId === "REL-06" && <><div className="toggle-row"><div><strong>Same tenant only</strong><small>Reject cross-tenant delegation</small></div><button className={`toggle ${selectedEdge.sameTenant ? "on" : ""}`} onClick={() => updateEdge({ sameTenant: !selectedEdge.sameTenant })}><i /></button></div><label>Maximum delegation depth<input type="number" min="0" max="8" value={selectedEdge.maxDepth} onChange={(e) => updateEdge({ maxDepth: Number(e.target.value) })} /></label></>}
+              <div className="toggle-row"><div><strong>Human approval</strong><small>Required before high-impact execution</small></div><button aria-label="Require human approval" aria-pressed={selectedEdge.approvalRequired} className={`toggle ${selectedEdge.approvalRequired ? "on" : ""}`} onClick={() => updateEdge({ approvalRequired: !selectedEdge.approvalRequired })}><i /></button></div>
+              {selectedEdge.relationshipId === "REL-06" && <><div className="toggle-row"><div><strong>Same tenant only</strong><small>Reject cross-tenant delegation</small></div><button aria-label="Restrict delegation to the same tenant" aria-pressed={selectedEdge.sameTenant} className={`toggle ${selectedEdge.sameTenant ? "on" : ""}`} onClick={() => updateEdge({ sameTenant: !selectedEdge.sameTenant })}><i /></button></div><label>Maximum delegation depth<input type="number" min="0" max="8" value={selectedEdge.maxDepth} onChange={(e) => updateEdge({ maxDepth: Number(e.target.value) })} /></label></>}
               <div className="control-heading"><span>Security controls</span><small>{selectedEdge.controls.length}</small></div>
               {selectedEdge.controls.map((control) => <div className="control-card" key={control.id}><div><strong>{control.id}</strong><small>{control.objective} · {control.timing}</small></div><div className="control-settings"><select className="point-select" aria-label={`${control.id} enforcement point`} value={control.point} onChange={(e) => updateControl(control.id, { point: e.target.value as EnforcementPoint })}>{["INPUT_GATEWAY", "RAG_GATEWAY", "MCP_GATEWAY", "A2A_BROKER", "EGRESS_GATEWAY", "SANDBOX", "AUDIT_SINK"].map((point) => <option key={point}>{point}</option>)}</select><select className={`assurance-select assurance-${control.assurance.toLowerCase()}`} aria-label={`${control.id} assurance`} value={control.assurance} onChange={(e) => updateControl(control.id, { assurance: e.target.value as Assurance })}><option>DECLARED</option><option>OBSERVED</option><option>ENFORCED</option><option>RECONCILED</option></select></div></div>)}
+              <button className="danger-button" onClick={removeSelectedEdge}><span>Remove relationship</span><small>Only this connection will be removed</small></button>
             </div>
           ) : selectedNode ? (
             <div className="inspector-body">
@@ -463,10 +675,11 @@ export default function Home() {
               {selectedNode.type === "TOOL" && <label>Definition digest<input placeholder="sha256:…" value={selectedNode.definitionDigest ?? ""} onChange={(e) => updateNode({ definitionDigest: e.target.value })} /></label>}
               {selectedNode.type === "EXTERNAL" && <label>Allowed domains<input placeholder="api.example.com, files.example.com" value={(selectedNode.allowedDomains ?? []).join(", ")} onChange={(e) => updateNode({ allowedDomains: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>}
               <label>Capabilities<input placeholder="SUPPORT_REPLY, KNOWLEDGE_SEARCH" value={selectedNode.capabilities.join(", ")} onChange={(e) => updateNode({ capabilities: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
+              <button className="danger-button" onClick={removeSelectedNode}><span>Remove actor</span><small>Connected relationships will also be removed</small></button>
             </div>
           ) : null}
           <div className="posture-card"><div className="posture-score"><span>{score}</span><div><strong>Security posture</strong><small>{criticalCount ? "Action required" : warningCount ? "Review warnings" : "Architecture conforms"}</small></div></div><div className="score-track"><i style={{ width: `${score}%` }} /></div><div className="finding-counts"><span><b className="critical-count">{criticalCount}</b> Critical</span><span><b>{warningCount}</b> Warnings</span></div></div>
-          {findings.length > 0 && <div className="findings"><strong>Active findings</strong>{findings.slice(0, 3).map((finding, index) => <button key={`${finding.target}-${index}`} onClick={() => setSelected({ kind: finding.target.startsWith("edge.") ? "edge" : "node", id: finding.target })}><i className={finding.severity} /> <span>{finding.text}<small>{finding.target}</small></span></button>)}</div>}
+          {findings.length > 0 && <div className="findings"><strong>Active findings</strong>{findings.slice(0, 3).map((finding, index) => <button key={`${finding.target}-${index}`} onClick={() => { const kind = finding.target.startsWith("edge.") ? "edge" : "node"; setSelected({ kind, id: finding.target }); const edge = kind === "edge" ? edges.find((item) => item.id === finding.target) : undefined; focusNode(edge?.target ?? finding.target); }}><i className={finding.severity} /> <span>{finding.text}<small>{finding.target}</small></span></button>)}</div>}
           </>}
         </aside>
       </section>

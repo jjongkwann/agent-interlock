@@ -10,28 +10,14 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Protocol
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import (
-    HTTPRedirectHandler,
-    HTTPSHandler,
-    Request,
-    build_opener,
-)
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
-from .mcp_contracts import (
-    MCPHTTPError,
-    SessionStore,
-    _PrincipalKey,
-)
-from .mcp_transport import (
-    MCP_PROTOCOL_VERSION,
-    MCPInvocationContext,
-    MCPTransportAdapter,
-)
+from .mcp_contracts import MCPHTTPError, SessionStore, _PrincipalKey
+from .mcp_transport import MCP_PROTOCOL_VERSION, MCPInvocationContext, MCPTransportAdapter
 from .security import sanitize_secrets
-
 
 _JSONRPC_PARSE_ERROR = -32700
 _JSONRPC_INVALID_REQUEST = -32600

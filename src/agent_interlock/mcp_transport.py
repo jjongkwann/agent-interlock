@@ -25,13 +25,7 @@ from .models import (
 )
 from .registry import ToolRevision
 from .security import contains_secret, sanitize_secrets
-from .supply_chain import (
-    ArtifactAdmissionDecision,
-    ArtifactAdmissionPolicy,
-    ArtifactProvenance,
-    ArtifactSignature,
-)
-
+from .supply_chain import ArtifactAdmissionDecision, ArtifactAdmissionPolicy, ArtifactProvenance, ArtifactSignature
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")

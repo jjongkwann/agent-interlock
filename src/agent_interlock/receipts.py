@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from .canonical import canonical_digest, canonical_json
+from .canonical import canonical_json
 from .models import ConnectorExecutionContext, SideEffect
 from .security import canonical_destination
 

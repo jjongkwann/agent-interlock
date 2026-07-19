@@ -8,12 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
-from .architecture import (
-    ArchitectureCompiler,
-    ArchitectureGraph,
-    FindingSeverity,
-    compare_observed_runtime,
-)
+from .architecture import ArchitectureCompiler, ArchitectureGraph, FindingSeverity, compare_observed_runtime
 from .canonical import canonical_digest
 from .models import PolicyMode
 from .telemetry import import_runtime_telemetry

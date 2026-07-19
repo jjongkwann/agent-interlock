@@ -16,7 +16,7 @@ cannot consume or cancel another's task.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Callable, Mapping
 

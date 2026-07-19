@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from enum import StrEnum
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
 from .ledger import InMemoryLedger, Ledger
 from .mcp_stdio import SandboxAttestation

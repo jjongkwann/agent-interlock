@@ -18,7 +18,6 @@ from .canonical import canonical_digest, canonical_json
 from .models import DataSource, Environment
 from .security import sanitize_secrets
 
-
 _SENSITIVE_KEY = re.compile(r"(?i)(authorization|password|secret|token|api[_-]?key|credential)")
 _FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_QUERY_LIMIT = 500

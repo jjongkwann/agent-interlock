@@ -17,7 +17,6 @@ from .models import DataSource, Environment
 from .postgres_ledger import LedgerTenantMismatch
 from .telemetry import import_runtime_telemetry
 
-
 _EVENT_TYPES = frozenset(
     {
         "INTERACTION_REQUESTED",

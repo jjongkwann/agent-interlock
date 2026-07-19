@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-
 _SECRET_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b"),

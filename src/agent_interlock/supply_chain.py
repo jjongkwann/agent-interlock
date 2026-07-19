@@ -15,12 +15,7 @@ from urllib.parse import urlsplit
 
 from .canonical import canonical_digest
 from .models import ControlDecision
-from .signing import (
-    sign_canonical,
-    sign_canonical_ed25519,
-    verify_canonical,
-    verify_canonical_ed25519,
-)
+from .signing import sign_canonical, sign_canonical_ed25519, verify_canonical, verify_canonical_ed25519
 
 __all__ = [
     "ArtifactAdmissionDecision",

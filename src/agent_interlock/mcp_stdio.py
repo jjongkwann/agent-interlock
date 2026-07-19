@@ -24,7 +24,6 @@ from .mcp_transport import MCP_PROTOCOL_VERSION, MCPServerProfile
 from .security import contains_secret, sanitize_secrets
 from .signing import sign_canonical, verify_canonical
 
-
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DANGEROUS_ENV = re.compile(
     r"(?i)^(?:.*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|AUTHORIZATION).*$|"

@@ -28,13 +28,8 @@ from .config_guard import (
 from .ledger import LedgerIntegrityError
 from .mcp_contracts import MCPHTTPError, MCPOAuthError, OAuthAuthorizationTransaction
 from .models import DefinitionState, ToolDefinition
+from .postgres_ledger import Connection, ConnectionFactory, LedgerTenantMismatch, PostgreSQLDriverUnavailable
 from .registry import ToolRevision
-from .postgres_ledger import (
-    ConnectionFactory,
-    LedgerTenantMismatch,
-    PostgreSQLDriverUnavailable,
-    Connection,
-)
 
 _PrincipalKey = tuple[str, str, str]
 

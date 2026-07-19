@@ -21,22 +21,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import (
-    parse_qsl,
-    urlencode,
-    urljoin,
-    urlsplit,
-    urlunsplit,
-)
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
-from .mcp_contracts import (
-    MCPOAuthError,
-    OAuthAuthorizationTransaction,
-    OAuthTransactionStore,
-)
+from .mcp_contracts import MCPOAuthError, OAuthAuthorizationTransaction
 from .models import CredentialClaims
-
 
 _TOKEN = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
 _TOKEN_RE = re.compile(rf"^{_TOKEN}$")

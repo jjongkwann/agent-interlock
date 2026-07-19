@@ -10,7 +10,7 @@ from typing import Any, Callable, Mapping
 from .canonical import canonical_digest
 from .gateway import GatewayError
 from .ledger import InMemoryLedger, Ledger
-from .models import ActorSpec, ControlDecision, DataSource, Environment, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
+from .models import ActorSpec, ControlDecision, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
 from .security import validate_schema
 
 

@@ -15,7 +15,7 @@ import threading
 from datetime import date
 from pathlib import Path
 
-from .postgres_ledger import ConnectionFactory, PostgreSQLDriverUnavailable, Connection
+from .postgres_ledger import Connection, ConnectionFactory, PostgreSQLDriverUnavailable
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
