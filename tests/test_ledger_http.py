@@ -213,6 +213,48 @@ class StatisticsRouteTests(unittest.TestCase):
         self.assertEqual(partitions[0]["counters"]["interactionCount"], 1)
 
 
+class CORSTests(unittest.TestCase):
+    ORIGIN = "http://localhost:3000"
+
+    def config(self):
+        return LedgerHTTPConfig(allowed_origins=frozenset({self.ORIGIN}))
+
+    def test_loopback_origin_is_configurable_but_arbitrary_http_is_not(self):
+        self.config()
+        with self.assertRaises(ValueError):
+            LedgerHTTPConfig(allowed_origins=frozenset({"http://evil.example"}))
+
+    def test_preflight_and_response_carry_cors_headers_for_allowed_origin(self):
+        with RunningLedgerServer(config=self.config()) as server:
+            status, _, headers = server.request(
+                "OPTIONS",
+                f"/v1/statistics?{WIDE_RANGE}",
+                token=None,
+                tenant_id=None,
+                extra_headers={"Origin": self.ORIGIN},
+            )
+            self.assertEqual(status, 204)
+            self.assertEqual(headers.get("access-control-allow-origin"), self.ORIGIN)
+            self.assertIn("authorization", headers.get("access-control-allow-headers", "").casefold())
+
+            status, _, headers = server.request(
+                "GET", f"/v1/statistics?{WIDE_RANGE}", extra_headers={"Origin": self.ORIGIN}
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(headers.get("access-control-allow-origin"), self.ORIGIN)
+
+    def test_disallowed_origin_is_rejected_before_auth(self):
+        with RunningLedgerServer(config=self.config()) as server:
+            status, body, headers = server.request(
+                "GET",
+                f"/v1/statistics?{WIDE_RANGE}",
+                extra_headers={"Origin": "https://evil.example"},
+            )
+            self.assertEqual(status, 403)
+            self.assertEqual(body["error"]["code"], "LEDGER-ORIGIN-DENIED")
+            self.assertNotIn("access-control-allow-origin", headers)
+
+
 class EventsBetweenContractTests(unittest.TestCase):
     def test_range_is_tenant_scoped_ordered_and_bounded(self):
         from agent_interlock import LedgerRangeTooLarge

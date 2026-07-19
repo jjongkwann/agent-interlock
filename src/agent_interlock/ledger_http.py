@@ -20,7 +20,6 @@ from .ledger import (
     LedgerRangeTooLarge,
     parse_event_time,
 )
-from .models import DataSource
 from .models import DataSource, Environment
 from .postgres_ledger import LedgerTenantMismatch
 from .telemetry import import_runtime_telemetry
@@ -139,9 +138,13 @@ class LedgerHTTPConfig:
             raise ValueError("request_timeout_seconds must be between 0.1 and 30")
         if not 1 <= self.default_page_size <= self.max_page_size <= 500:
             raise ValueError("page sizes must satisfy 1 <= default <= max <= 500")
-        if any(not value.startswith("https://") for value in self.allowed_origins):
-            raise ValueError("allowed browser origins must use https")
+        if any(
+            not (value.startswith("https://") or _LOOPBACK_ORIGIN.fullmatch(value)) for value in self.allowed_origins
+        ):
+            raise ValueError("allowed browser origins must use https (loopback http is allowed for development)")
 
+
+_LOOPBACK_ORIGIN = re.compile(r"^http://(localhost|127\.0\.0\.1)(:\d{1,5})?$")
 
 LedgerResolver = Callable[[str], Ledger]
 
@@ -163,6 +166,9 @@ class LedgerHTTPAPI:
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         try:
             self._check_origin(handler)
+            if handler.command == "OPTIONS":
+                self._send_preflight(handler)
+                return
             principal = self._authenticate(handler)
             self._require_tenant_header(handler, principal)
             parts = urlsplit(handler.path)
@@ -504,8 +510,27 @@ class LedgerHTTPAPI:
         if len(origins) > 1 or (origins and origins[0] not in self.config.allowed_origins):
             raise LedgerAPIError(403, "LEDGER-ORIGIN-DENIED", "browser origin is not authorized")
 
-    @staticmethod
+    def _cors_headers(self, handler: BaseHTTPRequestHandler) -> list[tuple[str, str]]:
+        origin = handler.headers.get("Origin")
+        if origin and origin in self.config.allowed_origins:
+            return [("Access-Control-Allow-Origin", origin), ("Vary", "Origin")]
+        return []
+
+    def _send_preflight(self, handler: BaseHTTPRequestHandler) -> None:
+        handler.send_response(204)
+        for name, value in self._cors_headers(handler):
+            handler.send_header(name, value)
+            if name == "Access-Control-Allow-Origin":
+                handler.send_header("Access-Control-Allow-Methods", "GET, POST")
+                handler.send_header(
+                    "Access-Control-Allow-Headers",
+                    "Authorization, Content-Type, X-Interlock-Tenant-Id, Idempotency-Key",
+                )
+                handler.send_header("Access-Control-Max-Age", "600")
+        handler.end_headers()
+
     def _send_json(
+        self,
         handler: BaseHTTPRequestHandler,
         status: int,
         value: Mapping[str, Any],
@@ -524,14 +549,15 @@ class LedgerHTTPAPI:
         handler.send_header("Cache-Control", "no-store")
         handler.send_header("X-Content-Type-Options", "nosniff")
         handler.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        for name, header_value in self._cors_headers(handler):
+            handler.send_header(name, header_value)
         if close:
             handler.send_header("Connection", "close")
             handler.close_connection = True
         handler.end_headers()
         handler.wfile.write(body)
 
-    @classmethod
-    def _send_error(cls, handler: BaseHTTPRequestHandler, error: LedgerAPIError) -> None:
+    def _send_error(self, handler: BaseHTTPRequestHandler, error: LedgerAPIError) -> None:
         if error.status == 401:
             handler.close_connection = True
             handler.send_response_only(401)
@@ -548,7 +574,7 @@ class LedgerHTTPAPI:
             handler.end_headers()
             handler.wfile.write(body)
             return
-        cls._send_json(
+        self._send_json(
             handler,
             error.status,
             {"error": {"code": error.code, "message": error.message}},
@@ -576,6 +602,9 @@ class _LedgerRequestHandler(BaseHTTPRequestHandler):
         self.server.api.handle(self)  # type: ignore[attr-defined]
 
     def do_GET(self) -> None:
+        self.server.api.handle(self)  # type: ignore[attr-defined]
+
+    def do_OPTIONS(self) -> None:
         self.server.api.handle(self)  # type: ignore[attr-defined]
 
     def handle_expect_100(self) -> bool:
