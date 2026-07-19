@@ -322,6 +322,49 @@ class PostgreSQLLedger:
             raise LedgerRangeTooLarge("time range matches more events than the limit")
         return values
 
+    def interaction_lifecycles_started_between(
+        self,
+        tenant_id: str,
+        start: str,
+        end: str,
+        *,
+        data_source: str | None = None,
+        limit: int = 100_000,
+    ) -> tuple[Event, ...]:
+        self._require_bound_tenant(tenant_id)
+        if not tenant_id or limit < 1:
+            raise ValueError("tenant_id and a positive limit are required")
+        if parse_event_time(start) >= parse_event_time(end):
+            raise ValueError("start must be before end")
+        with self._transaction() as connection:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT {_SELECT_COLUMNS}
+                    FROM interlock.security_events
+                    WHERE tenant_id = %s
+                      AND interaction_id IN (
+                          SELECT interaction_id
+                          FROM interlock.security_events
+                          WHERE tenant_id = %s
+                            AND event_type = 'INTERACTION_REQUESTED'
+                            AND interaction_id IS NOT NULL
+                            AND occurred_at >= %s::timestamptz AND occurred_at < %s::timestamptz
+                            AND (%s::text IS NULL OR data_source = %s::text)
+                      )
+                    ORDER BY occurred_at, event_id
+                    LIMIT %s
+                    """,
+                    (tenant_id, tenant_id, start, end, data_source, data_source, limit + 1),
+                )
+                values = tuple(_event_from_row(row) for row in cursor.fetchall())
+            finally:
+                cursor.close()
+        if len(values) > limit:
+            raise LedgerRangeTooLarge("interaction lifecycles match more events than the limit")
+        return values
+
     def _bounded_unpaged_query(
         self,
         tenant_id: str,

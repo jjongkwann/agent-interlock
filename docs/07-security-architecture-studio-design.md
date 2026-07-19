@@ -130,7 +130,10 @@ JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_i
 - Python compiler와 같은 `interlock.dev/v1alpha1` manifest 다운로드
 - Ledger·OTLP JSON import와 실제 Runtime Graph 생성
 - 미선언 관계, unobserved Design Edge, control bypass를 분리한 Drift 화면
+- Ledger interaction 통계 화면(오프라인 import + read-only Live Attach, data source·mode·관계·Actor·정책·사유별 집계)
 - CLI `architecture compile --shadow`의 CRITICAL review gate·전 Edge SHADOW 강제·안정적 bundle digest
+- manifest 기반 Python SDK skeleton·보안테스트 생성
+- Ed25519 2인 승인 기반 propose→promote→과거 active bundle rollback CLI와 Control Plane 연동
 - REL-07의 source Tool·External `allowedDomains`·LinkPolicy를 tenant/artifact/provenance/sandbox-bound egress 정책으로 compile하는 runtime adapter
 
 ```bash
@@ -143,9 +146,8 @@ npm run dev
 
 ## 8. 다음 단계
 
-1. manifest 저장소·Git diff·approval workflow와 remote deploy
-2. framework별 skeleton generator
-3. OTLP/gRPC Collector·Langfuse/LangSmith adapter와 trace 운영 저장소
+1. 원격 GitHub/GitLab PR review와 hosted deploy 연결
+2. Python 외 framework별 skeleton generator
+3. OTLP/gRPC Collector와 trace 운영 저장소
 4. A2A Agent Card admission adapter
-5. Architecture manifest 기반 security fixture generator
-6. SHADOW bundle의 원격 배포·승격·rollback workflow
+5. 대용량 통계 사전집계와 지속형 pending approval store

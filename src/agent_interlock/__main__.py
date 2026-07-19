@@ -84,18 +84,35 @@ def _compile_shadow(graph, compiler, findings) -> int:  # noqa: ANN001
 
 
 def _studio_main(args: argparse.Namespace) -> int:
+    from .signing import SigningBackendUnavailable, ed25519_public_key_bytes
     from .studio_deploy import (
         DeploymentApproval,
         DeploymentBundle,
         GitBundleStore,
         StudioDeploymentError,
-        deployment_approval_statement,
+        TrustedApprovalKey,
+        approval_signature_statement,
         sign_deployment_approval,
     )
 
     def _emit(value: dict) -> int:
         print(json.dumps(value, ensure_ascii=False, indent=2))
         return 0
+
+    def _trusted_approvers(path: str) -> dict[str, TrustedApprovalKey]:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("trusted approvers must be an object")
+        result: dict[str, TrustedApprovalKey] = {}
+        for key_id, item in value.items():
+            if not isinstance(key_id, str) or not isinstance(item, dict):
+                raise ValueError("trusted approver entries must be objects")
+            approver_id = item.get("approverId")
+            public_key = item.get("publicKey")
+            if not isinstance(approver_id, str) or not approver_id or not isinstance(public_key, str):
+                raise ValueError("trusted approvers require approverId and publicKey")
+            result[key_id] = TrustedApprovalKey(approver_id, bytes.fromhex(public_key))
+        return result
 
     try:
         if args.action == "propose":
@@ -125,28 +142,38 @@ def _studio_main(args: argparse.Namespace) -> int:
                     "approverId": approval.approver_id,
                     "keyId": approval.key_id,
                     "signature": approval.signature,
-                    "statement": deployment_approval_statement(bundle, from_digest=from_digest, to_mode="ENFORCE"),
+                    "publicKey": ed25519_public_key_bytes(bytes.fromhex(key_hex)).hex(),
+                    "statement": approval_signature_statement(
+                        bundle,
+                        from_digest=from_digest,
+                        to_mode="ENFORCE",
+                        approver_id=args.approver,
+                        key_id=args.key_id,
+                    ),
                 }
             )
         store = GitBundleStore(args.repo)
-        if args.action == "promote":
+        if args.action in {"promote", "rollback"}:
             approvals = tuple(
                 DeploymentApproval(item["approverId"], item["keyId"], item["signature"])
                 for item in (json.loads(Path(path).read_text(encoding="utf-8")) for path in args.approval)
             )
-            trusted = {
-                key_id: bytes.fromhex(value)
-                for key_id, value in json.loads(Path(args.trusted_keys).read_text(encoding="utf-8")).items()
-            }
-            commit = store.promote(args.digest, approvals, trusted_keys=trusted)
-            return _emit({"active": store.active(), "commit": commit})
-        if args.action == "rollback":
-            commit = store.rollback(args.digest)
+            trusted = _trusted_approvers(args.trusted_keys)
+            if args.action == "promote":
+                commit = store.promote(args.digest, approvals, trusted_approvers=trusted)
+            else:
+                commit = store.rollback(args.digest, approvals, trusted_approvers=trusted)
             return _emit({"active": store.active(), "commit": commit})
         return _emit({"active": store.active(), "history": list(store.history())})
-    except StudioDeploymentError as error:
+    except (SigningBackendUnavailable, StudioDeploymentError, ValueError) as error:
+        if isinstance(error, StudioDeploymentError):
+            code = error.reason_code
+        elif isinstance(error, SigningBackendUnavailable):
+            code = "INTERLOCK-SIGNING-BACKEND-UNAVAILABLE"
+        else:
+            code = "INTERLOCK-CLI-INPUT-INVALID"
         print(
-            json.dumps({"error": {"code": error.reason_code, "message": str(error)}}, indent=2),
+            json.dumps({"error": {"code": code, "message": str(error)}}, indent=2),
             file=sys.stderr,
         )
         return 2
@@ -194,6 +221,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     rollback = studio_actions.add_parser("rollback")
     rollback.add_argument("digest")
     rollback.add_argument("--repo", required=True)
+    rollback.add_argument("--approval", action="append", required=True)
+    rollback.add_argument("--trusted-keys", required=True)
     status = studio_actions.add_parser("status")
     status.add_argument("--repo", required=True)
 

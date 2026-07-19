@@ -12,8 +12,11 @@ from pathlib import Path
 from agent_interlock import (
     ControlPlaneAPI,
     LedgerAPIPrincipal,
+    SigningBackendUnavailable,
     StaticBearerAuthenticator,
+    TrustedApprovalKey,
     create_control_plane_server,
+    ed25519_public_key_bytes,
 )
 from agent_interlock.__main__ import main
 from agent_interlock.studio_deploy import DeploymentBundle, GitBundleStore, sign_deployment_approval
@@ -23,6 +26,15 @@ OPERATOR_TOKEN = "control-operator-token-canary"
 VIEWER_TOKEN = "control-viewer-token-canary"
 KEY_ONE = bytes.fromhex("11" * 32)
 KEY_TWO = bytes.fromhex("22" * 32)
+try:
+    TRUSTED_APPROVERS = {
+        "key-one": TrustedApprovalKey("security-lead", ed25519_public_key_bytes(KEY_ONE)),
+        "key-two": TrustedApprovalKey("platform-lead", ed25519_public_key_bytes(KEY_TWO)),
+    }
+    CRYPTO_AVAILABLE = True
+except SigningBackendUnavailable:
+    TRUSTED_APPROVERS = {}
+    CRYPTO_AVAILABLE = False
 
 
 def compile_bundle() -> dict:
@@ -50,7 +62,7 @@ class RunningControlPlane:
         self.api = ControlPlaneAPI(
             self.store,
             authenticator,
-            trusted_keys={"key-one": KEY_ONE, "key-two": KEY_TWO},
+            trusted_approvers=TRUSTED_APPROVERS,
         )
         self.server = create_control_plane_server(self.api)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -80,6 +92,7 @@ class RunningControlPlane:
             connection.close()
 
 
+@unittest.skipUnless(CRYPTO_AVAILABLE, "the jwt extra is required for Ed25519 deployment approvals")
 class ControlPlaneTests(unittest.TestCase):
     def setUp(self):
         self.bundle_value = compile_bundle()
@@ -128,9 +141,36 @@ class ControlPlaneTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(state["active"]["bundleDigest"], digest)
 
+            for approver, key_id, key in (
+                ("security-lead", "key-one", KEY_ONE),
+                ("platform-lead", "key-two", KEY_TWO),
+            ):
+                plane.request(
+                    "POST",
+                    f"/v1/bundles/{digest}/approvals",
+                    body=self.approval_body(approver, key_id, key, from_digest=digest),
+                )
             status, rolled = plane.request("POST", "/v1/deploy/rollback", body={"targetDigest": digest})
             self.assertEqual(status, 200)
             self.assertEqual(rolled["active"]["bundleDigest"], digest)
+
+    def test_rollback_cannot_activate_a_bundle_that_was_only_proposed(self):
+        with tempfile.TemporaryDirectory() as tmp, RunningControlPlane(tmp) as plane:
+            status, proposed = plane.request("POST", "/v1/bundles", body=self.bundle_value)
+            self.assertEqual(status, 201)
+            digest = proposed["bundleDigest"]
+            for approver, key_id, key in (
+                ("security-lead", "key-one", KEY_ONE),
+                ("platform-lead", "key-two", KEY_TWO),
+            ):
+                plane.request(
+                    "POST",
+                    f"/v1/bundles/{digest}/approvals",
+                    body=self.approval_body(approver, key_id, key),
+                )
+            status, body = plane.request("POST", "/v1/deploy/rollback", body={"targetDigest": digest})
+            self.assertEqual(status, 422)
+            self.assertEqual(body["error"]["code"], "L1-STUDIO-ROLLBACK-TARGET-NOT-ACTIVE")
 
     def test_single_or_forged_approvals_cannot_promote(self):
         with tempfile.TemporaryDirectory() as tmp, RunningControlPlane(tmp) as plane:
@@ -147,8 +187,7 @@ class ControlPlaneTests(unittest.TestCase):
             self.assertEqual(body["error"]["code"], "L1-STUDIO-TWO-PERSON-APPROVAL-REQUIRED")
 
             forged = self.approval_body("mallory", "key-two", b"\x99" * 32)
-            plane.request("POST", f"/v1/bundles/{digest}/approvals", body=forged)
-            status, body = plane.request("POST", f"/v1/bundles/{digest}/promote")
+            status, body = plane.request("POST", f"/v1/bundles/{digest}/approvals", body=forged)
             self.assertEqual(status, 422)
             self.assertEqual(body["error"]["code"], "L1-STUDIO-APPROVAL-SIGNATURE-INVALID")
 

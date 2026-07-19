@@ -68,6 +68,73 @@ class GoldenContractTests(unittest.TestCase):
         self.assertEqual([p["dataSource"] for p in summary["partitions"]], ["PRODUCTION", "SIMULATION"])
         self.assertEqual(summary["partitions"][1]["counters"]["interactionCount"], 1)
 
+    def test_orphan_control_is_not_counted_as_an_interaction_or_enforced_block(self):
+        requested = _event("INTERACTION_REQUESTED", "ia-complete")
+        orphan = _event(
+            "CONTROL_EVALUATED",
+            "ia-orphan",
+            payload={
+                "control": {
+                    "policyId": "policy.test",
+                    "mode": "ENFORCE",
+                    "decision": "BLOCK",
+                    "actualEnforced": True,
+                }
+            },
+        )
+        records = reduce_interactions([requested, orphan])
+        self.assertEqual([record.interaction_id for record in records], ["ia-complete"])
+        self.assertFalse(records[0].enforced_block)
+
+    def test_enforced_block_requires_completed_action_and_blocked_outcome(self):
+        events = [
+            _event("INTERACTION_REQUESTED", "ia-block"),
+            _event(
+                "CONTROL_EVALUATED",
+                "ia-block",
+                payload={
+                    "control": {
+                        "policyId": "policy.test",
+                        "mode": "ENFORCE",
+                        "decision": "BLOCK",
+                        "reasonCodes": ["L1-TEST"],
+                        "actualEnforced": True,
+                    }
+                },
+            ),
+        ]
+        self.assertFalse(reduce_interactions(events)[0].enforced_block)
+        events.append(
+            _event(
+                "ACTION_EXECUTED",
+                "ia-block",
+                payload={"result": "COMPLETED", "connectorExecutionId": None},
+            )
+        )
+        self.assertFalse(reduce_interactions(events)[0].enforced_block)
+        events.append(_event("SECURITY_OUTCOME_SET", "ia-block", payload={"securityOutcome": "BLOCKED"}))
+        self.assertTrue(reduce_interactions(events)[0].enforced_block)
+
+    def test_same_interaction_id_in_different_tenants_is_not_merged(self):
+        records = reduce_interactions(
+            [
+                _event("INTERACTION_REQUESTED", "shared", tenant_id="tenant-a"),
+                _event("INTERACTION_REQUESTED", "shared", tenant_id="tenant-b"),
+            ]
+        )
+        self.assertEqual(len(records), 2)
+        self.assertEqual({record.tenant_id for record in records}, {"tenant-a", "tenant-b"})
+
+    def test_unicode_group_order_matches_code_point_order(self):
+        summary = summarize_security_statistics(
+            [
+                _event("INTERACTION_REQUESTED", "ia-supplementary", source_actor_id="\U00010000"),
+                _event("INTERACTION_REQUESTED", "ia-bmp", source_actor_id="\ue000"),
+            ]
+        )
+        actors = summary["partitions"][0]["byActor"]
+        self.assertEqual([item["sourceActorId"] for item in actors], ["\ue000", "\U00010000"])
+
 
 class LiveGatewayReductionTests(unittest.TestCase):
     """Real gateway events must reduce with the same semantics as the fixture."""
@@ -110,6 +177,21 @@ class LiveGatewayReductionTests(unittest.TestCase):
         self.assertEqual(counters["enforcedBlockCount"], 1)
         self.assertEqual(counters["executionAttemptCount"], 1)
         self.assertEqual(counters["executionSuccessCount"], 1)
+
+
+def _event(event_type, interaction_id, *, tenant_id="tenant-a", source_actor_id="agent.test", payload=None):
+    return {
+        "event_type": event_type,
+        "occurred_at": "2026-07-19T12:00:00Z",
+        "tenant_id": tenant_id,
+        "environment": "DEV",
+        "data_source": "PRODUCTION",
+        "interaction_id": interaction_id,
+        "source_actor_id": source_actor_id,
+        "target_actor_id": "tool.test",
+        "relationship_id": "REL-05",
+        "payload": payload or {},
+    }
 
 
 if __name__ == "__main__":

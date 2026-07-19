@@ -24,6 +24,7 @@
  * @property {string[]} reasonCodes
  * @property {boolean} executionAttempted
  * @property {boolean} executionSucceeded
+ * @property {boolean} enforcementActionCompleted
  * @property {string} securityOutcome
  * @property {string} firstOccurredAt
  * @property {boolean} blockDecision
@@ -51,6 +52,18 @@ export const STATISTICS_KIND = "SecurityStatistics";
 const DECISION_RANK = { ALLOW: 0, SANITIZE: 1, HOLD: 2, BLOCK: 3, QUARANTINE: 4, KILL: 5 };
 
 /**
+ * Extract raw Ledger events from either supported import envelope.
+ *
+ * @param {unknown} value
+ * @returns {Record<string, unknown>[]|null}
+ */
+export function ledgerEventsForStatistics(value) {
+  if (Array.isArray(value)) return value.filter(isPlainObject);
+  if (isPlainObject(value) && Array.isArray(value.events)) return value.events.filter(isPlainObject);
+  return null;
+}
+
+/**
  * Join event-envelope objects (the JSON shape of `Event.to_dict()`) by interaction.
  *
  * @param {Iterable<Record<string, any>>} events
@@ -61,42 +74,59 @@ export function reduceInteractions(events) {
   for (const event of events) {
     const interactionId = event.interaction_id;
     if (interactionId) {
-      if (!grouped.has(interactionId)) grouped.set(interactionId, []);
-      grouped.get(interactionId).push(event);
+      const tenantId = String(event.tenant_id ?? "");
+      if (!grouped.has(tenantId)) grouped.set(tenantId, new Map());
+      const tenant = grouped.get(tenantId);
+      if (!tenant.has(String(interactionId))) tenant.set(String(interactionId), []);
+      tenant.get(String(interactionId)).push(event);
     }
   }
   const records = [];
-  for (const [interactionId, items] of grouped) {
-    records.push(reduceOne(interactionId, items));
+  for (const tenant of grouped.values()) {
+    for (const [interactionId, items] of tenant) {
+      const record = reduceOne(interactionId, items);
+      if (record) records.push(record);
+    }
   }
-  records.sort((a, b) => cmp(a.firstOccurredAt, b.firstOccurredAt) || cmp(a.interactionId, b.interactionId));
+  records.sort((a, b) => eventTime({ occurred_at: a.firstOccurredAt }) - eventTime({ occurred_at: b.firstOccurredAt })
+    || cmp(a.tenantId, b.tenantId)
+    || cmp(a.interactionId, b.interactionId));
   return records;
 }
 
 /**
  * @param {string} interactionId
  * @param {Record<string, any>[]} events
- * @returns {InteractionRecord}
+ * @returns {InteractionRecord|null}
  */
 function reduceOne(interactionId, events) {
   const orderedIndices = events
     .map((_, index) => index)
-    .sort((a, b) => cmp(occurredAtKey(events[a]), occurredAtKey(events[b])) || a - b);
+    .sort((a, b) => eventTime(events[a]) - eventTime(events[b])
+      || cmp(String(events[a].event_id ?? ""), String(events[b].event_id ?? ""))
+      || a - b);
+  const requestedIndices = orderedIndices.filter((index) => events[index].event_type === "INTERACTION_REQUESTED");
+  if (requestedIndices.length === 0) return null;
 
   const controls = [];
   let executionAttempted = false;
   let executionSucceeded = false;
+  let enforcementActionCompleted = false;
   let outcome = "UNKNOWN";
 
   for (const index of orderedIndices) {
     const event = events[index];
     const eventType = event.event_type;
-    const payload = event.payload || {};
+    const payload = isPlainObject(event.payload) ? event.payload : {};
     if (eventType === "CONTROL_EVALUATED" && isPlainObject(payload.control)) {
       controls.push(payload.control);
-    } else if (eventType === "ACTION_EXECUTED" && payload.connectorExecutionId) {
-      executionAttempted = true;
-      if (payload.result === "COMPLETED") executionSucceeded = true;
+    } else if (eventType === "ACTION_EXECUTED") {
+      if (payload.connectorExecutionId !== null && payload.connectorExecutionId !== undefined) {
+        executionAttempted = true;
+        if (payload.result === "COMPLETED") executionSucceeded = true;
+      } else if (payload.result === "COMPLETED") {
+        enforcementActionCompleted = true;
+      }
     } else if (eventType === "SECURITY_OUTCOME_SET" && payload.securityOutcome) {
       outcome = String(payload.securityOutcome);
     }
@@ -114,17 +144,20 @@ function reduceOne(interactionId, events) {
 
   const reasonCodes = [];
   for (const control of controls) {
-    for (const code of control.reasonCodes || []) {
+    const codes = typeof control.reasonCodes === "string"
+      ? [control.reasonCodes]
+      : Array.isArray(control.reasonCodes) ? control.reasonCodes : [];
+    for (const code of codes) {
       const value = String(code);
       if (!reasonCodes.includes(value)) reasonCodes.push(value);
     }
   }
 
-  const first = events[orderedIndices[0]];
+  const first = events[requestedIndices[0]];
   const blockDecision = decision !== "ALLOW";
-  const actualEnforced = Boolean(chosen.actualEnforced);
+  const actualEnforced = chosen.actualEnforced === true;
   const shadowWouldBlock = blockDecision && !actualEnforced;
-  const enforcedBlock = blockDecision && actualEnforced && !executionAttempted;
+  const enforcedBlock = blockDecision && actualEnforced && enforcementActionCompleted && !executionAttempted && outcome === "BLOCKED";
   const partialOrBypass = outcome === "PARTIALLY_EXECUTED" || (blockDecision && actualEnforced && executionAttempted);
 
   return {
@@ -135,13 +168,14 @@ function reduceOne(interactionId, events) {
     sourceActorId: String(first.source_actor_id ?? ""),
     targetActorId: first.target_actor_id ?? null,
     relationshipId: String(first.relationship_id ?? ""),
-    policyId: chosen.policyId ?? null,
-    mode: chosen.mode ?? null,
+    policyId: typeof chosen.policyId === "string" ? chosen.policyId : null,
+    mode: typeof chosen.mode === "string" ? chosen.mode : null,
     decision,
     actualEnforced,
     reasonCodes,
     executionAttempted,
     executionSucceeded,
+    enforcementActionCompleted,
     securityOutcome: outcome,
     firstOccurredAt: String(first.occurred_at ?? ""),
     blockDecision,
@@ -191,6 +225,7 @@ export function summarizeSecurityStatistics(events) {
       byRelationship: grouped(subset, "relationshipId", (r) => r.relationshipId),
       byActor: grouped(subset, "sourceActorId", (r) => r.sourceActorId),
       byPolicy: grouped(subset, "policyId", (r) => r.policyId),
+      byMode: grouped(subset, "mode", (r) => r.mode),
       byReasonCode: reasonCounts(subset),
       timeSeries: timeSeries(subset),
     };
@@ -296,8 +331,12 @@ function hourBucket(occurredAt) {
  * @param {Record<string, any>} event
  * @returns {string}
  */
-function occurredAtKey(event) {
-  return String(event.occurred_at ?? "");
+function eventTime(event) {
+  const value = String(event.occurred_at ?? "");
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) throw new Error("event timestamps must carry a UTC offset");
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) throw new Error("event timestamp is invalid");
+  return milliseconds;
 }
 
 /**
@@ -316,5 +355,11 @@ function isPlainObject(value) {
  * @returns {number}
  */
 function cmp(a, b) {
-  return a < b ? -1 : a > b ? 1 : 0;
+  const left = Array.from(String(a), (value) => value.codePointAt(0));
+  const right = Array.from(String(b), (value) => value.codePointAt(0));
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return left.length - right.length;
 }

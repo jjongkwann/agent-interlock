@@ -17,7 +17,10 @@ from pathlib import Path
 from agent_interlock import (
     DeploymentBundle,
     GitBundleStore,
+    SigningBackendUnavailable,
     StudioDeploymentError,
+    TrustedApprovalKey,
+    ed25519_public_key_bytes,
     sign_deployment_approval,
 )
 from agent_interlock.__main__ import main
@@ -27,7 +30,15 @@ MANIFEST = ROOT / "examples" / "secure_multi_agent_architecture.json"
 
 KEY_A = b"studio-approver-key-a-0000000000"
 KEY_B = b"studio-approver-key-b-1111111111"
-TRUSTED_KEYS = {"key-a": KEY_A, "key-b": KEY_B}
+try:
+    TRUSTED_APPROVERS = {
+        "key-a": TrustedApprovalKey("alice", ed25519_public_key_bytes(KEY_A)),
+        "key-b": TrustedApprovalKey("bob", ed25519_public_key_bytes(KEY_B)),
+    }
+    CRYPTO_AVAILABLE = True
+except SigningBackendUnavailable:
+    TRUSTED_APPROVERS = {}
+    CRYPTO_AVAILABLE = False
 
 
 def compile_bundle() -> DeploymentBundle:
@@ -38,7 +49,10 @@ def compile_bundle() -> DeploymentBundle:
     return DeploymentBundle.from_compile_output(json.loads(out.getvalue()))
 
 
-@unittest.skipUnless(shutil.which("git"), "git is required for the studio deployment workflow")
+@unittest.skipUnless(
+    shutil.which("git") and CRYPTO_AVAILABLE,
+    "git and the jwt extra are required for the studio deployment workflow",
+)
 class StudioDeploymentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.mkdtemp(prefix="studio-deploy-")
@@ -54,7 +68,7 @@ class StudioDeploymentTests(unittest.TestCase):
                 to_mode="ENFORCE",
                 approver_id=approver,
                 key_id=key_id,
-                key=TRUSTED_KEYS[key_id],
+                key={"key-a": KEY_A, "key-b": KEY_B}[key_id],
             )
             for approver, key_id in pairs
         )
@@ -63,7 +77,7 @@ class StudioDeploymentTests(unittest.TestCase):
         self.store.propose(self.bundle)
         self.assertIsNone(self.store.active())
         approvals = self._approvals(None, ("alice", "key-a"), ("bob", "key-b"))
-        self.store.promote(self.bundle.bundle_digest, approvals, trusted_keys=TRUSTED_KEYS)
+        self.store.promote(self.bundle.bundle_digest, approvals, trusted_approvers=TRUSTED_APPROVERS)
         active = self.store.active()
         self.assertEqual(active["mode"], "ENFORCE")
         self.assertEqual(active["bundleDigest"], self.bundle.bundle_digest)
@@ -75,7 +89,7 @@ class StudioDeploymentTests(unittest.TestCase):
         self.store.propose(self.bundle)
         approvals = self._approvals(None, ("alice", "key-a"), ("alice", "key-a"))
         with self.assertRaises(StudioDeploymentError) as raised:
-            self.store.promote(self.bundle.bundle_digest, approvals, trusted_keys=TRUSTED_KEYS)
+            self.store.promote(self.bundle.bundle_digest, approvals, trusted_approvers=TRUSTED_APPROVERS)
         self.assertEqual(raised.exception.reason_code, "L1-STUDIO-TWO-PERSON-APPROVAL-REQUIRED")
         self.assertIsNone(self.store.active())
 
@@ -84,13 +98,34 @@ class StudioDeploymentTests(unittest.TestCase):
         good = self._approvals(None, ("alice", "key-a"))[0]
         forged = good.__class__("bob", "key-b", good.signature)  # bob's key never signed this
         with self.assertRaises(StudioDeploymentError) as raised:
-            self.store.promote(self.bundle.bundle_digest, (good, forged), trusted_keys=TRUSTED_KEYS)
+            self.store.promote(self.bundle.bundle_digest, (good, forged), trusted_approvers=TRUSTED_APPROVERS)
         self.assertEqual(raised.exception.reason_code, "L1-STUDIO-APPROVAL-SIGNATURE-INVALID")
+
+    def test_two_identities_mapped_to_the_same_public_key_are_insufficient(self):
+        self.store.propose(self.bundle)
+        duplicated = {
+            "key-a": TrustedApprovalKey("alice", ed25519_public_key_bytes(KEY_A)),
+            "key-b": TrustedApprovalKey("bob", ed25519_public_key_bytes(KEY_A)),
+        }
+        approvals = tuple(
+            sign_deployment_approval(
+                self.bundle,
+                from_digest=None,
+                to_mode="ENFORCE",
+                approver_id=approver,
+                key_id=key_id,
+                key=KEY_A,
+            )
+            for approver, key_id in (("alice", "key-a"), ("bob", "key-b"))
+        )
+        with self.assertRaises(StudioDeploymentError) as raised:
+            self.store.promote(self.bundle.bundle_digest, approvals, trusted_approvers=duplicated)
+        self.assertEqual(raised.exception.reason_code, "L1-STUDIO-TWO-PERSON-APPROVAL-REQUIRED")
 
     def test_promote_unknown_bundle_is_rejected(self):
         approvals = self._approvals(None, ("alice", "key-a"), ("bob", "key-b"))
         with self.assertRaises(StudioDeploymentError) as raised:
-            self.store.promote("sha256:" + "0" * 64, approvals, trusted_keys=TRUSTED_KEYS)
+            self.store.promote("sha256:" + "0" * 64, approvals, trusted_approvers=TRUSTED_APPROVERS)
         self.assertEqual(raised.exception.reason_code, "L1-STUDIO-BUNDLE-UNKNOWN")
 
     def test_rollback_restores_a_previous_bundle(self):
@@ -99,7 +134,7 @@ class StudioDeploymentTests(unittest.TestCase):
         self.store.promote(
             self.bundle.bundle_digest,
             self._approvals(None, ("alice", "key-a"), ("bob", "key-b")),
-            trusted_keys=TRUSTED_KEYS,
+            trusted_approvers=TRUSTED_APPROVERS,
         )
         first_digest = self.bundle.bundle_digest
 
@@ -117,19 +152,39 @@ class StudioDeploymentTests(unittest.TestCase):
                     to_mode="ENFORCE",
                     approver_id=approver,
                     key_id=key_id,
-                    key=TRUSTED_KEYS[key_id],
+                    key={"key-a": KEY_A, "key-b": KEY_B}[key_id],
                 )
                 for approver, key_id in (("alice", "key-a"), ("bob", "key-b"))
             ),
-            trusted_keys=TRUSTED_KEYS,
+            trusted_approvers=TRUSTED_APPROVERS,
         )
         self.assertEqual(self.store.active()["bundleDigest"], second.bundle_digest)
 
         # Rollback to the first, known-good bundle.
-        self.store.rollback(first_digest)
+        rollback_approvals = self._approvals(
+            second.bundle_digest,
+            ("alice", "key-a"),
+            ("bob", "key-b"),
+        )
+        self.store.rollback(
+            first_digest,
+            rollback_approvals,
+            trusted_approvers=TRUSTED_APPROVERS,
+        )
         active = self.store.active()
         self.assertEqual(active["bundleDigest"], first_digest)
         self.assertEqual(active["rolledBackFrom"], second.bundle_digest)
+
+    def test_rollback_rejects_a_bundle_that_was_only_proposed(self):
+        self.store.propose(self.bundle)
+        approvals = self._approvals(None, ("alice", "key-a"), ("bob", "key-b"))
+        with self.assertRaises(StudioDeploymentError) as raised:
+            self.store.rollback(
+                self.bundle.bundle_digest,
+                approvals,
+                trusted_approvers=TRUSTED_APPROVERS,
+            )
+        self.assertEqual(raised.exception.reason_code, "L1-STUDIO-ROLLBACK-TARGET-NOT-ACTIVE")
 
     def test_bundle_digest_tamper_is_rejected_at_parse(self):
         out = io.StringIO()

@@ -62,6 +62,13 @@ function PartitionView({ partition }: { partition: SecurityStatisticsPartition }
               <tr key={item.policyId}><td>{item.policyId}</td><td>{item.counters.interactionCount} calls</td><td>{item.counters.blockDecisionCount} blocked</td></tr>
             ))}
           </tbody></table>
+          <h4>By mode</h4>
+          <table className="stats-table"><tbody>
+            {partition.byMode.length === 0 && <tr><td colSpan={3}>none</td></tr>}
+            {partition.byMode.map((item) => (
+              <tr key={item.mode}><td>{item.mode}</td><td>{item.counters.interactionCount} calls</td><td>{item.counters.blockDecisionCount} blocked</td></tr>
+            ))}
+          </tbody></table>
         </div>
       </div>
       <h4>Hourly buckets (UTC)</h4>
@@ -156,6 +163,9 @@ export function StatsPanel({
       )}
       {stats && stats.partitions.length === 0 && (
         <div className="canvas-empty static"><span>Σ</span><strong>No interactions in range</strong><p>The event set contains no interaction lifecycles to aggregate.</p></div>
+      )}
+      {stats && source === "offline" && rawLedgerEvents?.some((event) => "integrity_hash" in event) && (
+        <p className="panel-note">Offline browser statistics do not verify Ledger integrity hashes. Confirm evidence with the authenticated API or Python verifier.</p>
       )}
       {stats && stats.partitions.map((partition) => <PartitionView key={partition.dataSource} partition={partition} />)}
     </div>
@@ -298,8 +308,8 @@ export function DeployPanel({ notify }: { notify: (message: string) => void }) {
           <button className="quiet-button" disabled={!bundle} onClick={propose}>Propose to review store</button>
           {statement && (
             <>
-              <h4>2 · Approval statement</h4>
-              <p className="panel-note">Each approver signs exactly this statement:</p>
+              <h4>2 · Approval context</h4>
+              <p className="panel-note">The CLI signs this context plus its approverId and keyId with the approver&apos;s Ed25519 private key:</p>
               <pre className="statement-block"><code>{JSON.stringify(statement, null, 2)}</code></pre>
             </>
           )}
@@ -323,7 +333,11 @@ export function DeployPanel({ notify }: { notify: (message: string) => void }) {
               <span>{String(active.mode ?? "ENFORCE")}</span>
               <strong><code>{String(active.bundleDigest ?? "")}</code></strong>
               {Array.isArray(active.approvers) && <small>approved by {(active.approvers as string[]).join(", ")}</small>}
-              <button className="danger-button" onClick={() => rollback(String(active.bundleDigest))}>Re-pin (rollback target)</button>
+              <button
+                className="danger-button"
+                disabled={!bundle || bundle.bundleDigest === String(active.bundleDigest)}
+                onClick={() => bundle && rollback(bundle.bundleDigest)}
+              >Rollback to loaded bundle</button>
             </div>
           ) : (
             <p className="panel-note">No active bundle (or not connected).</p>

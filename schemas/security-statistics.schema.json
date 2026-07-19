@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://interlock.dev/schemas/security-statistics.schema.json",
   "title": "Agent Interlock Security Statistics",
-  "description": "Aggregate security statistics reduced from ledger events by joining each interaction_id across its lifecycle (INTERACTION_REQUESTED -> CONTROL_EVALUATED -> ACTION_EXECUTED -> SECURITY_OUTCOME_SET). Events without an interaction_id do not participate. Python (agent_interlock.analytics) and the Studio offline importer MUST produce identical values for the same events; the shared golden fixture is schemas/fixtures/analytics-events.json -> analytics-statistics.json.",
+  "description": "Aggregate security statistics reduced from ledger events by joining each tenant_id + interaction_id across its lifecycle (INTERACTION_REQUESTED -> CONTROL_EVALUATED -> ACTION_EXECUTED -> SECURITY_OUTCOME_SET). Events without an interaction_id and groups without INTERACTION_REQUESTED do not participate. Python (agent_interlock.analytics) and the Studio offline importer MUST produce identical values for the same events; the shared golden fixture is schemas/fixtures/analytics-events.json -> analytics-statistics.json.",
   "type": "object",
   "required": ["apiVersion", "kind", "interactionCount", "partitions"],
   "additionalProperties": false,
@@ -19,7 +19,7 @@
   "$defs": {
     "partition": {
       "type": "object",
-      "required": ["dataSource", "counters", "outcomes", "byRelationship", "byActor", "byPolicy", "byReasonCode", "timeSeries"],
+      "required": ["dataSource", "counters", "outcomes", "byRelationship", "byActor", "byPolicy", "byMode", "byReasonCode", "timeSeries"],
       "additionalProperties": false,
       "properties": {
         "dataSource": { "type": "string" },
@@ -63,6 +63,19 @@
             "additionalProperties": false,
             "properties": {
               "policyId": { "type": "string" },
+              "counters": { "$ref": "#/$defs/counters" }
+            }
+          }
+        },
+        "byMode": {
+          "description": "Grouped by the mode attached to the strongest control decision. Interactions without a control event are omitted.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["mode", "counters"],
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "enum": ["OBSERVE", "SHADOW", "ENFORCE"] },
               "counters": { "$ref": "#/$defs/counters" }
             }
           }
@@ -121,7 +134,7 @@
           "minimum": 0
         },
         "enforcedBlockCount": {
-          "description": "Non-ALLOW decisions that were enforced AND no connector execution was attempted: the block actually held.",
+          "description": "Non-ALLOW decisions with actualEnforced true, a completed enforcement ACTION_EXECUTED (null connectorExecutionId), no connector attempt, and final securityOutcome BLOCKED.",
           "type": "integer",
           "minimum": 0
         },

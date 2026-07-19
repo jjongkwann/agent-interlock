@@ -9,6 +9,7 @@ import {
   type RuntimeImport,
 } from "./runtime";
 import { DeployPanel, StatsPanel } from "./panels";
+import { ledgerEventsForStatistics } from "./analytics.mjs";
 
 type NodeType = "USER" | "AGENT" | "SUBAGENT" | "RAG" | "TOOL" | "MEMORY" | "EXTERNAL";
 type Mode = "OBSERVE" | "SHADOW" | "ENFORCE";
@@ -476,7 +477,7 @@ export default function Home() {
       const imported = parseRuntimeTelemetry(value);
       setRuntimeImport(imported);
       setRawLedgerEvents(
-        imported.format === "INTERLOCK_LEDGER" && Array.isArray(value) ? (value as Array<Record<string, unknown>>) : null,
+        imported.format === "INTERLOCK_LEDGER" ? ledgerEventsForStatistics(value) : null,
       );
       setActiveGraph("runtime");
       setConnectFrom(null);

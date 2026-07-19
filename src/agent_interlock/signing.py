@@ -4,8 +4,9 @@ An ``integrity_hash`` (see :mod:`agent_interlock.canonical`) proves tamper-evide
 anyone can recompute it. A signature proves ORIGIN — only a holder of the shared
 key could have produced it, which is what promotes a claim to signed evidence.
 
-The reference core uses stdlib HMAC-SHA256 with a symmetric key. Asymmetric /
-KMS / HSM-backed signing for cross-boundary non-repudiation is a deferred extra.
+The reference core uses stdlib HMAC-SHA256 for same-boundary evidence and raw
+Ed25519 keys for cross-boundary Studio deployment approvals. KMS/HSM-backed
+signing remains an integration point outside this in-process reference signer.
 """
 
 from __future__ import annotations
@@ -62,6 +63,18 @@ def sign_canonical_ed25519(value: Any, private_key: bytes) -> str:
 
     signature = Ed25519PrivateKey.from_private_bytes(private_key).sign(canonical_json(value))
     return f"{ED25519_ALGORITHM}:{signature.hex()}"
+
+
+def ed25519_public_key_bytes(private_key: bytes) -> bytes:
+    """Derive the 32-byte raw public key for an Ed25519 private seed."""
+    _require_cryptography()
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    return Ed25519PrivateKey.from_private_bytes(private_key).public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
 
 
 def verify_canonical_ed25519(value: Any, signature: str, public_key: bytes) -> bool:

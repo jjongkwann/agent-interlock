@@ -206,6 +206,7 @@ from .sdk import Actor, Interlock
 from .signing import ALGORITHM as SIGNING_ALGORITHM
 from .signing import (
     SigningBackendUnavailable,
+    ed25519_public_key_bytes,
     sign_canonical,
     sign_canonical_ed25519,
     verify_canonical,
@@ -216,6 +217,8 @@ from .studio_deploy import (
     DeploymentBundle,
     GitBundleStore,
     StudioDeploymentError,
+    TrustedApprovalKey,
+    approval_signature_statement,
     deployment_approval_statement,
     sign_deployment_approval,
 )
@@ -260,6 +263,7 @@ __all__ = [
     "HMACPublisherVerifier",
     "PublisherVerifier",
     "SigningBackendUnavailable",
+    "ed25519_public_key_bytes",
     "sign_artifact_provenance_ed25519",
     "sign_canonical_ed25519",
     "verify_canonical_ed25519",
@@ -301,6 +305,8 @@ __all__ = [
     "DeploymentBundle",
     "GitBundleStore",
     "StudioDeploymentError",
+    "TrustedApprovalKey",
+    "approval_signature_statement",
     "deployment_approval_statement",
     "sign_deployment_approval",
     "DynamicTargetSelector",

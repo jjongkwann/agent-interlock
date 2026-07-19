@@ -72,6 +72,33 @@ class PostgreSQLLedgerUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ledger.events_between("tenant-a", "2026-07-20T00:00:00Z", "2026-07-19T00:00:00Z")
 
+    def test_lifecycle_range_selects_requested_interactions_then_reads_all_events(self):
+        connection = RecordingConnection("tenant-a")
+        ledger = PostgreSQLLedger(lambda: connection, bound_tenant_id="tenant-a")
+        result = ledger.interaction_lifecycles_started_between(
+            "tenant-a",
+            "2026-07-19T00:00:00Z",
+            "2026-07-20T00:00:00Z",
+            data_source="SIMULATION",
+            limit=500,
+        )
+        self.assertEqual(result, ())
+        query, parameters = connection.cursor_value.executed[-1]
+        self.assertIn("event_type = 'INTERACTION_REQUESTED'", query)
+        self.assertIn("interaction_id IN", query)
+        self.assertEqual(
+            parameters,
+            (
+                "tenant-a",
+                "tenant-a",
+                "2026-07-19T00:00:00Z",
+                "2026-07-20T00:00:00Z",
+                "SIMULATION",
+                "SIMULATION",
+                501,
+            ),
+        )
+
     def test_db_role_tenant_mismatch_fails_before_event_sql(self):
         connection = RecordingConnection("tenant-b")
         ledger = PostgreSQLLedger(lambda: connection, bound_tenant_id="tenant-a")

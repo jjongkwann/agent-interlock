@@ -14,6 +14,7 @@ from agent_interlock import (
     LedgerHTTPConfig,
     LedgerIdempotencyConflict,
     StaticBearerAuthenticator,
+    build_event,
     create_ledger_http_server,
 )
 
@@ -272,6 +273,50 @@ class EventsBetweenContractTests(unittest.TestCase):
             ledger.events_between("tenant-a", "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z", limit=1)
         with self.assertRaises(ValueError):
             ledger.events_between("tenant-a", "2100-01-01T00:00:00Z", "2000-01-01T00:00:00Z")
+
+    def test_lifecycle_range_selects_by_request_and_returns_the_complete_interaction(self):
+        common = dict(
+            tenant_id="tenant-a",
+            trace_id="trace-boundary",
+            span_id="span-boundary",
+            interaction_id="ia-boundary",
+            source_actor_id="agent.support",
+            target_actor_id="tool.mail",
+        )
+        events = [
+            build_event(
+                "INTERACTION_REQUESTED",
+                occurred_at="2026-07-19T11:59:59Z",
+                payload={},
+                **common,
+            ),
+            build_event(
+                "CONTROL_EVALUATED",
+                occurred_at="2026-07-19T12:00:01Z",
+                payload={"control": {"decision": "ALLOW", "mode": "ENFORCE", "actualEnforced": True}},
+                **common,
+            ),
+            build_event(
+                "ACTION_EXECUTED",
+                occurred_at="2026-07-19T12:00:02Z",
+                payload={"result": "COMPLETED", "connectorExecutionId": "exec-boundary"},
+                **common,
+            ),
+            build_event(
+                "SECURITY_OUTCOME_SET",
+                occurred_at="2026-07-19T12:00:03Z",
+                payload={"securityOutcome": "UNKNOWN"},
+                **common,
+            ),
+        ]
+        ledger = InMemoryLedger()
+        ledger._events.extend(events)
+        lifecycle = ledger.interaction_lifecycles_started_between(
+            "tenant-a",
+            "2026-07-19T11:00:00Z",
+            "2026-07-19T12:00:00Z",
+        )
+        self.assertEqual([event.event_type for event in lifecycle], [event.event_type for event in events])
 
 
 class InMemoryLedgerContractTests(unittest.TestCase):

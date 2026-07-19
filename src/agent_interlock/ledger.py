@@ -151,6 +151,16 @@ class Ledger(Protocol):
         limit: int = 100_000,
     ) -> tuple[Event, ...]: ...
 
+    def interaction_lifecycles_started_between(
+        self,
+        tenant_id: str,
+        start: str,
+        end: str,
+        *,
+        data_source: str | None = None,
+        limit: int = 100_000,
+    ) -> tuple[Event, ...]: ...
+
 
 def build_event(
     event_type: str,
@@ -399,6 +409,43 @@ class InMemoryLedger:
             )
         if len(values) > limit:
             raise LedgerRangeTooLarge("time range matches more events than the limit")
+        return tuple(values)
+
+    def interaction_lifecycles_started_between(
+        self,
+        tenant_id: str,
+        start: str,
+        end: str,
+        *,
+        data_source: str | None = None,
+        limit: int = 100_000,
+    ) -> tuple[Event, ...]:
+        if not tenant_id or limit < 1:
+            raise ValueError("tenant_id and a positive limit are required")
+        start_at = parse_event_time(start)
+        end_at = parse_event_time(end)
+        if start_at >= end_at:
+            raise ValueError("start must be before end")
+        with self._lock:
+            interaction_ids = {
+                event.interaction_id
+                for event in self._events
+                if event.tenant_id == tenant_id
+                and event.event_type == "INTERACTION_REQUESTED"
+                and event.interaction_id is not None
+                and start_at <= parse_event_time(event.occurred_at) < end_at
+                and (data_source is None or event.data_source == data_source)
+            }
+            values = sorted(
+                (
+                    event
+                    for event in self._events
+                    if event.tenant_id == tenant_id and event.interaction_id in interaction_ids
+                ),
+                key=lambda item: (parse_event_time(item.occurred_at), item.event_id),
+            )
+        if len(values) > limit:
+            raise LedgerRangeTooLarge("interaction lifecycles match more events than the limit")
         return tuple(values)
 
     @staticmethod

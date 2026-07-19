@@ -2,18 +2,27 @@
 
 import io
 import json
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_interlock import SigningBackendUnavailable, ed25519_public_key_bytes
 from agent_interlock.__main__ import main
 
 MANIFEST = Path(__file__).resolve().parent.parent / "examples" / "secure_multi_agent_architecture.json"
 
 KEY_ONE = "11" * 32
 KEY_TWO = "22" * 32
+try:
+    PUBLIC_ONE = ed25519_public_key_bytes(bytes.fromhex(KEY_ONE)).hex()
+    PUBLIC_TWO = ed25519_public_key_bytes(bytes.fromhex(KEY_TWO)).hex()
+    CRYPTO_AVAILABLE = True
+except SigningBackendUnavailable:
+    PUBLIC_ONE = PUBLIC_TWO = ""
+    CRYPTO_AVAILABLE = False
 
 
 def run_cli(*argv: str) -> tuple[int, dict]:
@@ -24,6 +33,10 @@ def run_cli(*argv: str) -> tuple[int, dict]:
     return code, json.loads(output) if output.strip() else {}
 
 
+@unittest.skipUnless(
+    shutil.which("git") and CRYPTO_AVAILABLE,
+    "git and the jwt extra are required for the Studio CLI workflow",
+)
 class StudioCLITests(unittest.TestCase):
     def test_full_promotion_and_rollback_flow(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,7 +77,15 @@ class StudioCLITests(unittest.TestCase):
                 approvals.append(path)
 
             trusted = root / "trusted-keys.json"
-            trusted.write_text(json.dumps({"key-one": KEY_ONE, "key-two": KEY_TWO}), encoding="utf-8")
+            trusted.write_text(
+                json.dumps(
+                    {
+                        "key-one": {"approverId": "security-lead", "publicKey": PUBLIC_ONE},
+                        "key-two": {"approverId": "platform-lead", "publicKey": PUBLIC_TWO},
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             code, promoted = run_cli(
                 "studio",
@@ -89,7 +110,40 @@ class StudioCLITests(unittest.TestCase):
             self.assertEqual(status["active"]["bundleDigest"], digest)
             self.assertTrue(any("promote" in line for line in status["history"]))
 
-            code, rolled = run_cli("studio", "rollback", digest, "--repo", str(repo))
+            rollback_approvals = []
+            for approver, key_id, key_hex in (
+                ("security-lead", "key-one", KEY_ONE),
+                ("platform-lead", "key-two", KEY_TWO),
+            ):
+                with patch.dict("os.environ", {"INTERLOCK_APPROVAL_KEY": key_hex}):
+                    code, approval = run_cli(
+                        "studio",
+                        "approve",
+                        str(bundle_path),
+                        "--repo",
+                        str(repo),
+                        "--approver",
+                        approver,
+                        "--key-id",
+                        key_id,
+                    )
+                self.assertEqual(code, 0)
+                path = root / f"rollback-approval-{approver}.json"
+                path.write_text(json.dumps(approval), encoding="utf-8")
+                rollback_approvals.append(path)
+            code, rolled = run_cli(
+                "studio",
+                "rollback",
+                digest,
+                "--repo",
+                str(repo),
+                "--approval",
+                str(rollback_approvals[0]),
+                "--approval",
+                str(rollback_approvals[1]),
+                "--trusted-keys",
+                str(trusted),
+            )
             self.assertEqual(code, 0)
             self.assertEqual(rolled["active"]["bundleDigest"], digest)
 
@@ -116,7 +170,10 @@ class StudioCLITests(unittest.TestCase):
             approval_path = root / "approval.json"
             approval_path.write_text(json.dumps(approval), encoding="utf-8")
             trusted = root / "trusted-keys.json"
-            trusted.write_text(json.dumps({"key-one": KEY_ONE}), encoding="utf-8")
+            trusted.write_text(
+                json.dumps({"key-one": {"approverId": "solo", "publicKey": PUBLIC_ONE}}),
+                encoding="utf-8",
+            )
             code, _ = run_cli(
                 "studio",
                 "promote",

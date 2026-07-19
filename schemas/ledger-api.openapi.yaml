@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Agent Interlock Ledger API
   version: 0.2.0
-  description: Tenant-bound event ingestion, OTLP/HTTP runtime decoding, and bounded trace queries.
+  description: Tenant-bound event ingestion, OTLP/HTTP runtime decoding, bounded trace queries, and security statistics.
 servers:
   - url: http://127.0.0.1:8080
     description: Loopback reference server; production requires TLS at a trusted proxy.
@@ -99,7 +99,9 @@ paths:
       operationId: getStatistics
       summary: Aggregate tenant-scoped security statistics over a time range
       description: >-
-        Reduces the tenant's ledger events in [from, to) into the
+        Selects tenant interactions whose INTERACTION_REQUESTED occurred in
+        [from, to), loads each selected interaction's complete lifecycle, and
+        reduces those events into the
         SecurityStatistics contract (schemas/security-statistics.schema.json)
         by joining each interaction_id across its lifecycle. Requires the
         statistics:read scope, which grants aggregates only - not raw events.
@@ -111,12 +113,12 @@ paths:
           in: query
           required: true
           schema: {type: string, format: date-time}
-          description: Inclusive ISO 8601 lower bound on occurred_at.
+          description: Inclusive ISO 8601 lower bound on INTERACTION_REQUESTED.occurred_at.
         - name: to
           in: query
           required: true
           schema: {type: string, format: date-time}
-          description: Exclusive ISO 8601 upper bound on occurred_at.
+          description: Exclusive ISO 8601 upper bound on INTERACTION_REQUESTED.occurred_at.
         - name: dataSource
           in: query
           schema: {type: string, enum: [PRODUCTION, SIMULATION, RED_TEAM, TEST]}
@@ -133,8 +135,7 @@ paths:
                   from: {type: string, format: date-time}
                   to: {type: string, format: date-time}
                   statistics:
-                    description: SecurityStatistics value; see schemas/security-statistics.schema.json
-                    type: object
+                    $ref: './security-statistics.schema.json'
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}

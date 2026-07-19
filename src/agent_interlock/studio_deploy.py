@@ -18,12 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_digest
-from .signing import sign_canonical, verify_canonical
+from .signing import sign_canonical_ed25519, verify_canonical_ed25519
 
 REASON_TWO_PERSON_REQUIRED = "L1-STUDIO-TWO-PERSON-APPROVAL-REQUIRED"
 REASON_SIGNATURE_INVALID = "L1-STUDIO-APPROVAL-SIGNATURE-INVALID"
 REASON_BUNDLE_UNKNOWN = "L1-STUDIO-BUNDLE-UNKNOWN"
 REASON_DIGEST_MISMATCH = "L1-STUDIO-BUNDLE-DIGEST-MISMATCH"
+REASON_ROLLBACK_TARGET_NOT_ACTIVE = "L1-STUDIO-ROLLBACK-TARGET-NOT-ACTIVE"
 
 
 class StudioDeploymentError(RuntimeError):
@@ -37,6 +38,18 @@ class DeploymentApproval:
     approver_id: str
     key_id: str
     signature: str
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedApprovalKey:
+    """One approver identity bound to one Ed25519 verification key."""
+
+    approver_id: str
+    public_key: bytes
+
+    def __post_init__(self) -> None:
+        if not self.approver_id or len(self.public_key) != 32:
+            raise ValueError("trusted approver requires an identity and a 32-byte Ed25519 public key")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +86,22 @@ def deployment_approval_statement(bundle: DeploymentBundle, *, from_digest: str 
     }
 
 
+def approval_signature_statement(
+    bundle: DeploymentBundle,
+    *,
+    from_digest: str | None,
+    to_mode: str,
+    approver_id: str,
+    key_id: str,
+) -> dict[str, Any]:
+    """Return the full signed value, including the asserted approver identity."""
+    return {
+        **deployment_approval_statement(bundle, from_digest=from_digest, to_mode=to_mode),
+        "approverId": approver_id,
+        "keyId": key_id,
+    }
+
+
 def sign_deployment_approval(
     bundle: DeploymentBundle,
     *,
@@ -82,25 +111,45 @@ def sign_deployment_approval(
     key_id: str,
     key: bytes,
 ) -> DeploymentApproval:
-    statement = deployment_approval_statement(bundle, from_digest=from_digest, to_mode=to_mode)
-    return DeploymentApproval(approver_id, key_id, sign_canonical(statement, key))
+    signed = approval_signature_statement(
+        bundle,
+        from_digest=from_digest,
+        to_mode=to_mode,
+        approver_id=approver_id,
+        key_id=key_id,
+    )
+    return DeploymentApproval(approver_id, key_id, sign_canonical_ed25519(signed, key))
 
 
 def _verify_two_person(
     statement: Mapping[str, Any],
     approvals: tuple[DeploymentApproval, ...],
-    trusted_keys: Mapping[str, bytes],
+    trusted_approvers: Mapping[str, TrustedApprovalKey],
 ) -> None:
     approvers: set[str] = set()
-    keys: set[str] = set()
+    keys: set[bytes] = set()
     for approval in approvals:
-        key = trusted_keys.get(approval.key_id)
-        if not key or not verify_canonical(statement, approval.signature, key):
-            raise StudioDeploymentError(REASON_SIGNATURE_INVALID, "approval signature is invalid")
+        verify_deployment_approval(statement, approval, trusted_approvers)
         approvers.add(approval.approver_id)
-        keys.add(approval.key_id)
+        keys.add(trusted_approvers[approval.key_id].public_key)
     if len(approvers) < 2 or len(keys) < 2:
         raise StudioDeploymentError(REASON_TWO_PERSON_REQUIRED, "promotion requires two distinct signed approvals")
+
+
+def verify_deployment_approval(
+    statement: Mapping[str, Any],
+    approval: DeploymentApproval,
+    trusted_approvers: Mapping[str, TrustedApprovalKey],
+) -> None:
+    """Verify one approval against its configured identity and public key."""
+    trusted = trusted_approvers.get(approval.key_id)
+    signed = {**statement, "approverId": approval.approver_id, "keyId": approval.key_id}
+    if (
+        trusted is None
+        or trusted.approver_id != approval.approver_id
+        or not verify_canonical_ed25519(signed, approval.signature, trusted.public_key)
+    ):
+        raise StudioDeploymentError(REASON_SIGNATURE_INVALID, "approval signature is invalid")
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -153,6 +202,10 @@ class GitBundleStore:
             raise StudioDeploymentError(REASON_DIGEST_MISMATCH, "stored bundle digest does not match its body")
         return DeploymentBundle(body["architectureId"], str(body["version"]), bundle_digest, body)
 
+    def bundle(self, bundle_digest: str) -> DeploymentBundle:
+        """Load and integrity-check a proposed bundle."""
+        return self._load_bundle(bundle_digest)
+
     def active(self) -> dict[str, Any] | None:
         path = self.repo / "deploy" / "active.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
@@ -162,14 +215,14 @@ class GitBundleStore:
         bundle_digest: str,
         approvals: tuple[DeploymentApproval, ...],
         *,
-        trusted_keys: Mapping[str, bytes],
+        trusted_approvers: Mapping[str, TrustedApprovalKey],
     ) -> str:
         """Two-person-gated SHADOW→ENFORCE promotion of a proposed bundle."""
         bundle = self._load_bundle(bundle_digest)
         current = self.active()
         from_digest = current["bundleDigest"] if current else None
         statement = deployment_approval_statement(bundle, from_digest=from_digest, to_mode="ENFORCE")
-        _verify_two_person(statement, approvals, trusted_keys)
+        _verify_two_person(statement, approvals, trusted_approvers)
         active = {
             "mode": "ENFORCE",
             "bundleDigest": bundle_digest,
@@ -179,16 +232,43 @@ class GitBundleStore:
         (self.repo / "deploy" / "active.json").write_text(
             json.dumps(active, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
         )
+        activation = self.repo / "deploy" / "activations" / f"{bundle_digest}.json"
+        activation.parent.mkdir(parents=True, exist_ok=True)
+        activation.write_text(
+            json.dumps(
+                {"bundleDigest": bundle_digest, "approvers": active["approvers"]},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         return self._commit(f"studio: promote {bundle_digest} SHADOW->ENFORCE")
 
-    def rollback(self, target_digest: str) -> str:
-        """Restore a previously proposed bundle as the active ENFORCE bundle."""
-        self._load_bundle(target_digest)  # must be a known bundle
+    def rollback(
+        self,
+        target_digest: str,
+        approvals: tuple[DeploymentApproval, ...],
+        *,
+        trusted_approvers: Mapping[str, TrustedApprovalKey],
+    ) -> str:
+        """Restore a previously active bundle after a fresh two-person approval."""
+        bundle = self._load_bundle(target_digest)
         current = self.active()
+        activation = self.repo / "deploy" / "activations" / f"{target_digest}.json"
+        if not activation.exists() and (current is None or current.get("bundleDigest") != target_digest):
+            raise StudioDeploymentError(
+                REASON_ROLLBACK_TARGET_NOT_ACTIVE,
+                "rollback target has never been an active bundle",
+            )
+        from_digest = current["bundleDigest"] if current else None
+        statement = deployment_approval_statement(bundle, from_digest=from_digest, to_mode="ENFORCE")
+        _verify_two_person(statement, approvals, trusted_approvers)
         active = {
             "mode": "ENFORCE",
             "bundleDigest": target_digest,
-            "rolledBackFrom": current["bundleDigest"] if current else None,
+            "rolledBackFrom": from_digest,
+            "approvers": sorted({approval.approver_id for approval in approvals}),
         }
         (self.repo / "deploy" / "active.json").write_text(
             json.dumps(active, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"

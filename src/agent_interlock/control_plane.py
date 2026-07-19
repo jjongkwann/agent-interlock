@@ -2,11 +2,11 @@
 
 Studio stays a static SPA; anything that needs credentials — proposing a
 bundle, collecting approvals, promoting SHADOW→ENFORCE, rolling back — goes
-through this server, which holds the trusted approval keys and the git bundle
+through this server, which holds trusted Ed25519 public keys and the git bundle
 store. Approvers still sign OUTSIDE the server (CLI ``interlock studio
 approve``) with their own keys; the server only verifies and executes, so no
-signing key ever reaches a browser and the server alone cannot forge a
-two-person promotion.
+private signing key ever reaches the server or browser. The server alone
+therefore cannot forge a two-person promotion.
 
 Pending approvals are held in memory keyed by bundle digest; a restart drops
 them and approvers simply resubmit. Approval statements bind the CURRENT
@@ -35,6 +35,9 @@ from .studio_deploy import (
     DeploymentBundle,
     GitBundleStore,
     StudioDeploymentError,
+    TrustedApprovalKey,
+    deployment_approval_statement,
+    verify_deployment_approval,
 )
 
 SCOPE_READ = "deploy:read"
@@ -47,6 +50,7 @@ _ERROR_STATUS = {
     "L1-STUDIO-APPROVAL-SIGNATURE-INVALID": 422,
     "L1-STUDIO-BUNDLE-UNKNOWN": 404,
     "L1-STUDIO-BUNDLE-DIGEST-MISMATCH": 422,
+    "L1-STUDIO-ROLLBACK-TARGET-NOT-ACTIVE": 422,
 }
 
 
@@ -78,15 +82,15 @@ class ControlPlaneAPI:
         store: GitBundleStore,
         authenticator: LedgerAPIAuthenticator,
         *,
-        trusted_keys: Mapping[str, bytes],
+        trusted_approvers: Mapping[str, TrustedApprovalKey],
         config: ControlPlaneConfig | None = None,
     ) -> None:
         self.store = store
         self.authenticator = authenticator
-        self.trusted_keys = dict(trusted_keys)
+        self.trusted_approvers = dict(trusted_approvers)
         self.config = config or ControlPlaneConfig()
         self._approvals: dict[str, dict[tuple[str, str], DeploymentApproval]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         try:
@@ -101,12 +105,15 @@ class ControlPlaneAPI:
             segments = [item for item in parts.path.split("/") if item]
             if handler.command == "GET" and segments == ["v1", "deploy", "status"]:
                 self._require_scope(principal, SCOPE_READ)
-                self._send_json(handler, 200, {"active": self.store.active(), "history": list(self.store.history())})
+                with self._lock:
+                    status = {"active": self.store.active(), "history": list(self.store.history())}
+                self._send_json(handler, 200, status)
                 return
             if handler.command == "POST" and segments == ["v1", "bundles"]:
                 self._require_scope(principal, SCOPE_PROPOSE)
                 bundle = DeploymentBundle.from_compile_output(self._read_json(handler))
-                commit = self.store.propose(bundle)
+                with self._lock:
+                    commit = self.store.propose(bundle)
                 self._send_json(handler, 201, {"bundleDigest": bundle.bundle_digest, "commit": commit})
                 return
             if (
@@ -133,8 +140,16 @@ class ControlPlaneAPI:
                 target = value.get("targetDigest")
                 if not isinstance(target, str) or not target:
                     raise LedgerAPIError(400, "CONTROL-TARGET-REQUIRED", "targetDigest is required")
-                commit = self.store.rollback(target)
-                self._send_json(handler, 200, {"active": self.store.active(), "commit": commit})
+                with self._lock:
+                    approvals = tuple(self._approvals.get(target, {}).values())
+                    commit = self.store.rollback(
+                        target,
+                        approvals,
+                        trusted_approvers=self.trusted_approvers,
+                    )
+                    self._approvals.pop(target, None)
+                    active = self.store.active()
+                self._send_json(handler, 200, {"active": active, "commit": commit})
                 return
             raise LedgerAPIError(404, "CONTROL-ROUTE-NOT-FOUND", "route not found")
         except StudioDeploymentError as error:
@@ -170,8 +185,17 @@ class ControlPlaneAPI:
         if not all(isinstance(item, str) and item for item in (approver, key_id, signature)):
             raise LedgerAPIError(400, "CONTROL-APPROVAL-INVALID", "approverId, keyId, and signature are required")
         with self._lock:
+            bundle = self.store.bundle(digest)
+            active = self.store.active()
+            statement = deployment_approval_statement(
+                bundle,
+                from_digest=active["bundleDigest"] if active else None,
+                to_mode="ENFORCE",
+            )
+            approval = DeploymentApproval(approver, key_id, signature)
+            verify_deployment_approval(statement, approval, self.trusted_approvers)
             pending = self._approvals.setdefault(digest, {})
-            pending[(approver, key_id)] = DeploymentApproval(approver, key_id, signature)
+            pending[(approver, key_id)] = approval
             count = len(pending)
         self._send_json(handler, 202, {"bundleDigest": digest, "pendingApprovals": count})
 
@@ -181,10 +205,14 @@ class ControlPlaneAPI:
             self._read_json(handler)  # accept and ignore an empty JSON body
         with self._lock:
             approvals = tuple(self._approvals.get(digest, {}).values())
-        commit = self.store.promote(digest, approvals, trusted_keys=self.trusted_keys)
-        with self._lock:
+            commit = self.store.promote(
+                digest,
+                approvals,
+                trusted_approvers=self.trusted_approvers,
+            )
             self._approvals.pop(digest, None)
-        self._send_json(handler, 200, {"active": self.store.active(), "commit": commit})
+            active = self.store.active()
+        self._send_json(handler, 200, {"active": active, "commit": commit})
 
     def _authenticate(self, handler: BaseHTTPRequestHandler):
         value = _single_header(handler, "Authorization", required=True, unauthorized=True)

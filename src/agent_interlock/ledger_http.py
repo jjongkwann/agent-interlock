@@ -436,14 +436,20 @@ class LedgerHTTPAPI:
             raise LedgerAPIError(400, "LEDGER-STATS-SOURCE-INVALID", "dataSource is invalid")
         ledger = self._resolver(principal.tenant_id)
         try:
-            events = ledger.events_between(principal.tenant_id, start, end, limit=self.config.max_statistics_events)
+            events = ledger.interaction_lifecycles_started_between(
+                principal.tenant_id,
+                start,
+                end,
+                data_source=data_source,
+                limit=self.config.max_statistics_events,
+            )
         except LedgerRangeTooLarge as error:
             raise LedgerAPIError(
                 422,
                 "LEDGER-STATS-RANGE-TOO-LARGE",
                 "time range matches too many events; narrow the range",
             ) from error
-        values = (event.to_dict() for event in events if data_source is None or event.data_source == data_source)
+        values = (event.to_dict() for event in events)
         self._send_json(
             handler,
             200,

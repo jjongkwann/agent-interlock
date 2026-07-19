@@ -22,13 +22,15 @@ npm run lint
 
 `npm test` builds the Vinext application and verifies the rendered product shell and backend-compatible manifest contract.
 
-The `Runtime graph` and `Drift` tabs accept Interlock Ledger events or OTLP/HTTP JSON up to 5 MB. Imported files stay in the browser session.
+The `Runtime graph` and `Drift` tabs accept Interlock Ledger events or OTLP/HTTP JSON up to 5 MB. The `Statistics` tab aggregates raw Ledger events offline or reads the scoped statistics API. Imported files stay in the browser session.
 
 ## Current boundary
 
-The Studio edits a local draft and downloads JSON in the browser. It does not deploy policy or mutate a runtime. Use the root Python CLI to lint and compile an exported manifest before rollout:
+Architecture edits remain local drafts. Use the root Python CLI to lint and compile an exported manifest before rollout:
 
 ```bash
 PYTHONPATH=../src python3 -m agent_interlock architecture lint ./agent-interlock-architecture.json
 PYTHONPATH=../src python3 -m agent_interlock architecture compile ./agent-interlock-architecture.json
 ```
+
+The `Deploy` tab talks only to an explicitly configured Control Plane. Approval private keys never enter the browser or server: approvers sign with `interlock studio approve`, while the Control Plane verifies identity-bound Ed25519 signatures using public keys. Promotion and rollback both require two distinct approvers and two distinct public keys; rollback targets must have been active previously.

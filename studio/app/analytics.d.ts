@@ -19,6 +19,7 @@ export interface InteractionRecord {
   reasonCodes: string[];
   executionAttempted: boolean;
   executionSucceeded: boolean;
+  enforcementActionCompleted: boolean;
   securityOutcome: string;
   firstOccurredAt: string;
   blockDecision: boolean;
@@ -54,6 +55,7 @@ export interface SecurityStatisticsPartition {
   byRelationship: Array<{ relationshipId: string; counters: Counters }>;
   byActor: Array<{ sourceActorId: string; counters: Counters }>;
   byPolicy: Array<{ policyId: string; counters: Counters }>;
+  byMode: Array<{ mode: string; counters: Counters }>;
   byReasonCode: ReasonCodeCount[];
   timeSeries: TimeSeriesBucket[];
 }
@@ -67,3 +69,4 @@ export interface SecurityStatistics {
 
 export declare function reduceInteractions(events: Iterable<Record<string, unknown>>): InteractionRecord[];
 export declare function summarizeSecurityStatistics(events: Iterable<Record<string, unknown>>): SecurityStatistics;
+export declare function ledgerEventsForStatistics(value: unknown): Array<Record<string, unknown>> | null;

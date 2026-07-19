@@ -18,6 +18,32 @@
           "sourceActorId": "support-agent"
         }
       ],
+      "byMode": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 3,
+            "executionSuccessCount": 2,
+            "interactionCount": 4,
+            "partialOrBypassCount": 1,
+            "shadowWouldBlockCount": 0
+          },
+          "mode": "ENFORCE"
+        },
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 0,
+            "executionAttemptCount": 1,
+            "executionSuccessCount": 1,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 1
+          },
+          "mode": "SHADOW"
+        }
+      ],
       "byPolicy": [
         {
           "counters": {
@@ -140,6 +166,20 @@
             "shadowWouldBlockCount": 0
           },
           "sourceActorId": "red-team-agent"
+        }
+      ],
+      "byMode": [
+        {
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 0,
+            "executionSuccessCount": 0,
+            "interactionCount": 1,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          },
+          "mode": "ENFORCE"
         }
       ],
       "byPolicy": [
