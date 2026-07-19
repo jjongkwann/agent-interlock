@@ -52,6 +52,7 @@ from .config_guard import (
     config_approval_statement,
 )
 from .control_health import ControlHealthReporter
+from .control_plane import ControlPlaneAPI, ControlPlaneConfig, create_control_plane_server
 from .egress import (
     DestinationEgressGuard,
     DestinationEgressPolicy,
@@ -292,6 +293,8 @@ __all__ = [
     "ConfiguredTool",
     "ControlDecision",
     "ControlHealthReporter",
+    "ControlPlaneAPI",
+    "ControlPlaneConfig",
     "ControlTiming",
     "ConnectorExecutionContext",
     "DeploymentApproval",
@@ -445,6 +448,7 @@ __all__ = [
     "compare_observed_runtime",
     "compare_runtime",
     "create_mcp_http_server",
+    "create_control_plane_server",
     "create_ledger_http_server",
     "generate_pkce_verifier",
     "import_runtime_telemetry",
