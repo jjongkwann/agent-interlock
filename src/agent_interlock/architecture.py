@@ -61,6 +61,151 @@ class FindingSeverity(StrEnum):
     CRITICAL = "CRITICAL"
 
 
+class TrustZone(StrEnum):
+    INTERNAL = "INTERNAL"
+    EXTERNAL = "EXTERNAL"
+
+
+class OrchestrationPattern(StrEnum):
+    STATE_GRAPH = "STATE_GRAPH"
+    HIERARCHICAL = "HIERARCHICAL"
+    CONVERSATIONAL = "CONVERSATIONAL"
+    HYBRID = "HYBRID"
+
+
+class TaskTransport(StrEnum):
+    A2A = "A2A"
+    MCP = "MCP"
+    LOCAL = "LOCAL"
+    HUMAN = "HUMAN"
+
+
+class TaskFailureAction(StrEnum):
+    FAIL_WORKFLOW = "FAIL_WORKFLOW"
+    SKIP = "SKIP"
+    CONTINUE = "CONTINUE"
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureTrustZone:
+    id: str
+    label: str
+    kind: TrustZone
+    bounds: tuple[float, float, float, float]
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.label:
+            raise ValueError("trust zone id and label are required")
+        if self.bounds[0] < 0 or self.bounds[1] < 0 or self.bounds[2] <= 0 or self.bounds[3] <= 0:
+            raise ValueError("trust zone bounds require non-negative x/y and positive width/height")
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureBoundary:
+    """One directional policy boundary between two trust zones.
+
+    A boundary is deliberately separate from a visual zone rectangle.  It is
+    the executable contract that an edge must cross, and is compiled for use
+    by protocol gateways such as the A2A broker.
+    """
+
+    id: str
+    label: str
+    source_zone_id: str
+    target_zone_id: str
+    enforcement_point: EnforcementPoint
+    allowed_relationships: frozenset[str]
+    allowed_data_classes: frozenset[str] = frozenset({"D2", "D3", "D7"})
+    denied_data_classes: frozenset[str] = frozenset({"D5", "D8"})
+    mode: PolicyMode = PolicyMode.ENFORCE
+    failure_mode: FailureMode = FailureMode.FAIL_CLOSED
+    require_identity: bool = True
+    require_tenant_binding: bool = True
+    max_payload_bytes: int = 1_048_576
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.label or not self.source_zone_id or not self.target_zone_id:
+            raise ValueError("boundary id, label, source zone, and target zone are required")
+        if self.source_zone_id == self.target_zone_id:
+            raise ValueError("a trust boundary must connect two different zones")
+        if not self.allowed_relationships:
+            raise ValueError("a trust boundary requires at least one allowed relationship")
+        if self.allowed_data_classes & self.denied_data_classes:
+            raise ValueError("boundary data classes cannot be both allowed and denied")
+        if self.max_payload_bytes <= 0:
+            raise ValueError("boundary max_payload_bytes must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationTask:
+    id: str
+    label: str
+    source_actor_id: str
+    target_actor_id: str
+    transport: TaskTransport
+    purpose: str
+    depends_on: tuple[str, ...] = ()
+    data_classes: frozenset[str] = frozenset({"D3"})
+    acceptance_criteria: tuple[str, ...] = ()
+    max_attempts: int = 1
+    timeout_seconds: int = 300
+    approval_required: bool = False
+    on_failure: TaskFailureAction = TaskFailureAction.FAIL_WORKFLOW
+    position: tuple[float, float] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.label or not self.source_actor_id or not self.target_actor_id or not self.purpose:
+            raise ValueError("task id, label, source, target, and purpose are required")
+        if self.id in self.depends_on:
+            raise ValueError("an orchestration task cannot depend on itself")
+        if len(self.depends_on) != len(set(self.depends_on)):
+            raise ValueError("orchestration task dependencies must be unique")
+        if self.max_attempts < 1:
+            raise ValueError("task max_attempts must be at least one")
+        if self.timeout_seconds < 1:
+            raise ValueError("task timeout_seconds must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationRunPolicy:
+    max_parallelism: int = 4
+    max_tasks: int = 100
+    max_duration_seconds: int = 3600
+    max_messages: int = 500
+    fail_fast: bool = True
+
+    def __post_init__(self) -> None:
+        if min(self.max_parallelism, self.max_tasks, self.max_duration_seconds, self.max_messages) < 1:
+            raise ValueError("orchestration run-policy limits must be positive")
+        if self.max_parallelism > self.max_tasks:
+            raise ValueError("max_parallelism cannot exceed max_tasks")
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationDefinition:
+    coordinator_actor_id: str
+    pattern: OrchestrationPattern
+    tasks: tuple[OrchestrationTask, ...]
+    run_policy: OrchestrationRunPolicy = OrchestrationRunPolicy()
+
+    def __post_init__(self) -> None:
+        if not self.coordinator_actor_id:
+            raise ValueError("orchestration coordinator_actor_id is required")
+        task_ids = [task.id for task in self.tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("orchestration task ids must be unique")
+        known = set(task_ids)
+        for task in self.tasks:
+            missing = set(task.depends_on) - known
+            if missing:
+                raise ValueError(f"task {task.id} references unknown dependencies: {', '.join(sorted(missing))}")
+        if len(self.tasks) > self.run_policy.max_tasks:
+            raise ValueError("orchestration task count exceeds run policy max_tasks")
+        _validate_acyclic_tasks(self.tasks)
+
+
 @dataclass(frozen=True, slots=True)
 class SecurityControl:
     id: str
@@ -80,6 +225,8 @@ class ArchitectureNode:
     actor: ActorSpec
     controls: tuple[SecurityControl, ...] = ()
     position: tuple[float, float] | None = None
+    trust_zone: TrustZone | None = None
+    trust_zone_id: str | None = None
 
     @property
     def id(self) -> str:
@@ -111,6 +258,7 @@ class ArchitectureEdge:
     controls: tuple[SecurityControl, ...] = ()
     dynamic: bool = False
     target_selector: DynamicTargetSelector | None = None
+    boundary_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id or not self.relationship_id or not self.source or not self.target:
@@ -127,6 +275,9 @@ class ArchitectureGraph:
     version: str
     nodes: tuple[ArchitectureNode, ...]
     edges: tuple[ArchitectureEdge, ...]
+    trust_zones: tuple[ArchitectureTrustZone, ...] = ()
+    boundaries: tuple[ArchitectureBoundary, ...] = ()
+    orchestration: OrchestrationDefinition | None = None
     api_version: str = "interlock.dev/v1alpha1"
 
     def __post_init__(self) -> None:
@@ -134,19 +285,44 @@ class ArchitectureGraph:
             raise ValueError("architecture id and version are required")
         node_ids = [node.id for node in self.nodes]
         edge_ids = [edge.id for edge in self.edges]
+        zone_ids = [zone.id for zone in self.trust_zones]
+        boundary_ids = [boundary.id for boundary in self.boundaries]
         if len(node_ids) != len(set(node_ids)):
             raise ValueError("architecture node ids must be unique")
         if len(edge_ids) != len(set(edge_ids)):
             raise ValueError("architecture edge ids must be unique")
+        if len(zone_ids) != len(set(zone_ids)):
+            raise ValueError("architecture trust zone ids must be unique")
+        if len(boundary_ids) != len(set(boundary_ids)):
+            raise ValueError("architecture boundary ids must be unique")
+        zone_map = {zone.id: zone for zone in self.trust_zones}
+        for boundary in self.boundaries:
+            if boundary.source_zone_id not in zone_map or boundary.target_zone_id not in zone_map:
+                raise ValueError(f"boundary {boundary.id} references an unknown trust zone")
+        for node in self.nodes:
+            if node.trust_zone_id is None:
+                continue
+            if node.trust_zone_id not in zone_map:
+                raise ValueError(f"node {node.id} references an unknown trust zone")
+            if node.trust_zone is not None and node.trust_zone != zone_map[node.trust_zone_id].kind:
+                raise ValueError(f"node {node.id} trust zone kind does not match its referenced zone")
         known = set(node_ids)
         control_ids: list[str] = []
         control_ids.extend(control.id for node in self.nodes for control in node.controls)
         for edge in self.edges:
             if edge.source not in known or edge.target not in known:
                 raise ValueError(f"edge {edge.id} references an unknown node")
+            if edge.boundary_id is not None and edge.boundary_id not in set(boundary_ids):
+                raise ValueError(f"edge {edge.id} references an unknown trust boundary")
             control_ids.extend(control.id for control in edge.controls)
         if len(control_ids) != len(set(control_ids)):
             raise ValueError("security control ids must be unique within an architecture")
+        if self.orchestration is not None:
+            if self.orchestration.coordinator_actor_id not in known:
+                raise ValueError("orchestration coordinator references an unknown actor")
+            for task in self.orchestration.tasks:
+                if task.source_actor_id not in known or task.target_actor_id not in known:
+                    raise ValueError(f"orchestration task {task.id} references an unknown actor")
 
     @property
     def node_map(self) -> dict[str, ArchitectureNode]:
@@ -160,14 +336,24 @@ class ArchitectureGraph:
             raise ValueError("manifest kind must be Architecture")
         metadata = _mapping(manifest.get("metadata"), "metadata")
         spec = _mapping(manifest.get("spec"), "spec")
+        trust_zones = tuple(
+            _parse_trust_zone(item) for item in _sequence(spec.get("trustZones", []), "spec.trustZones")
+        )
+        boundaries = tuple(
+            _parse_boundary(item) for item in _sequence(spec.get("trustBoundaries", []), "spec.trustBoundaries")
+        )
         nodes = tuple(_parse_node(item) for item in _sequence(spec.get("nodes"), "spec.nodes"))
         node_types = {node.id: node.actor.type for node in nodes}
         edges = tuple(_parse_edge(item, node_types) for item in _sequence(spec.get("edges"), "spec.edges"))
+        orchestration_value = spec.get("orchestration")
         return cls(
             id=_required_string(metadata, "id"),
             version=_required_string(metadata, "version"),
             nodes=nodes,
             edges=edges,
+            trust_zones=trust_zones,
+            boundaries=boundaries,
+            orchestration=_parse_orchestration(orchestration_value) if orchestration_value is not None else None,
             api_version=str(manifest.get("apiVersion", "interlock.dev/v1alpha1")),
         )
 
@@ -175,12 +361,30 @@ class ArchitectureGraph:
         return {
             "architectureId": self.id,
             "version": self.version,
+            "trustZones": [
+                {
+                    "id": zone.id,
+                    "label": zone.label,
+                    "kind": zone.kind.value,
+                    "description": zone.description,
+                    "bounds": {
+                        "x": zone.bounds[0],
+                        "y": zone.bounds[1],
+                        "width": zone.bounds[2],
+                        "height": zone.bounds[3],
+                    },
+                }
+                for zone in self.trust_zones
+            ],
+            "trustBoundaries": [_boundary_value(boundary) for boundary in self.boundaries],
             "nodes": [
                 {
                     "id": node.id,
                     "type": node.actor.type.value,
                     "owner": node.actor.owner,
                     "position": node.position,
+                    **({"trustZone": node.trust_zone.value} if node.trust_zone else {}),
+                    **({"trustZoneId": node.trust_zone_id} if node.trust_zone_id else {}),
                     "controls": [_control_value(control) for control in node.controls],
                 }
                 for node in self.nodes
@@ -194,6 +398,7 @@ class ArchitectureGraph:
                     "relationship": edge.relationship,
                     "mode": edge.policy.mode.value,
                     "dynamic": edge.dynamic,
+                    "boundaryId": edge.boundary_id,
                     "targetSelector": (
                         {
                             "types": sorted(item.value for item in edge.target_selector.actor_types),
@@ -208,6 +413,7 @@ class ArchitectureGraph:
                 }
                 for edge in self.edges
             ],
+            "orchestration": _orchestration_value(self.orchestration) if self.orchestration else None,
         }
 
 
@@ -226,6 +432,7 @@ class CompiledArchitecture:
     graph: ArchitectureGraph
     actors: Mapping[str, ActorSpec]
     links: Mapping[str, LinkPolicy]
+    boundaries: Mapping[str, ArchitectureBoundary]
     findings: tuple[ArchitectureFinding, ...]
 
     def build_interlock(self, ledger: Ledger | None = None) -> Interlock:
@@ -234,6 +441,19 @@ class CompiledArchitecture:
         for edge in self.graph.edges:
             actor_handles[edge.source].connect(actor_handles[edge.target], self.links[edge.id])
         return runtime
+
+    def edge_for(self, source_actor_id: str, target_actor_id: str, relationship_id: str) -> ArchitectureEdge | None:
+        for edge in self.graph.edges:
+            if edge.source != source_actor_id or edge.relationship_id != relationship_id:
+                continue
+            if edge.target == target_actor_id:
+                return edge
+            if edge.dynamic and edge.target_selector and fnmatchcase(target_actor_id, edge.target_selector.id_pattern):
+                return edge
+        return None
+
+    def boundary_for(self, edge: ArchitectureEdge) -> ArchitectureBoundary | None:
+        return self.boundaries.get(edge.boundary_id) if edge.boundary_id else None
 
 
 class ArchitectureCompileError(ValueError):
@@ -267,8 +487,206 @@ class ArchitectureLinter:
         nodes = graph.node_map
         for edge in graph.edges:
             findings.extend(self._lint_edge(edge, nodes))
+        findings.extend(self._lint_boundaries(graph))
+        findings.extend(self._lint_orchestration(graph))
         findings.extend(self._delegation_cycles(graph))
         return tuple(findings)
+
+    def _lint_boundaries(self, graph: ArchitectureGraph) -> list[ArchitectureFinding]:
+        if not graph.trust_zones:
+            return []
+        findings: list[ArchitectureFinding] = []
+        nodes = graph.node_map
+        boundaries = {boundary.id: boundary for boundary in graph.boundaries}
+        for node in graph.nodes:
+            if node.trust_zone_id is None:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-NODE-ZONE-MISSING",
+                        FindingSeverity.CRITICAL,
+                        "every actor must belong to an explicit trust zone when zones are declared",
+                        node_id=node.id,
+                        remediation="Assign the actor to one trustZoneId before deployment.",
+                    )
+                )
+        for edge in graph.edges:
+            source_zone = nodes[edge.source].trust_zone_id
+            target_zone = nodes[edge.target].trust_zone_id
+            if source_zone is None or target_zone is None:
+                continue
+            crosses = source_zone != target_zone
+            if crosses and edge.boundary_id is None:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-MISSING",
+                        FindingSeverity.CRITICAL,
+                        f"edge crosses {source_zone} -> {target_zone} without a trust boundary",
+                        edge_id=edge.id,
+                        remediation="Create a directional trust boundary and bind it with boundaryId.",
+                    )
+                )
+                continue
+            if not crosses and edge.boundary_id is not None:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-UNNECESSARY",
+                        FindingSeverity.WARNING,
+                        "edge references a trust boundary but both actors are in the same zone",
+                        edge_id=edge.id,
+                    )
+                )
+                continue
+            if not crosses:
+                continue
+            boundary = boundaries[edge.boundary_id or ""]
+            if (boundary.source_zone_id, boundary.target_zone_id) != (source_zone, target_zone):
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-DIRECTION-MISMATCH",
+                        FindingSeverity.CRITICAL,
+                        "edge direction does not match the referenced trust boundary",
+                        edge_id=edge.id,
+                    )
+                )
+            if edge.relationship not in boundary.allowed_relationships:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-RELATIONSHIP-DENIED",
+                        FindingSeverity.CRITICAL,
+                        f"boundary does not allow relationship {edge.relationship}",
+                        edge_id=edge.id,
+                    )
+                )
+            unexpected = edge.policy.allowed_data_classes - boundary.allowed_data_classes
+            denied = edge.policy.allowed_data_classes & boundary.denied_data_classes
+            if unexpected or denied:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-DATA-CLASS-DENIED",
+                        FindingSeverity.CRITICAL,
+                        "edge policy allows data classes outside the trust-boundary contract",
+                        edge_id=edge.id,
+                    )
+                )
+            required = self._required_points.get(edge.relationship_id)
+            if required is not None and boundary.enforcement_point != required:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-ENFORCEMENT-MISMATCH",
+                        FindingSeverity.CRITICAL,
+                        f"{edge.relationship_id} boundary must be enforced at {required.value}",
+                        edge_id=edge.id,
+                    )
+                )
+            if boundary.mode == PolicyMode.OBSERVE:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-OBSERVE-ONLY",
+                        FindingSeverity.HIGH,
+                        "a trust-zone crossing is configured as observe-only",
+                        edge_id=edge.id,
+                    )
+                )
+            if boundary.failure_mode == FailureMode.FAIL_OPEN:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-BOUNDARY-FAIL-OPEN",
+                        FindingSeverity.CRITICAL,
+                        "a trust-zone boundary cannot fail open",
+                        edge_id=edge.id,
+                    )
+                )
+            if edge.relationship_id == "REL-06" and not (
+                boundary.require_identity and boundary.require_tenant_binding
+            ):
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-A2A-BOUNDARY-BINDING-WEAK",
+                        FindingSeverity.CRITICAL,
+                        "A2A trust-boundary crossing must bind identity and tenant",
+                        edge_id=edge.id,
+                    )
+                )
+        return findings
+
+    def _lint_orchestration(self, graph: ArchitectureGraph) -> list[ArchitectureFinding]:
+        definition = graph.orchestration
+        if definition is None:
+            return []
+        findings: list[ArchitectureFinding] = []
+        nodes = graph.node_map
+        coordinator = nodes[definition.coordinator_actor_id].actor
+        if coordinator.type not in {ActorType.AGENT, ActorType.SUBAGENT, ActorType.SCHEDULER}:
+            findings.append(
+                ArchitectureFinding(
+                    "ARCH-ORCHESTRATOR-TYPE",
+                    FindingSeverity.CRITICAL,
+                    "orchestration coordinator must be an Agent, Sub-Agent, or Scheduler",
+                    node_id=coordinator.id,
+                )
+            )
+        for task in definition.tasks:
+            expected_relationship = {
+                TaskTransport.A2A: "REL-06",
+                TaskTransport.MCP: "REL-05",
+            }.get(task.transport)
+            edge = (
+                next(
+                    (
+                        candidate
+                        for candidate in graph.edges
+                        if candidate.source == task.source_actor_id
+                        and candidate.target == task.target_actor_id
+                        and candidate.relationship_id == expected_relationship
+                    ),
+                    None,
+                )
+                if expected_relationship
+                else None
+            )
+            if expected_relationship and edge is None:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-TASK-TRANSPORT-EDGE-MISSING",
+                        FindingSeverity.CRITICAL,
+                        f"task {task.id} requires a declared {expected_relationship} edge",
+                        node_id=task.target_actor_id,
+                    )
+                )
+            if edge and task.data_classes - edge.policy.allowed_data_classes:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-TASK-DATA-CLASS-DENIED",
+                        FindingSeverity.CRITICAL,
+                        f"task {task.id} uses data classes outside its edge policy",
+                        node_id=task.target_actor_id,
+                    )
+                )
+            if not task.acceptance_criteria:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-TASK-ACCEPTANCE-MISSING",
+                        FindingSeverity.WARNING,
+                        f"task {task.id} has no explicit acceptance criteria",
+                        node_id=task.target_actor_id,
+                    )
+                )
+            high_risk = nodes[task.target_actor_id].actor.side_effects & {
+                SideEffect.EXTERNAL_WRITE,
+                SideEffect.DESTRUCTIVE_WRITE,
+                SideEffect.PAYMENT,
+                SideEffect.PERMISSION_CHANGE,
+            }
+            if high_risk and not task.approval_required:
+                findings.append(
+                    ArchitectureFinding(
+                        "ARCH-TASK-APPROVAL-MISSING",
+                        FindingSeverity.CRITICAL,
+                        f"high-risk task {task.id} requires an approval gate",
+                        node_id=task.target_actor_id,
+                    )
+                )
+        return findings
 
     def _lint_edge(self, edge: ArchitectureEdge, nodes: Mapping[str, ArchitectureNode]) -> list[ArchitectureFinding]:
         findings: list[ArchitectureFinding] = []
@@ -571,7 +989,14 @@ class ArchitectureCompiler:
             )
             for edge in graph.edges
         }
-        return CompiledArchitecture(graph=graph, actors=actors, links=links, findings=findings)
+        boundaries = {boundary.id: boundary for boundary in graph.boundaries}
+        return CompiledArchitecture(
+            graph=graph,
+            actors=actors,
+            links=links,
+            boundaries=boundaries,
+            findings=findings,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -669,6 +1094,96 @@ def _parse_node(value: Any) -> ArchitectureNode:
         ),
         controls=tuple(_parse_control(control) for control in _sequence(item.get("controls", []), "controls")),
         position=position,
+        trust_zone=TrustZone(str(item["trustZone"])) if item.get("trustZone") is not None else None,
+        trust_zone_id=str(item["trustZoneId"]) if item.get("trustZoneId") is not None else None,
+    )
+
+
+def _parse_trust_zone(value: Any) -> ArchitectureTrustZone:
+    item = _mapping(value, "trust zone")
+    bounds = _mapping(item.get("bounds"), "trust zone bounds")
+    return ArchitectureTrustZone(
+        id=_required_string(item, "id"),
+        label=_required_string(item, "label"),
+        kind=TrustZone(_required_string(item, "kind")),
+        description=str(item.get("description", "")),
+        bounds=(
+            float(bounds.get("x", 0)),
+            float(bounds.get("y", 0)),
+            float(bounds.get("width", 0)),
+            float(bounds.get("height", 0)),
+        ),
+    )
+
+
+def _parse_boundary(value: Any) -> ArchitectureBoundary:
+    item = _mapping(value, "trust boundary")
+    return ArchitectureBoundary(
+        id=_required_string(item, "id"),
+        label=_required_string(item, "label"),
+        source_zone_id=_required_string(item, "sourceZoneId"),
+        target_zone_id=_required_string(item, "targetZoneId"),
+        enforcement_point=EnforcementPoint(_required_string(item, "enforcementPoint")),
+        allowed_relationships=frozenset(
+            _strings(item.get("allowedRelationships", []), "allowedRelationships")
+        ),
+        allowed_data_classes=frozenset(
+            _strings(item.get("allowedDataClasses", ["D2", "D3", "D7"]), "allowedDataClasses")
+        ),
+        denied_data_classes=frozenset(
+            _strings(item.get("deniedDataClasses", ["D5", "D8"]), "deniedDataClasses")
+        ),
+        mode=PolicyMode(str(item.get("mode", "ENFORCE"))),
+        failure_mode=FailureMode(str(item.get("failureMode", "FAIL_CLOSED"))),
+        require_identity=bool(item.get("requireIdentity", True)),
+        require_tenant_binding=bool(item.get("requireTenantBinding", True)),
+        max_payload_bytes=int(item.get("maxPayloadBytes", 1_048_576)),
+        description=str(item.get("description", "")),
+    )
+
+
+def _parse_orchestration(value: Any) -> OrchestrationDefinition:
+    item = _mapping(value, "orchestration")
+    policy_value = _mapping(item.get("runPolicy", {}), "orchestration.runPolicy")
+    return OrchestrationDefinition(
+        coordinator_actor_id=_required_string(item, "coordinatorActorId"),
+        pattern=OrchestrationPattern(_required_string(item, "pattern")),
+        tasks=tuple(
+            _parse_orchestration_task(task)
+            for task in _sequence(item.get("tasks", []), "orchestration.tasks")
+        ),
+        run_policy=OrchestrationRunPolicy(
+            max_parallelism=int(policy_value.get("maxParallelism", 4)),
+            max_tasks=int(policy_value.get("maxTasks", 100)),
+            max_duration_seconds=int(policy_value.get("maxDurationSeconds", 3600)),
+            max_messages=int(policy_value.get("maxMessages", 500)),
+            fail_fast=bool(policy_value.get("failFast", True)),
+        ),
+    )
+
+
+def _parse_orchestration_task(value: Any) -> OrchestrationTask:
+    item = _mapping(value, "orchestration task")
+    position_value = item.get("position")
+    position = None
+    if position_value is not None:
+        position_map = _mapping(position_value, "orchestration task position")
+        position = (float(position_map.get("x", 0)), float(position_map.get("y", 0)))
+    return OrchestrationTask(
+        id=_required_string(item, "id"),
+        label=_required_string(item, "label"),
+        source_actor_id=_required_string(item, "sourceActorId"),
+        target_actor_id=_required_string(item, "targetActorId"),
+        transport=TaskTransport(_required_string(item, "transport")),
+        purpose=_required_string(item, "purpose"),
+        depends_on=_strings(item.get("dependsOn", []), "dependsOn"),
+        data_classes=frozenset(_strings(item.get("dataClasses", ["D3"]), "dataClasses")),
+        acceptance_criteria=_strings(item.get("acceptanceCriteria", []), "acceptanceCriteria"),
+        max_attempts=int(item.get("maxAttempts", 1)),
+        timeout_seconds=int(item.get("timeoutSeconds", 300)),
+        approval_required=bool(item.get("approvalRequired", False)),
+        on_failure=TaskFailureAction(str(item.get("onFailure", "FAIL_WORKFLOW"))),
+        position=position,
     )
 
 
@@ -732,6 +1247,7 @@ def _parse_edge(value: Any, node_types: Mapping[str, ActorType]) -> Architecture
         controls=tuple(_parse_control(control) for control in _sequence(item.get("controls", []), "controls")),
         dynamic=dynamic,
         target_selector=selector,
+        boundary_id=str(item["boundaryId"]) if item.get("boundaryId") is not None else None,
     )
 
 
@@ -756,6 +1272,82 @@ def _control_value(control: SecurityControl) -> dict[str, str]:
         "assurance": control.assurance.value,
         "description": control.description,
     }
+
+
+def _boundary_value(boundary: ArchitectureBoundary) -> dict[str, Any]:
+    return {
+        "id": boundary.id,
+        "label": boundary.label,
+        "sourceZoneId": boundary.source_zone_id,
+        "targetZoneId": boundary.target_zone_id,
+        "enforcementPoint": boundary.enforcement_point.value,
+        "allowedRelationships": sorted(boundary.allowed_relationships),
+        "allowedDataClasses": sorted(boundary.allowed_data_classes),
+        "deniedDataClasses": sorted(boundary.denied_data_classes),
+        "mode": boundary.mode.value,
+        "failureMode": boundary.failure_mode.value,
+        "requireIdentity": boundary.require_identity,
+        "requireTenantBinding": boundary.require_tenant_binding,
+        "maxPayloadBytes": boundary.max_payload_bytes,
+        "description": boundary.description,
+    }
+
+
+def _orchestration_value(definition: OrchestrationDefinition) -> dict[str, Any]:
+    return {
+        "coordinatorActorId": definition.coordinator_actor_id,
+        "pattern": definition.pattern.value,
+        "runPolicy": {
+            "maxParallelism": definition.run_policy.max_parallelism,
+            "maxTasks": definition.run_policy.max_tasks,
+            "maxDurationSeconds": definition.run_policy.max_duration_seconds,
+            "maxMessages": definition.run_policy.max_messages,
+            "failFast": definition.run_policy.fail_fast,
+        },
+        "tasks": [
+            {
+                "id": task.id,
+                "label": task.label,
+                "sourceActorId": task.source_actor_id,
+                "targetActorId": task.target_actor_id,
+                "transport": task.transport.value,
+                "purpose": task.purpose,
+                "dependsOn": list(task.depends_on),
+                "dataClasses": sorted(task.data_classes),
+                "acceptanceCriteria": list(task.acceptance_criteria),
+                "maxAttempts": task.max_attempts,
+                "timeoutSeconds": task.timeout_seconds,
+                "approvalRequired": task.approval_required,
+                "onFailure": task.on_failure.value,
+                **(
+                    {"position": {"x": task.position[0], "y": task.position[1]}}
+                    if task.position is not None
+                    else {}
+                ),
+            }
+            for task in definition.tasks
+        ],
+    }
+
+
+def _validate_acyclic_tasks(tasks: Iterable[OrchestrationTask]) -> None:
+    dependencies = {task.id: task.depends_on for task in tasks}
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(task_id: str) -> None:
+        if task_id in visiting:
+            raise ValueError(f"orchestration task dependency cycle detected at {task_id}")
+        if task_id in visited:
+            return
+        visiting.add(task_id)
+        for dependency in dependencies.get(task_id, ()):
+            visit(dependency)
+        visiting.remove(task_id)
+        visited.add(task_id)
+
+    for task_id in dependencies:
+        visit(task_id)
 
 
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:

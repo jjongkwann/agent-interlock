@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { ledgerEventsForStatistics, summarizeSecurityStatistics } from "../app/analytics.mjs";
+import { demoRuntimeTelemetry } from "../app/runtime.ts";
 
 // Cross-language golden contract: Python (agent_interlock.analytics) and this
 // Studio port must reduce the shared fixture to byte-identical JSON. See
@@ -60,4 +61,11 @@ test("statistics sorting follows Unicode code-point order like Python", () => {
     event("ia-bmp", "\ue000"),
   ]);
   assert.deepEqual(summary.partitions[0].byActor.map((item) => item.sourceActorId), ["\ue000", "\u{10000}"]);
+});
+
+test("the built-in drift demo is also valid Statistics telemetry", () => {
+  const summary = summarizeSecurityStatistics(demoRuntimeTelemetry);
+  assert.equal(summary.interactionCount, 3);
+  assert.equal(summary.partitions[0].dataSource, "DEMO");
+  assert.equal(summary.partitions[0].counters.partialOrBypassCount, 1);
 });

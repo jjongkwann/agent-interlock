@@ -6,6 +6,83 @@
     "version": "1.0.0"
   },
   "spec": {
+    "trustZones": [
+      {
+        "id": "zone.external-input",
+        "label": "External input",
+        "kind": "EXTERNAL",
+        "description": "Untrusted user and partner request sources",
+        "bounds": {"x": 0, "y": 60, "width": 190, "height": 260}
+      },
+      {
+        "id": "zone.control",
+        "label": "Internal control plane",
+        "kind": "INTERNAL",
+        "description": "Coordinator, managed tools, and evidence services",
+        "bounds": {"x": 220, "y": 0, "width": 420, "height": 520}
+      },
+      {
+        "id": "zone.worker",
+        "label": "Internal worker plane",
+        "kind": "INTERNAL",
+        "description": "Delegated agents and tenant-scoped retrieval",
+        "bounds": {"x": 680, "y": 0, "width": 420, "height": 260}
+      },
+      {
+        "id": "zone.external-output",
+        "label": "External destinations",
+        "kind": "EXTERNAL",
+        "description": "Destinations outside the managed runtime",
+        "bounds": {"x": 680, "y": 300, "width": 420, "height": 220}
+      }
+    ],
+    "trustBoundaries": [
+      {
+        "id": "boundary.external-control-input",
+        "label": "External request ingress",
+        "sourceZoneId": "zone.external-input",
+        "targetZoneId": "zone.control",
+        "enforcementPoint": "INPUT_GATEWAY",
+        "allowedRelationships": ["REQUESTS"],
+        "allowedDataClasses": ["D2", "D3"],
+        "deniedDataClasses": ["D5", "D8"],
+        "mode": "ENFORCE",
+        "failureMode": "FAIL_CLOSED",
+        "requireIdentity": true,
+        "requireTenantBinding": true,
+        "maxPayloadBytes": 262144
+      },
+      {
+        "id": "boundary.control-worker-a2a",
+        "label": "Control to worker A2A",
+        "sourceZoneId": "zone.control",
+        "targetZoneId": "zone.worker",
+        "enforcementPoint": "A2A_BROKER",
+        "allowedRelationships": ["DELEGATES"],
+        "allowedDataClasses": ["D2", "D3", "D7"],
+        "deniedDataClasses": ["D5", "D8"],
+        "mode": "ENFORCE",
+        "failureMode": "FAIL_CLOSED",
+        "requireIdentity": true,
+        "requireTenantBinding": true,
+        "maxPayloadBytes": 1048576
+      },
+      {
+        "id": "boundary.control-external-egress",
+        "label": "Approved external egress",
+        "sourceZoneId": "zone.control",
+        "targetZoneId": "zone.external-output",
+        "enforcementPoint": "EGRESS_GATEWAY",
+        "allowedRelationships": ["SENDS"],
+        "allowedDataClasses": ["D3", "D7"],
+        "deniedDataClasses": ["D5", "D8"],
+        "mode": "ENFORCE",
+        "failureMode": "FAIL_CLOSED",
+        "requireIdentity": true,
+        "requireTenantBinding": true,
+        "maxPayloadBytes": 1048576
+      }
+    ],
     "nodes": [
       {
         "id": "user.customer",
@@ -14,7 +91,9 @@
         "identity": "oidc://customer",
         "capabilities": ["SUPPORT_REQUEST"],
         "dataAccess": ["D2", "D3"],
-        "position": {"x": 0, "y": 120}
+        "trustZone": "EXTERNAL",
+        "trustZoneId": "zone.external-input",
+        "position": {"x": 30, "y": 120}
       },
       {
         "id": "agent.support",
@@ -24,7 +103,9 @@
         "capabilities": ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"],
         "dataAccess": ["D2", "D3", "D7"],
         "maxDelegationDepth": 2,
-        "position": {"x": 220, "y": 120}
+        "trustZone": "INTERNAL",
+        "trustZoneId": "zone.control",
+        "position": {"x": 260, "y": 120}
       },
       {
         "id": "agent.research",
@@ -34,7 +115,9 @@
         "capabilities": ["KNOWLEDGE_SEARCH"],
         "dataAccess": ["D2", "D3", "D7"],
         "maxDelegationDepth": 0,
-        "position": {"x": 460, "y": 20}
+        "trustZone": "INTERNAL",
+        "trustZoneId": "zone.worker",
+        "position": {"x": 720, "y": 20}
       },
       {
         "id": "rag.support-knowledge",
@@ -44,7 +127,9 @@
         "capabilities": ["TENANT_RETRIEVAL"],
         "dataAccess": ["D2", "D3", "D7"],
         "sideEffects": ["READ"],
-        "position": {"x": 700, "y": 20}
+        "trustZone": "INTERNAL",
+        "trustZoneId": "zone.worker",
+        "position": {"x": 920, "y": 20}
       },
       {
         "id": "tool.send-email",
@@ -55,7 +140,9 @@
         "dataAccess": ["D2", "D3", "D7"],
         "sideEffects": ["EXTERNAL_WRITE"],
         "definitionDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "position": {"x": 460, "y": 220}
+        "trustZone": "INTERNAL",
+        "trustZoneId": "zone.control",
+        "position": {"x": 450, "y": 220}
       },
       {
         "id": "external.customer-email",
@@ -63,14 +150,18 @@
         "owner": "messaging-platform",
         "identity": "dns://customer.example",
         "allowedDomains": ["customer.example"],
-        "position": {"x": 700, "y": 220}
+        "trustZone": "EXTERNAL",
+        "trustZoneId": "zone.external-output",
+        "position": {"x": 920, "y": 360}
       },
       {
         "id": "external.audit-ledger",
         "type": "EXTERNAL",
         "owner": "security-platform",
         "identity": "spiffe://prod.example/interlock/ledger",
-        "position": {"x": 460, "y": 360}
+        "trustZone": "INTERNAL",
+        "trustZoneId": "zone.control",
+        "position": {"x": 450, "y": 390}
       }
     ],
     "edges": [
@@ -80,6 +171,7 @@
         "source": "user.customer",
         "target": "agent.support",
         "relationship": "REQUESTS",
+        "boundaryId": "boundary.external-control-input",
         "policy": {
           "id": "customer-support-input",
           "version": "1.0.0",
@@ -112,6 +204,7 @@
         "source": "agent.support",
         "target": "agent.research",
         "relationship": "DELEGATES",
+        "boundaryId": "boundary.control-worker-a2a",
         "dynamic": true,
         "targetSelector": {
           "types": ["SUBAGENT"],
@@ -229,6 +322,7 @@
         "source": "tool.send-email",
         "target": "external.customer-email",
         "relationship": "SENDS",
+        "boundaryId": "boundary.control-external-egress",
         "policy": {
           "id": "customer-email-egress",
           "version": "1.0.0",
@@ -282,6 +376,49 @@
           }
         ]
       }
-    ]
+    ],
+    "orchestration": {
+      "coordinatorActorId": "agent.support",
+      "pattern": "HYBRID",
+      "runPolicy": {
+        "maxParallelism": 4,
+        "maxTasks": 50,
+        "maxDurationSeconds": 1800,
+        "maxMessages": 200,
+        "failFast": true
+      },
+      "tasks": [
+        {
+          "id": "task.research",
+          "label": "Research the support request",
+          "sourceActorId": "agent.support",
+          "targetActorId": "agent.research",
+          "transport": "A2A",
+          "purpose": "SUPPORT_RESEARCH",
+          "dataClasses": ["D2", "D3", "D7"],
+          "acceptanceCriteria": ["Answer is grounded in tenant-scoped support knowledge"],
+          "maxAttempts": 2,
+          "timeoutSeconds": 120,
+          "onFailure": "FAIL_WORKFLOW",
+          "position": {"x": 120, "y": 120}
+        },
+        {
+          "id": "task.send-reply",
+          "label": "Send the approved support reply",
+          "sourceActorId": "agent.support",
+          "targetActorId": "tool.send-email",
+          "transport": "MCP",
+          "purpose": "SUPPORT_REPLY",
+          "dependsOn": ["task.research"],
+          "dataClasses": ["D3", "D7"],
+          "acceptanceCriteria": ["Delivery receipt is reconciled with the approved destination"],
+          "maxAttempts": 1,
+          "timeoutSeconds": 60,
+          "approvalRequired": true,
+          "onFailure": "FAIL_WORKFLOW",
+          "position": {"x": 440, "y": 120}
+        }
+      ]
+    }
   }
 }

@@ -61,6 +61,44 @@ class StudioRoundTripTests(unittest.TestCase):
         # And the compiler's parser accepts the studio export shape.
         ArchitectureGraph.from_dict(manifest)
 
+    def test_trust_zone_round_trips_through_the_architecture_parser(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest["spec"]["trustZones"].append(
+            {
+                "id": "zone.external",
+                "label": "External callers",
+                "kind": "EXTERNAL",
+                "description": "Untrusted ingress",
+                "bounds": {"x": 20, "y": 54, "width": 205, "height": 570},
+            }
+        )
+        manifest["spec"]["nodes"][0]["trustZone"] = "EXTERNAL"
+        manifest["spec"]["nodes"][0]["trustZoneId"] = "zone.external"
+        graph = ArchitectureGraph.from_dict(manifest)
+        design = graph.to_design_graph()
+        zone = next(item for item in design["trustZones"] if item["id"] == "zone.external")
+        self.assertEqual(zone["bounds"]["width"], 205.0)
+        self.assertEqual(design["nodes"][0]["trustZone"], "EXTERNAL")
+        self.assertEqual(design["nodes"][0]["trustZoneId"], "zone.external")
+
+    def test_actor_cannot_reference_an_unknown_or_mismatched_trust_zone(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest["spec"]["trustZones"].append(
+            {
+                "id": "zone.internal",
+                "label": "Internal",
+                "kind": "INTERNAL",
+                "bounds": {"x": 0, "y": 0, "width": 400, "height": 300},
+            }
+        )
+        manifest["spec"]["nodes"][0].update({"trustZone": "EXTERNAL", "trustZoneId": "zone.internal"})
+        with self.assertRaisesRegex(ValueError, "kind does not match"):
+            ArchitectureGraph.from_dict(manifest)
+
+        manifest["spec"]["nodes"][0].update({"trustZone": "INTERNAL", "trustZoneId": "zone.missing"})
+        with self.assertRaisesRegex(ValueError, "unknown trust zone"):
+            ArchitectureGraph.from_dict(manifest)
+
 
 class CompileShadowTests(unittest.TestCase):
     def test_shadow_forces_every_edge_and_emits_a_digest(self):

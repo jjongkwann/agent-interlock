@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
-date: 2026-07-19
-version: 0.8.0
+date: 2026-07-20
+version: 0.9.0
 status: active
 ---
 
@@ -14,7 +14,7 @@ status: active
 - 언어: Python 3.11
 - 배포 형태: 외부 의존성이 없는 reference core + optional psycopg PostgreSQL adapter
 - 기준 명세: `03`–`05` version 1.1
-- 구현 모드: 메모리 Registry, 메모리/PostgreSQL Session·OAuth·Config Store, 메모리/PostgreSQL Ledger와 동기 Connector
+- 구현 모드: 메모리 Registry, 메모리/PostgreSQL Session·OAuth·Config Store, 메모리/PostgreSQL Ledger, A2A Broker와 bounded task orchestration
 
 ## 계약 추적
 
@@ -37,6 +37,10 @@ status: active
 | Event ingest·trace query HTTP API | `LedgerHTTPAPI`, `ledger-api.openapi.yaml` | 실제 socket tenant·scope·idempotency·pagination 시험 |
 | Architecture-as-Code manifest | `architecture.py`, `architecture.schema.json` | `ArchitectureModelTests` |
 | 보안 보장 수준과 Architecture lint | `ArchitectureLinter` | `ArchitectureSecurityLintTests` |
+| 방향성 Trust Boundary와 cross-zone compile | `ArchitectureBoundary`, `CompiledArchitecture.boundary_for` | `ArchitectureBoundaryTests`, Studio manifest compile |
+| A2A 1.0 protocol core·Agent Card·Task | `a2a.py` `A2ABroker`·`A2AJSONRPCRouter` | v1 `SendMessage/GetTask/CancelTask`, v0.3 명시 호환, policy/idempotency 시험 |
+| 인증된 A2A HTTP carrier | `a2a_http.py` | 실제 socket Origin·auth·version·body limit·well-known Agent Card 시험 |
+| Multi-Agent Task workflow engine | `orchestration.py` `OrchestrationEngine` | A2A dependency, approval pause/resume, missing adapter fail-closed 시험 |
 | Dynamic Sub-Agent Edge 계약 | `DynamicTargetSelector` | dynamic instance 회귀 시험 |
 | Design/Runtime drift·bypass 비교 | `compare_runtime` | `RuntimeGraphDiffTests` |
 | 박스 기반 보안 설계 편집기 | `studio/app/page.tsx` | Studio build·rendered HTML 계약 시험 |
@@ -98,13 +102,14 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-19 전체 회귀(`uv run --extra jwt`)는 Python 441개 test `OK (skipped=12)` + Studio 7개(`npm test`, golden·Unicode·wrapper 계약 포함)다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+2026-07-20 전체 회귀는 Python 451개 test 통과·12개 skip·15개 subtest 통과 + Studio 8개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
 - PostgreSQL 자동 partition/retention 운영과 connection pool·HA(live CI·프로비저닝은 구현됨)
 - WORM 보존의 S3 Object-Lock 내구 backend(Protocol·append-only 해시체인 impl은 구현됨), 원격 Git host PR 리뷰 배선(로컬 git propose/promote/rollback은 구현됨)
 - 고급 MCP 비동기 task·cancellation, IdP key rotation·DPoP/mTLS sender-constrained token
+- A2A durable task/run store, signed Agent Card registry, SSE/subscription/push, 분산 scheduler/worker lease
 
 ## 다음 구현 순서
 
@@ -118,6 +123,8 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 **2026-07-19 제품 폐쇄 루프(설계→계약→개발→SHADOW 실행→증거→통계·drift→승격) 연결 계층도 완료됐다.** 통계는 이벤트 카운트가 아니라 tenant+interaction 상태 결합이며, REQUESTED 범위에 속한 interaction의 전체 lifecycle을 읽는다. 집행 성공은 완료된 enforcement action과 최종 BLOCKED 증거를 모두 요구하고, 교차언어 golden 계약은 Python API와 Studio 오프라인 import의 Unicode 정렬까지 동일하게 고정한다. 승격·rollback 승인은 approver identity를 포함한 Ed25519 statement이며 Control Plane에는 공개키만 둔다. 알려진 v1 한계: 통계 시계열은 표 렌더, control plane 대기 승인은 in-memory(재시작 시 재제출), 대용량 범위는 사전집계 없이 422로 방어, OTLP import는 통계 집계 불가(원본 ledger 이벤트 필요).
 
+**2026-07-20 Trust Boundary→A2A→오케스트레이션 vertical slice도 완료됐다.** Studio의 Actor topology와 Task workflow가 한 manifest에 저장되고 compiler가 cross-zone boundary와 task transport를 함께 검증한다. A2A 1.0 JSON-RPC core는 REL-06과 boundary를 handler 실행 전에 집행하며 workflow engine은 dependency·retry·timeout·approval·budget을 적용한다. 운영 한계는 in-memory task/run store, 단일 프로세스 scheduler, 비스트리밍 A2A core다.
+
 남은 것은 외부 서비스·플랫폼 연동뿐이다(아래).
 
 **외부 연동 작업 (외부 서비스·플랫폼 필요):**
@@ -128,5 +135,6 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 4. PostgreSQL HA·failover·distributed rate limit·TLS termination
 5. 원격 GitHub/GitLab PR 리뷰·배포 연결
 6. IdP JWKS cache·key rotation·장애 정책, DPoP/mTLS sender-constrained token, 운영 consent UI·HTTPS callback·refresh-token 수명주기
+7. A2A signed Agent Card registry, durable task/run store, SSE·push, distributed queue·worker HA
 
 gVisor·Kata·Kubernetes sandbox backend는 Bubblewrap/Seatbelt를 대체해야 하는 배포 환경에서만 필요한 선택 항목이다.

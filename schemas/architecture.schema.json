@@ -20,6 +20,14 @@
       "type": "object",
       "required": ["nodes", "edges"],
       "properties": {
+        "trustZones": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/trustZone"}
+        },
+        "trustBoundaries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/trustBoundary"}
+        },
         "nodes": {
           "type": "array",
           "items": {"$ref": "#/$defs/node"}
@@ -27,6 +35,9 @@
         "edges": {
           "type": "array",
           "items": {"$ref": "#/$defs/edge"}
+        },
+        "orchestration": {
+          "$ref": "#/$defs/orchestration"
         }
       },
       "additionalProperties": false
@@ -53,6 +64,56 @@
       },
       "additionalProperties": false
     },
+    "trustZone": {
+      "type": "object",
+      "required": ["id", "label", "kind", "bounds"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["INTERNAL", "EXTERNAL"]},
+        "description": {"type": "string"},
+        "bounds": {
+          "type": "object",
+          "required": ["x", "y", "width", "height"],
+          "properties": {
+            "x": {"type": "number", "minimum": 0},
+            "y": {"type": "number", "minimum": 0},
+            "width": {"type": "number", "exclusiveMinimum": 0},
+            "height": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "trustBoundary": {
+      "type": "object",
+      "required": ["id", "label", "sourceZoneId", "targetZoneId", "enforcementPoint", "allowedRelationships"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "sourceZoneId": {"type": "string", "minLength": 1},
+        "targetZoneId": {"type": "string", "minLength": 1},
+        "enforcementPoint": {
+          "enum": ["INPUT_GATEWAY", "RAG_GATEWAY", "MCP_GATEWAY", "A2A_BROKER", "EGRESS_GATEWAY", "AUDIT_SINK"]
+        },
+        "allowedRelationships": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["REQUESTS", "DELEGATES", "INVOKES", "READS", "WRITES", "SENDS", "APPROVES", "AUTHENTICATES_AS", "ROUTES", "EXECUTES_ON", "DEPLOYS_TO", "LOGS_TO", "RETURNS_TO"]},
+          "uniqueItems": true
+        },
+        "allowedDataClasses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "deniedDataClasses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "mode": {"enum": ["OBSERVE", "SHADOW", "ENFORCE"]},
+        "failureMode": {"enum": ["FAIL_OPEN", "FAIL_CLOSED", "DEGRADE_READ_ONLY"]},
+        "requireIdentity": {"type": "boolean"},
+        "requireTenantBinding": {"type": "boolean"},
+        "maxPayloadBytes": {"type": "integer", "minimum": 1},
+        "description": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
     "node": {
       "type": "object",
       "required": ["id", "type", "owner", "identity"],
@@ -70,6 +131,8 @@
         "failureMode": {"enum": ["FAIL_OPEN", "FAIL_CLOSED", "DEGRADE_READ_ONLY"]},
         "allowedDomains": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "maxDelegationDepth": {"type": "integer", "minimum": 0},
+        "trustZone": {"enum": ["INTERNAL", "EXTERNAL"]},
+        "trustZoneId": {"type": "string", "minLength": 1},
         "definitionDigest": {"type": ["string", "null"]},
         "controls": {"type": "array", "items": {"$ref": "#/$defs/control"}},
         "position": {
@@ -114,6 +177,7 @@
         "source": {"type": "string", "minLength": 1},
         "target": {"type": "string", "minLength": 1},
         "relationship": {"enum": ["REQUESTS", "DELEGATES", "INVOKES", "READS", "WRITES", "SENDS", "APPROVES", "AUTHENTICATES_AS", "ROUTES", "EXECUTES_ON", "DEPLOYS_TO", "LOGS_TO", "RETURNS_TO"]},
+        "boundaryId": {"type": "string", "minLength": 1},
         "dynamic": {"type": "boolean"},
         "targetSelector": {
           "type": "object",
@@ -141,6 +205,54 @@
           "else": {"not": {"required": ["targetSelector"]}}
         }
       ],
+      "additionalProperties": false
+    },
+    "orchestrationTask": {
+      "type": "object",
+      "required": ["id", "label", "sourceActorId", "targetActorId", "transport", "purpose"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "sourceActorId": {"type": "string", "minLength": 1},
+        "targetActorId": {"type": "string", "minLength": 1},
+        "transport": {"enum": ["A2A", "MCP", "LOCAL", "HUMAN"]},
+        "purpose": {"type": "string", "minLength": 1},
+        "dependsOn": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "dataClasses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "acceptanceCriteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "maxAttempts": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "approvalRequired": {"type": "boolean"},
+        "onFailure": {"enum": ["FAIL_WORKFLOW", "SKIP", "CONTINUE"]},
+        "position": {
+          "type": "object",
+          "required": ["x", "y"],
+          "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "orchestrationRunPolicy": {
+      "type": "object",
+      "properties": {
+        "maxParallelism": {"type": "integer", "minimum": 1},
+        "maxTasks": {"type": "integer", "minimum": 1},
+        "maxDurationSeconds": {"type": "integer", "minimum": 1},
+        "maxMessages": {"type": "integer", "minimum": 1},
+        "failFast": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "orchestration": {
+      "type": "object",
+      "required": ["coordinatorActorId", "pattern", "tasks"],
+      "properties": {
+        "coordinatorActorId": {"type": "string", "minLength": 1},
+        "pattern": {"enum": ["STATE_GRAPH", "HIERARCHICAL", "CONVERSATIONAL", "HYBRID"]},
+        "runPolicy": {"$ref": "#/$defs/orchestrationRunPolicy"},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/orchestrationTask"}}
+      },
       "additionalProperties": false
     }
   },

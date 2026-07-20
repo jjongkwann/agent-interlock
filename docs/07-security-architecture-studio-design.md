@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock Security Architecture Studio 설계
-date: 2026-07-17
-version: 0.2.2
+date: 2026-07-20
+version: 0.3.0
 status: active
 ---
 
@@ -9,21 +9,22 @@ status: active
 
 ## 1. 목표
 
-Security Architecture Studio는 Agent 시스템을 구현하기 전에 User, Agent, Sub-Agent, RAG, Memory, Tool, External을 박스로 정의하고 관계별 보안을 연결선에 선언하는 Architecture-as-Code 계층이다. Canvas UI는 이 계약의 편집기이며 JSON Architecture manifest가 source of truth다.
+Security Architecture Studio는 Agent 시스템을 구현하기 전에 User, Agent, Sub-Agent, Scheduler, RAG, Memory, Tool, External을 정의하고 관계별 보안과 task 실행 순서를 선언하는 Architecture-as-Code 계층이다. Design에는 Actor topology와 Task workflow 두 surface가 있으며 JSON Architecture manifest가 source of truth다.
 
 ```text
-Canvas → Architecture manifest → Security lint → Compiler
+Actor topology + Task workflow → Architecture manifest → Security lint → Compiler
        → ActorSpec·LinkPolicy → SDK/Gateway → Runtime Ledger
        → Declared/Observed Graph diff
 ```
 
 UI에서 프로덕션 정책을 직접 변경하지 않는다. 변경은 versioned manifest와 diff로 만들고 review, simulation, approval, rollback을 거쳐 배포한다.
 
-## 2. 세 가지 그래프
+## 2. 네 가지 그래프
 
 | 그래프 | 생성 근거 | 용도 |
 |---|---|---|
 | Design Graph | Architecture manifest | 의도한 Actor·관계·보안 설계 |
+| Task Workflow | Architecture manifest | coordinator·task·dependency·transport·approval·budget 설계 |
 | Compiled Control Graph | ActorSpec·LinkPolicy·adapter 설정 | 실제 배치할 집행점 확인 |
 | Runtime Graph | Ledger·OpenTelemetry | 실제 호출과 우회·drift 확인 |
 
@@ -98,6 +99,10 @@ policy:
 - capability가 비어 있거나 ID pattern이 무제한인 dynamic delegation
 - delegation cycle
 - Egress 목적지 allowlist·명시 목적지 누락
+- Actor의 정확한 Trust Zone 소속 누락
+- cross-zone Edge의 방향성 Trust Boundary·enforcement·data contract 누락
+- A2A boundary의 identity·tenant binding·fail-closed 누락
+- workflow task의 transport Edge·acceptance criteria·고위험 승인·DAG·budget 누락
 
 CRITICAL finding이 있으면 compiler는 ActorSpec·LinkPolicy 생성을 거부한다.
 
@@ -120,7 +125,11 @@ JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_i
 
 `studio/`에는 로컬에서 실행할 수 있는 Canvas MVP가 포함되어 있다.
 
-- User, Agent, Sub-Agent, RAG, Tool, Memory, External 박스와 trust zone
+- User, Agent, Sub-Agent, Scheduler, RAG, Tool, Memory, External 박스와 Manifest에 저장되는 INTERNAL/EXTERNAL trust zone
+- Trust zone 추가·선택·이름/분류/설명 편집·이동·크기 조절과 `trustZoneId` 기반 Actor 소속 관리
+- Zone 이동 시 소속 Actor 동반 이동, Actor의 Zone 간 drag/drop·Inspector 재배치, 소속 Actor 기준 Zone 맞춤
+- source zone→target zone 방향성 Trust Boundary 생성·선택·편집과 cross-zone Edge의 `boundaryId` 결합
+- Boundary별 enforcement point, relationship/data 계약, identity·tenant binding, payload limit, mode/failure 편집
 - 박스 추가·이동, 선택한 박스 간 Edge 생성
 - Edge별 OBSERVE/SHADOW/ENFORCE, failure mode, data class, 승인 조건 편집
 - Dynamic Sub-Agent의 same-tenant와 delegation depth 편집
@@ -135,6 +144,9 @@ JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_i
 - manifest 기반 Python SDK skeleton·보안테스트 생성
 - Ed25519 2인 승인 기반 propose→promote→과거 active bundle rollback CLI와 Control Plane 연동
 - REL-07의 source Tool·External `allowedDomains`·LinkPolicy를 tenant/artifact/provenance/sandbox-bound egress 정책으로 compile하는 runtime adapter
+- Canvas에 포인터가 있을 때 일반 wheel과 macOS `Command + =/-`, Windows `Ctrl + =/-`로 graph만 확대/축소하며 브라우저 페이지 zoom과 분리
+- Design 내부 `Actor topology`/`Task workflow` 전환과 A2A/MCP/LOCAL/HUMAN task palette
+- Task별 source/target, dependency, data, acceptance, retry, timeout, on-failure, approval 편집과 workflow budget 설정
 
 ```bash
 cd studio
@@ -149,5 +161,8 @@ npm run dev
 1. 원격 GitHub/GitLab PR review와 hosted deploy 연결
 2. Python 외 framework별 skeleton generator
 3. OTLP/gRPC Collector와 trace 운영 저장소
-4. A2A Agent Card admission adapter
-5. 대용량 통계 사전집계와 지속형 pending approval store
+4. A2A SSE streaming·push notification과 signed Agent Card admission
+5. durable A2A task/workflow run store와 분산 scheduler
+6. 대용량 통계 사전집계와 지속형 pending approval store
+
+Trust Boundary부터 A2A Broker와 Task workflow 실행까지의 전체 계약은 [13 A2A 오케스트레이션 플랫폼](13-a2a-orchestration-platform.md)을 따른다.

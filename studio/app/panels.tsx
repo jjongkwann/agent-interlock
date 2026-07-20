@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { summarizeSecurityStatistics } from "./analytics.mjs";
 import type { Counters, SecurityStatistics, SecurityStatisticsPartition } from "./analytics";
 
@@ -94,10 +94,12 @@ export function StatsPanel({
   rawLedgerEvents,
   importedFormat,
   notify,
+  onImportTelemetry,
 }: {
   rawLedgerEvents: Array<Record<string, unknown>> | null;
   importedFormat: string | null;
   notify: (message: string) => void;
+  onImportTelemetry: () => void;
 }) {
   const [source, setSource] = useState<"offline" | "live">("offline");
   const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8791");
@@ -108,10 +110,14 @@ export function StatsPanel({
   const [liveStats, setLiveStats] = useState<SecurityStatistics | null>(null);
   const [fetching, setFetching] = useState(false);
 
-  const offlineStats = useMemo(
-    () => (rawLedgerEvents ? summarizeSecurityStatistics(rawLedgerEvents) : null),
-    [rawLedgerEvents],
-  );
+  const offlineResult = useMemo((): { stats: SecurityStatistics | null; error: string | null } => {
+    if (!rawLedgerEvents) return { stats: null, error: null };
+    try {
+      return { stats: summarizeSecurityStatistics(rawLedgerEvents), error: null };
+    } catch (error) {
+      return { stats: null, error: error instanceof Error ? error.message : "invalid Ledger events" };
+    }
+  }, [rawLedgerEvents]);
 
   async function fetchLive() {
     setFetching(true);
@@ -132,7 +138,7 @@ export function StatsPanel({
     }
   }
 
-  const stats = source === "live" ? liveStats : offlineStats;
+  const stats = source === "live" ? liveStats : offlineResult.stats;
   return (
     <div className="stats-panel">
       <div className="stats-source-row">
@@ -141,21 +147,28 @@ export function StatsPanel({
           <button aria-pressed={source === "live"} className={source === "live" ? "active" : ""} onClick={() => setSource("live")}>Live API</button>
         </div>
         {source === "live" && (
-          <div className="live-controls">
-            <input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="Ledger API URL" aria-label="Ledger API URL" />
-            <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Bearer token (statistics:read)" aria-label="Bearer token" type="password" />
-            <input value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="Tenant" aria-label="Tenant" />
-            <input value={rangeFrom} onChange={(event) => setRangeFrom(event.target.value)} aria-label="From (ISO 8601)" />
-            <input value={rangeTo} onChange={(event) => setRangeTo(event.target.value)} aria-label="To (ISO 8601)" />
+          <div className="live-controls live-control-grid">
+            <label><span>Ledger API URL</span><input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="http://127.0.0.1:8791" /></label>
+            <label><span>Bearer token</span><input value={token} onChange={(event) => setToken(event.target.value)} placeholder="statistics:read" type="password" /></label>
+            <label><span>Tenant</span><input value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="tenant-a" /></label>
+            <label><span>From · ISO 8601</span><input value={rangeFrom} onChange={(event) => setRangeFrom(event.target.value)} /></label>
+            <label><span>To · ISO 8601</span><input value={rangeTo} onChange={(event) => setRangeTo(event.target.value)} /></label>
             <button className="primary-button" disabled={fetching} onClick={fetchLive}>{fetching ? "Fetching…" : "Fetch"}</button>
           </div>
         )}
       </div>
-      {!stats && source === "offline" && (
+      {source === "offline" && offlineResult.error && (
+        <div className="canvas-empty static error-state"><span>!</span><strong>Telemetry cannot be aggregated</strong>
+          <p>{offlineResult.error}. Import Ledger events with valid UTC timestamps, or choose Live API.</p>
+          <button onClick={onImportTelemetry}>Replace telemetry</button>
+        </div>
+      )}
+      {!stats && source === "offline" && !offlineResult.error && (
         <div className="canvas-empty static"><span>Σ</span><strong>No ledger events to aggregate</strong>
           <p>{importedFormat === "OTLP_JSON"
             ? "Statistics need raw Interlock Ledger events; the current import is OTLP spans."
             : "Import Interlock Ledger JSON (the same file the drift view uses), or switch to Live API."}</p>
+          <button onClick={onImportTelemetry}>Import Ledger telemetry</button>
         </div>
       )}
       {!stats && source === "live" && (
@@ -180,7 +193,7 @@ type BundleFile = {
   raw: Record<string, unknown>;
 };
 
-export function DeployPanel({ notify }: { notify: (message: string) => void }) {
+export function DeployPanel({ notify, onBackToDesign }: { notify: (message: string) => void; onBackToDesign: () => void }) {
   const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8792");
   const [token, setToken] = useState("");
   const [active, setActive] = useState<Record<string, unknown> | null>(null);
@@ -188,6 +201,7 @@ export function DeployPanel({ notify }: { notify: (message: string) => void }) {
   const [bundle, setBundle] = useState<BundleFile | null>(null);
   const [approvalText, setApprovalText] = useState("");
   const [pendingApprovals, setPendingApprovals] = useState<number>(0);
+  const bundleInput = useRef<HTMLInputElement>(null);
 
   async function call(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
     const response = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
@@ -281,73 +295,56 @@ export function DeployPanel({ notify }: { notify: (message: string) => void }) {
 
   return (
     <div className="stats-panel deploy-panel">
-      <div className="panel-heading"><span>OPERATE</span><strong>SHADOW → ENFORCE promotion</strong></div>
-      <p className="panel-note">
-        Signing keys never enter this browser. Approvers sign with <code>interlock studio approve</code>;
-        this panel only submits their signed approvals to the control plane, which verifies the
-        two-person rule server-side.
-      </p>
-      <div className="live-controls">
-        <input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="Control plane URL" aria-label="Control plane URL" />
-        <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Bearer token" aria-label="Control plane token" type="password" />
-        <button className="quiet-button" onClick={refreshStatus}>Refresh status</button>
+      <div className="deploy-header">
+        <div className="panel-heading"><span>OPERATE</span><strong>Compile, approve, and promote</strong></div>
+        <p className="panel-note">Design does not become runtime directly. Export the manifest, compile a SHADOW bundle with the CLI, then promote it here. Runtime appears only after real telemetry is observed.</p>
+        <div className="deploy-handoff">
+          <div><span>DESIGN HANDOFF</span><strong>Browser draft → signed deployment bundle</strong></div>
+          <code>interlock studio lint architecture.json</code>
+          <code>interlock studio compile --shadow architecture.json</code>
+          <button className="secondary-button" onClick={onBackToDesign}>Back to design</button>
+        </div>
+        <p className="panel-note signing-note">Signing keys never enter this browser. Approvers sign with <code>interlock studio approve</code>; the control plane verifies the two-person rule server-side.</p>
       </div>
-      <div className="deploy-columns">
-        <section>
-          <h4>1 · Bundle</h4>
-          <label className="telemetry-button primary deploy-file">
-            <span>↑</span>Load compile --shadow bundle
-            <input className="file-input" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importBundle(file); }} />
-          </label>
-          {bundle && (
-            <div className="runtime-source-card">
-              <span>BUNDLE</span><strong>{bundle.architectureId} v{bundle.version}</strong>
-              <small><code>{bundle.bundleDigest}</code></small>
-            </div>
-          )}
-          <button className="quiet-button" disabled={!bundle} onClick={propose}>Propose to review store</button>
-          {statement && (
-            <>
-              <h4>2 · Approval context</h4>
-              <p className="panel-note">The CLI signs this context plus its approverId and keyId with the approver&apos;s Ed25519 private key:</p>
-              <pre className="statement-block"><code>{JSON.stringify(statement, null, 2)}</code></pre>
-            </>
-          )}
+
+      <div className="control-plane-card">
+        <div><strong>Control plane</strong><span>Connect to inspect status and submit the bundle.</span></div>
+        <div className="live-controls live-control-grid compact">
+          <label><span>Control plane URL</span><input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
+          <label><span>Bearer token</span><input value={token} onChange={(event) => setToken(event.target.value)} placeholder="deployment scope" type="password" /></label>
+          <button className="secondary-button" onClick={refreshStatus}>Refresh status</button>
+        </div>
+      </div>
+
+      <div className="deploy-steps">
+        <section className="deploy-step">
+          <div className="step-heading"><span>1</span><div><strong>Load compiled bundle</strong><small>{bundle ? "Bundle ready" : "Waiting for --shadow bundle"}</small></div></div>
+          <p>Choose the deployable JSON produced by the CLI.</p>
+          <input ref={bundleInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importBundle(file); }} />
+          <button className="telemetry-button primary deploy-file" onClick={() => bundleInput.current?.click()}><span>↑</span>Load compile --shadow bundle</button>
+          {bundle && <div className="runtime-source-card"><span>BUNDLE</span><strong>{bundle.architectureId} v{bundle.version}</strong><small><code>{bundle.bundleDigest}</code></small></div>}
+          <button className="secondary-button" disabled={!bundle} onClick={propose}>Propose to review store</button>
         </section>
-        <section>
-          <h4>3 · Submit signed approvals</h4>
-          <textarea
-            className="approval-input"
-            value={approvalText}
-            onChange={(event) => setApprovalText(event.target.value)}
-            placeholder='Paste one approval JSON ({"approverId": …, "keyId": …, "signature": …})'
-            aria-label="Signed approval JSON"
-          />
-          <button className="quiet-button" disabled={!bundle || !approvalText.trim()} onClick={submitApproval}>Submit approval</button>
-          {pendingApprovals > 0 && <p className="panel-note">{pendingApprovals} approval{pendingApprovals > 1 ? "s" : ""} pending on the control plane.</p>}
-          <h4>4 · Promote</h4>
-          <button className="primary-button" disabled={!bundle} onClick={promote}>Promote SHADOW → ENFORCE</button>
-          <h4>Active deployment</h4>
-          {active ? (
-            <div className="runtime-source-card">
-              <span>{String(active.mode ?? "ENFORCE")}</span>
-              <strong><code>{String(active.bundleDigest ?? "")}</code></strong>
-              {Array.isArray(active.approvers) && <small>approved by {(active.approvers as string[]).join(", ")}</small>}
-              <button
-                className="danger-button"
-                disabled={!bundle || bundle.bundleDigest === String(active.bundleDigest)}
-                onClick={() => bundle && rollback(bundle.bundleDigest)}
-              >Rollback to loaded bundle</button>
-            </div>
-          ) : (
-            <p className="panel-note">No active bundle (or not connected).</p>
-          )}
-          {history.length > 0 && (
-            <>
-              <h4>Deployment history</h4>
-              <ul className="deploy-history">{history.slice(0, 8).map((line, index) => <li key={index}><code>{line}</code></li>)}</ul>
-            </>
-          )}
+
+        <section className="deploy-step">
+          <div className="step-heading"><span>2</span><div><strong>Sign approval context</strong><small>{statement ? "Context ready" : "Available after step 1"}</small></div></div>
+          <p>Each approver signs this context with <code>interlock studio approve</code>.</p>
+          {statement
+            ? <pre className="statement-block"><code>{JSON.stringify(statement, null, 2)}</code></pre>
+            : <div className="step-placeholder">Load and propose a bundle to generate the exact signing context.</div>}
+        </section>
+
+        <section className="deploy-step">
+          <div className="step-heading"><span>3</span><div><strong>Submit signed approvals</strong><small>{pendingApprovals > 0 ? `${pendingApprovals} pending` : "Two-person rule verified server-side"}</small></div></div>
+          <label className="deploy-field"><span>Signed approval JSON</span><textarea className="approval-input" value={approvalText} onChange={(event) => setApprovalText(event.target.value)} placeholder='{"approverId": …, "keyId": …, "signature": …}' /></label>
+          <button className="secondary-button" disabled={!bundle || !approvalText.trim()} onClick={submitApproval}>Submit approval</button>
+        </section>
+
+        <section className="deploy-step">
+          <div className="step-heading"><span>4</span><div><strong>Promote and monitor</strong><small>{active ? `${String(active.mode ?? "ENFORCE")} active` : "No active deployment"}</small></div></div>
+          <button className="primary-button promote-button" disabled={!bundle} onClick={promote}>Promote SHADOW → ENFORCE</button>
+          {active ? <div className="runtime-source-card"><span>{String(active.mode ?? "ENFORCE")}</span><strong><code>{String(active.bundleDigest ?? "")}</code></strong>{Array.isArray(active.approvers) && <small>approved by {(active.approvers as string[]).join(", ")}</small>}<button className="danger-button" disabled={!bundle || bundle.bundleDigest === String(active.bundleDigest)} onClick={() => bundle && rollback(bundle.bundleDigest)}>Rollback to loaded bundle</button></div> : <div className="step-placeholder">Connect to the control plane to inspect the active bundle.</div>}
+          {history.length > 0 && <><h4>Deployment history</h4><ul className="deploy-history">{history.slice(0, 8).map((line, index) => <li key={index}><code>{line}</code></li>)}</ul></>}
         </section>
       </div>
     </div>

@@ -10,6 +10,8 @@ Agent Interlock는 AI Agent 시스템의 Actor를 선언적으로 정의하고, 
 |---|---|
 | Interlock SDK | ActorSpec 선언, 기존 코드 wrap, trace·event 생성 |
 | Interlock Runtime | Actor 간 통신 가로채기와 정책 집행 |
+| Interlock Orchestrator | 검증된 Task DAG와 A2A·MCP·Human transport 실행 |
+| Interlock A2A Broker | Agent Card·Task 처리와 REL-06·Trust Boundary 사전 집행 |
 | Interlock Ledger | 요청·데이터 흐름·판정·조치·결과 저장 |
 | Interlock Graph | 정적 관계·런타임 호출·공격 경로 시각화 |
 | Interlock Console | 정책·Incident·통제 상태 운영 |
@@ -41,6 +43,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - [`docs/10-mcp-oauth-identity-guard.md`](docs/10-mcp-oauth-identity-guard.md): OAuth discovery, PKCE, SSRF/redirect와 token identity binding
 - [`docs/11-mcp-stdio-sandbox-receipts.md`](docs/11-mcp-stdio-sandbox-receipts.md): stdio process sandbox attestation과 fake external receipt reconciliation
 - [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.md): PostgreSQL RLS·append-only Ledger adapter와 event/trace API
+- [`docs/13-a2a-orchestration-platform.md`](docs/13-a2a-orchestration-platform.md): Trust Boundary에서 A2A Broker·Task workflow·오케스트레이션까지의 실행 계약
 
 ## 기본 구현 전략
 
@@ -49,7 +52,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 3. OBSERVE → SHADOW → ENFORCE 단계적 승격
 4. ActorSpec·LinkPolicy를 코드와 manifest로 지원
 5. 정적 설계 그래프와 런타임 trace 그래프 제공
-6. A2A·Memory·Scheduler·Sandbox로 확장
+6. 방향성 Trust Boundary와 A2A·Scheduler·Sandbox를 함께 compile하고 집행
 
 ## 현재 구현
 
@@ -79,6 +82,11 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - 박스/연결선 기반 `ArchitectureGraph`와 실행 가능한 JSON Schema
 - PREVENT·DETECT·RESPOND·EVIDENCE 및 DECLARED·OBSERVED·ENFORCED·RECONCILED 보장 수준
 - Multi-Agent Dynamic Edge Contract와 설계/런타임 drift 비교
+- 방향성 INTERNAL/EXTERNAL Trust Boundary와 cross-zone Edge compile·fail-closed lint
+- A2A 1.0 Agent Card·Message·Part·Task·Artifact, `SendMessage`/`GetTask`/`CancelTask` JSON-RPC core
+- 실제 HTTP socket A2A carrier의 Origin·auth·body size·`A2A-Version` 집행과 0.3 명시 호환 profile
+- REL-06 actor/audience/resource/token/delegation/data/schema와 Trust Boundary를 함께 집행하는 A2A Broker
+- coordinator·dependency·A2A/MCP/LOCAL/HUMAN transport·retry·timeout·approval·budget 기반 Task workflow engine
 - Ledger·OTLP JSON runtime import와 미선언 관계·통제 우회 분석
 - M7 Agent config read·2인 승인 deploy·runtime drift guard
 - Studio manifest를 검토 가능한 SHADOW 배포 번들로 compile하는 CLI
@@ -92,6 +100,9 @@ PYTHONPATH=src python3 examples/secure_email.py
 
 # Architecture → MCP transport → Ledger 수직 슬라이스
 PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
+
+# Trust Boundary → A2A Broker → Task orchestration → Ledger 수직 슬라이스
+PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
 
 # 보안 아키텍처 lint·compile
 PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
@@ -133,12 +144,14 @@ python3 -m pip install -e '.[postgres]'
 | `tests/test_receipts.py` | fake external transaction·receipt 0/1·reconciliation 시험 |
 | `tests/test_ledger_http.py` | 실제 socket 기반 tenant·scope·idempotency·pagination 시험 |
 | `tests/test_postgres_ledger.py` | DB role binding과 선택적 PostgreSQL 16 live 시험 |
+| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, 실제 HTTP socket, orchestration 시험 |
 | `examples/secure_email.py` | 최소 실행 예제 |
 | `examples/secure_multi_agent_architecture.json` | Multi-Agent 보안 아키텍처 예제 |
 | `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |
 | `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
-| `studio/` | Actor 박스·관계 보안 편집 및 manifest export UI |
+| `examples/a2a_orchestration_vertical_slice.py` | Boundary→A2A→workflow→Ledger 전체 실행 예제 |
+| `studio/` | Actor topology·Task workflow·Trust Boundary 편집 및 manifest export UI |
 
-현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·resumable Streamable HTTP carrier와 publisher admission, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·introspection/JWKS·loopback consent, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 서명 attestation·Bubblewrap·Seatbelt·목적지 egress reference 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md)의 tenant별 저장·조회와 signed audit reference를 포함한다.
+현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·resumable Streamable HTTP carrier와 publisher admission, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·introspection/JWKS·loopback consent, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 서명 attestation·Bubblewrap·Seatbelt·목적지 egress reference 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md)의 tenant별 저장·조회와 signed audit reference, [13 A2A Orchestration](docs/13-a2a-orchestration-platform.md)의 방향성 Trust Boundary·A2A Broker·Task workflow engine을 포함한다.
 
 프로덕션 통합으로 추가된 것: persistent PostgreSQL DefinitionRegistry와 분산 Session/OAuth/Config store(RLS·migration 0002/0003), macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행 시험), 실 소켓 egress backend의 DNS·IP pinning, Ed25519 publisher·Studio 승인 서명, Langfuse/LangSmith trace 어댑터, append-only WORM audit store, PostgreSQL live CI와 GitHub Actions. 제품 폐쇄 루프에는 tenant+interaction 전체 lifecycle 기반 보안 통계(Python·Studio Unicode golden 파리티), `GET /v1/statistics`, manifest→SDK skeleton·보안테스트, 공개키 검증 기반 2인 승격·rollback Control Plane, Studio 통계·배포 뷰와 read-only Live Attach가 포함된다. 남은 것은 외부 연동 작업(Sigstore/Rekor·KMS/HSM·IdP·Secret Store, 실 egress sidecar와 S3 Object-Lock, OTLP gRPC·Collector·Incident 서비스, PostgreSQL HA·분산 rate limit·TLS, 원격 Git host PR 리뷰·배포, DPoP/mTLS·JWKS rotation·운영 consent/refresh-token)이다. 자세한 계약 추적과 분류는 [06 구현 상태](docs/06-implementation-status.md)를 따른다.

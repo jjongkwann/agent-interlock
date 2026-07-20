@@ -41,8 +41,9 @@ test("server-renders the Agent Interlock Studio", async () => {
 });
 
 test("exports the backend architecture contract and removes starter artifacts", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+  const [page, panels, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/panels.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -70,6 +71,35 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /mobile-panel-actions/);
   assert.match(page, /const MIN_ZOOM = 0\.3/);
   assert.match(page, /aria-label="Require human approval"/);
+  assert.match(page, /event\.code === "Equal"/);
+  assert.match(page, /event\.code === "Minus"/);
+  assert.match(page, /event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(page, /addEventListener\("wheel", onGraphWheel, \{ passive: false \}\)/);
+  assert.match(page, /event\.preventDefault\(\)/);
+  assert.match(page, /Mouse wheel or Command\/Ctrl \+ wheel/);
+  assert.match(page, /Cross-zone edges must bind a directional Trust Boundary/);
+  assert.match(page, /trustZone: node\.trustZone/);
+  assert.match(page, /assignSelectedNodeToZone/);
+  assert.match(page, /Add trust zone/);
+  assert.match(page, /Fit around actors/);
+  assert.match(page, /Move into zone/);
+  assert.match(page, /Resize zone: \$\{zone\.label\}/);
+  assert.match(page, /trustZoneId: node\.trustZoneId/);
+  assert.match(page, /trustZones: manifestZones/);
+  assert.match(page, /trustBoundaries: manifestBoundaries/);
+  assert.match(page, /orchestration: manifestOrchestration/);
+  assert.match(page, /Actor topology/);
+  assert.match(page, /Task workflow/);
+  assert.match(page, /Create matching boundary/);
+  assert.match(page, /workflow task added/);
+  assert.match(page, /workflowDependencyCreatesCycle/);
+  assert.match(page, /Unavailable because it would create a workflow cycle/);
+  assert.match(page, /\["USER", "AGENT", "SUBAGENT", "RAG", "TOOL", "MEMORY", "SCHEDULER", "EXTERNAL"\]/);
+  assert.match(panels, /Design does not become runtime directly/);
+  assert.match(panels, /Telemetry cannot be aggregated/);
+  assert.match(panels, /Sign approval context/);
+  assert.match(page, /— undeclared/);
+  assert.match(page, /Compare design with runtime to find undeclared/);
   assert.match(layout, /Agent Interlock · Security Architecture Studio/);
   assert.match(packageJson, /"name": "agent-interlock-studio"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
