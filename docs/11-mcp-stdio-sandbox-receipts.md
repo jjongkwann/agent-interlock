@@ -173,9 +173,9 @@ outcome = gateway.reconcile_receipt_store(
 
 ## 6. 남은 운영 경계
 
-reference core에는 서명 attestation verifier, Linux Bubblewrap backend, macOS Seatbelt backend(`SeatbeltSandboxBackend`)가 있다. Bubblewrap는 `seccomp_child_denial=True`일 때 `build_no_subprocess_seccomp`가 만든 classic-BPF 필터(fork/vfork/clone3·비스레드 clone 거부, 스레드 clone 허용)를 `--seccomp`로 붙여 child-process 제한을 정직하게 attest하며, Seatbelt는 `(deny process-fork)`로 같은 제한을 집행한다. Seatbelt live 집행 시험은 macOS 호스트에서, Bubblewrap+seccomp live 집행은 `.github/workflows/ci.yml`의 `sandbox-live` job에서 실제 격리를 실행한다(seccomp BPF 로직은 in-test classic-BPF 인터프리터로 검증). 실제 egress proxy/sidecar의 DNS·연결 IP pinning은 `egress.py` `PinnedSocketEgressBackend`로 제공한다.
+reference core에는 서명 attestation verifier, Linux Bubblewrap backend, macOS Seatbelt backend(`SeatbeltSandboxBackend`)가 있다. Bubblewrap는 `seccomp_child_denial=True`일 때 `build_no_subprocess_seccomp`가 만든 classic-BPF 필터(fork/vfork·비스레드 clone→EPERM, clone3→ENOSYS로 glibc를 clone 폴백시켜 스레드 생존, 스레드 clone 허용)를 `--seccomp`로 붙여 child-process 제한을 정직하게 attest하며, Seatbelt는 `(deny process-fork)`로 같은 제한을 집행한다. Seatbelt live 집행 시험은 macOS 호스트에서, Bubblewrap+seccomp live 집행은 `.github/workflows/ci.yml`의 `sandbox-live` job에서 실제 격리를 실행한다(seccomp BPF 로직은 in-test classic-BPF 인터프리터로 검증). 실제 egress proxy/sidecar의 DNS·연결 IP pinning은 `egress.py` `PinnedSocketEgressBackend`로 제공한다.
 
-artifact digest 검사와 exec 사이의 TOCTOU는 fd 실행으로 제거했다. `_open_verified_artifact`가 pinned artifact를 fd로 한 번 열어 그 fd 위에서 digest를 검증하므로 검증한 inode가 fd 수명 동안 고정되고, `/proc/self/fd`를 지원하는 host(Linux)에서 client는 `argv[0]`을 그 fd로 실행해 검증 inode와 실행 inode가 동일함을 보장한다. `/proc/self/fd`가 없는 host(macOS)는 fd 기반 원자적 검증으로 재오픈 갭만 제거하고 경로로 실행한다.
+artifact digest 검사와 exec 사이의 TOCTOU는 fd 실행으로 제거했다. `_open_verified_artifact`가 pinned artifact를 fd로 한 번 열어 그 fd 위에서 digest를 검증하므로 검증한 inode가 fd 수명 동안 고정되고, `/proc/self/fd`를 지원하는 host(Linux)에서 client는 그 fd를 `Popen(executable=)`로 실행해 검증 inode와 실행 inode가 동일함을 보장한다(`argv[0]`은 실제 경로를 유지 — fd 경로가 자식의 `sys.executable`로 새면 손자 spawn이 깨진다). `/proc/self/fd`가 없는 host(macOS)는 fd 기반 원자적 검증으로 재오픈 갭만 제거하고 경로로 실행한다.
 
 장기 process supervisor와 sandbox health telemetry는 `sandbox_supervisor.py` `SandboxSupervisor`로 제공한다. liveness/health probe와 bounded-backoff 재시작을 수행하고, 재시작한 process가 같은 sandbox(backend id·profile digest)를 재-attest하지 못하면 공급망 swap으로 간주해 fail-closed로 거부하며, 상태 전이마다 `CONTROL_HEALTH_CHANGED`(REL-11)를 방출한다.
 
