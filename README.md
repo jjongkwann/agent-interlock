@@ -2,7 +2,68 @@
 
 > Define actors. Secure interactions. See the whole graph.
 
-Agent Interlock는 AI Agent 시스템의 Actor를 선언적으로 정의하고, 각 Actor의 외부를 SDK·Proxy로 감싸며, Actor 간 통신과 데이터 이동을 관측·판정·차단하는 **Agentic AI Security Framework**다.
+[![CI](https://github.com/jjongkwann/agent-interlock/actions/workflows/ci.yml/badge.svg)](https://github.com/jjongkwann/agent-interlock/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
+Agent Interlock는 AI Agent 시스템의 Actor를 선언적으로 정의하고, 각 Actor의 외부를 SDK·Proxy로 감싸며, Actor 간 통신과 데이터 이동을 관측·판정·차단하는 **Agentic AI Security Framework**다. 안전공학의 interlock — 선언된 조건이 충족되지 않으면 동작 자체가 불가능한 장치 — 를 Agent 간 상호작용에 적용한다: 선언된 경로만 연동을 허가하고, ENFORCE 승격에는 서명된 2인 승인을 요구하며, 모든 판정을 append-only Ledger에 남긴다.
+
+## 무엇을 막는가
+
+MCP·Tool 위협 M1–M9 전체를 데이터 흐름 단위로 집행한다. 각 위협의 상세 명세는 [docs/03 §6](docs/03-l1-mcp-tool-security-profile.md), 재현 시나리오와 34개 추적 ID는 [docs/05](docs/05-l1-security-validation-plan.md)·`tests/test_l1_matrix.py`에 있다.
+
+| ID | 위협 | 공격자가 조작하는 것 | 기본 판정 |
+|---|---|---|---|
+| `M1` | Tool Poisoning | Tool description/schema 속 숨은 지시 | `QUARANTINE`/`BLOCK` |
+| `M2` | Rug Pull | 승인 뒤 정의·endpoint·command 교체 | `QUARANTINE` |
+| `M3` | Tool Shadowing | 다른 Server/Tool을 조종하는 설명 | `BLOCK`/`HOLD` |
+| `M4` | Poisoned Tool Publish | package/image/Remote MCP 자체 | `QUARANTINE` |
+| `M5` | Confused Deputy / Token Passthrough | 토큰의 audience·scope·사용 주체 | `BLOCK` |
+| `M6` | MCP Server → Host Compromise | auth URL·redirect·result payload | `BLOCK`/`KILL` |
+| `M7` | Agent Config Discovery/Modification | Agent 구성 열거·수정 | `BLOCK`/`CHALLENGE` |
+| `M8` | Credential Harvesting | RAG/구성/결과 속 자격증명 | `SANITIZE`/`BLOCK` |
+| `M9` | Data Exfiltration | 호출 목적지·업무 데이터 payload | `BLOCK`/`HOLD` |
+
+판정은 관측(OBSERVE) → 그림자 집행(SHADOW) → 실집행(ENFORCE)으로 단계 승격하며, 차단뿐 아니라 증거를 남긴다: 모든 상호작용은 요청·판정·조치·결과가 분리된 이벤트로 Ledger에 기록되고, 설계 그래프와 런타임 trace의 drift가 비교된다.
+
+## 빠른 시작
+
+```bash
+# 별도 설치 없이 테스트 (zero-dependency reference core)
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+# 안전한 email Tool 호출 예제
+PYTHONPATH=src python3 examples/secure_email.py
+
+# Architecture → MCP transport → Ledger 수직 슬라이스
+PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
+
+# Trust Boundary → A2A Broker → Task orchestration → Ledger 수직 슬라이스
+PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
+
+# 외부 부작용 없는 fake-data 플랫폼 E2E
+.venv/bin/python -m pytest -q tests/test_platform_e2e.py
+
+# test-only adapter로 실제 Run Control HTTP create/approve/cancel E2E
+.venv/bin/python -m pytest -q tests/test_run_control.py
+
+# 보안 아키텍처 lint·compile
+PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
+PYTHONPATH=src python3 -m agent_interlock architecture compile examples/secure_multi_agent_architecture.json
+PYTHONPATH=src python3 -m agent_interlock architecture compile --shadow examples/secure_multi_agent_architecture.json
+PYTHONPATH=src python3 -m agent_interlock architecture runtime-diff examples/secure_multi_agent_architecture.json examples/runtime_drift_otlp.json
+
+# 박스 기반 Security Architecture Studio
+cd studio
+npm install
+npm run dev
+
+# editable install을 원하는 경우
+python3 -m pip install -e .
+
+# PostgreSQL adapter까지 설치하는 경우
+python3 -m pip install -e '.[postgres]'
+```
 
 ## 제품 구성
 
@@ -59,6 +120,8 @@ InterlockGraph  설계·실행·공격 경로 그래프
 
 문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. Core는 외부 런타임 의존성이 없고 PostgreSQL adapter만 optional `postgres` extra를 사용한다.
 
+**SDK·Gateway 정책 코어**
+
 - `ActorSpec`, `LinkPolicy`, `define_actor()`, `connect()`, `wrap()` SDK
 - MCP Tool 정의 canonical/raw digest와 `DISCOVERED` → `APPROVED` → `ACTIVE` 상태 전이
 - definition drift, metadata instruction, cross-server reference 격리
@@ -66,69 +129,50 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - hash·목적지에 결합된 승인과 hash-bound connector 실행
 - `OBSERVE`, `SHADOW`, `ENFORCE` 모드
 - Tool result secret 정제, `UNTRUSTED_TOOL_RESULT` taint, schema 격리
+
+**MCP transport·신원**
+
 - MCP `tools/list`/`tools/call`/`notifications/tools/list_changed` JSON-RPC 집행과 Architecture digest binding
 - MCP 2025-11-25 Streamable HTTP JSON/SSE client, session binding, inbound Origin·auth·lifecycle carrier
 - inbound resumable GET SSE와 교체 가능한 `SessionStore` 계약
 - MCP OAuth discovery, PKCE S256, exact callback, resource-bound token exchange, RFC 7662 introspection
 - optional JWKS/JWT verifier와 loopback OAuth consent·one-time transaction store
 - MCP stdio JSONL client, artifact pin, 서명 sandbox attestation, Bubblewrap launch plan, timeout·process-group kill
+
+**공급망·샌드박스·egress**
+
 - publisher·repository·revision·build·artifact digest를 결합한 서명 provenance admission
 - Architecture REL-07/External allowed domain을 compile하는 목적지별 egress guard와 SIMULATION receipt backend
 - contextual Connector와 외부 전송 없는 fake receipt·compensation reconciliation
 - 사후 downstream receipt reconciliation과 `REVOKE` 증거
+
+**Ledger·증거**
+
 - 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
 - PostgreSQL partition, `session_user` 기반 FORCE RLS, append-only migration·adapter
 - tenant·scope·idempotency가 결합된 `POST /v1/events`, OTLP/HTTP JSON `POST /v1/traces`, cursor 기반 `GET /v1/traces/{trace_id}`
 - canonical keyed 서명 helper와 detached `SignedAuditSink` 증거
+
+**아키텍처 계약·drift**
+
 - 박스/연결선 기반 `ArchitectureGraph`와 실행 가능한 JSON Schema
 - PREVENT·DETECT·RESPOND·EVIDENCE 및 DECLARED·OBSERVED·ENFORCED·RECONCILED 보장 수준
 - Multi-Agent Dynamic Edge Contract와 설계/런타임 drift 비교
 - 방향성 INTERNAL/EXTERNAL Trust Boundary와 cross-zone Edge compile·fail-closed lint
+
+**A2A·오케스트레이션**
+
 - A2A 1.0 Agent Card·Message·Part·Task·Artifact, `SendMessage`/`GetTask`/`CancelTask` JSON-RPC core
 - 실제 HTTP socket A2A carrier의 Origin·auth·body size·`A2A-Version` 집행과 0.3 명시 호환 profile
 - REL-06 actor/audience/resource/token/delegation/data/schema와 Trust Boundary를 함께 집행하는 A2A Broker
 - coordinator·dependency·A2A/MCP/LOCAL/HUMAN transport·retry·timeout·approval·budget 기반 Task workflow engine
 - active ENFORCE bundle에 결합된 tenant-scoped Run Control API와 Studio Runs 운영 화면
+
+**운영 루프**
+
 - Ledger·OTLP JSON runtime import와 미선언 관계·통제 우회 분석
 - M7 Agent config read·2인 승인 deploy·runtime drift guard
 - Studio manifest를 검토 가능한 SHADOW 배포 번들로 compile하는 CLI
-
-```bash
-# 별도 설치 없이 테스트
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-
-# 안전한 email Tool 호출 예제
-PYTHONPATH=src python3 examples/secure_email.py
-
-# Architecture → MCP transport → Ledger 수직 슬라이스
-PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
-
-# Trust Boundary → A2A Broker → Task orchestration → Ledger 수직 슬라이스
-PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
-
-# 외부 부작용 없는 fake-data 플랫폼 E2E
-.venv/bin/python -m pytest -q tests/test_platform_e2e.py
-
-# test-only adapter로 실제 Run Control HTTP create/approve/cancel E2E
-.venv/bin/python -m pytest -q tests/test_run_control.py
-
-# 보안 아키텍처 lint·compile
-PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture compile examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture compile --shadow examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture runtime-diff examples/secure_multi_agent_architecture.json examples/runtime_drift_otlp.json
-
-# 박스 기반 Security Architecture Studio
-cd studio
-npm install
-npm run dev
-
-# editable install을 원하는 경우
-python3 -m pip install -e .
-
-# PostgreSQL adapter까지 설치하는 경우
-python3 -m pip install -e '.[postgres]'
-```
 
 주요 경로는 다음과 같다.
 
