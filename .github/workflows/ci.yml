@@ -64,6 +64,8 @@ jobs:
           python-version: "3.11"
       - name: Install bubblewrap
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor restriction)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run sandbox live enforcement tests
         run: |
           PYTHONPATH=src:tests python3 -m unittest \

@@ -768,13 +768,17 @@ class MCPStdioClient:
                 seccomp_fd = self._open_seccomp_fd(plan.seccomp_program)
                 argv = [str(seccomp_fd) if token == _SECCOMP_FD_TOKEN else token for token in argv]
                 pass_fds.append(seccomp_fd)
+            exec_path: str | None = None
             if plan.executable_digest:
                 # Verify argv[0] over an open fd, then execute THAT fd so the
                 # verified inode and the exec'd inode are provably identical.
+                # argv[0] keeps the real path: rewriting it to /proc/self/fd/N
+                # would leak into the child's sys.executable, and a grandchild
+                # spawned from it fails (close_fds closes N before its exec).
                 exec_fd = _open_verified_artifact(StdioArtifactPin(argv[0], plan.executable_digest))
                 if _FD_EXEC_AVAILABLE:
                     os.set_inheritable(exec_fd, True)
-                    argv[0] = f"/proc/self/fd/{exec_fd}"
+                    exec_path = f"/proc/self/fd/{exec_fd}"
                     pass_fds.append(exec_fd)
             popen_arguments: dict[str, Any] = {
                 "args": argv,
@@ -787,6 +791,8 @@ class MCPStdioClient:
                 "close_fds": True,
                 "bufsize": 0,
             }
+            if exec_path is not None:
+                popen_arguments["executable"] = exec_path
             if pass_fds:
                 popen_arguments["pass_fds"] = tuple(pass_fds)
             if os.name == "posix":

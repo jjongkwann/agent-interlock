@@ -219,13 +219,13 @@ class BubblewrapSeccompLiveTests(unittest.TestCase):
             "t = threading.Thread(target=lambda: done.append(1)); t.start(); t.join()\n"
             "print('thread-ok' if done == [1] else 'thread-bad')\n"
         )
-        self.assertIn("thread-ok", result.stdout)
+        self.assertIn("thread-ok", result.stdout, result.stderr)
 
     def test_fork_is_denied(self):
         result = self._run(
             "import os\ntry:\n    os.fork(); print('LEAKED')\nexcept OSError:\n    print('fork-denied')\n"
         )
-        self.assertIn("fork-denied", result.stdout)
+        self.assertIn("fork-denied", result.stdout, result.stderr)
 
     def test_subprocess_is_denied(self):
         result = self._run(
@@ -235,7 +235,7 @@ class BubblewrapSeccompLiveTests(unittest.TestCase):
             "except OSError:\n"
             "    print('spawn-denied')\n"
         )
-        self.assertIn("spawn-denied", result.stdout)
+        self.assertIn("spawn-denied", result.stdout, result.stderr)
 
 
 if __name__ == "__main__":
