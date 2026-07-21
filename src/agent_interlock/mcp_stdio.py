@@ -319,7 +319,14 @@ _OFF_ARG0_LO = 16
 # seccomp return actions
 _RET_KILL_PROCESS = 0x80000000
 _RET_ERRNO_EPERM = 0x00050001  # SECCOMP_RET_ERRNO | EPERM(1)
+_RET_ERRNO_ENOSYS = 0x00050026  # SECCOMP_RET_ERRNO | ENOSYS(38)
 _RET_ALLOW = 0x7FFF0000
+
+# clone3's flags live in a struct BPF cannot dereference, so it cannot be
+# flag-checked like clone. Returning ENOSYS (not EPERM) makes glibc fall back
+# to plain clone — pthread_create still works while forks stay denied. The
+# syscall number is 435 on every architecture that has it.
+_NR_CLONE3 = 435
 
 _AUDIT_ARCH_X86_64 = 0xC000003E
 _AUDIT_ARCH_AARCH64 = 0xC00000B7
@@ -344,10 +351,11 @@ def _bpf(code: int, jt: int, jf: int, k: int) -> bytes:
 def build_no_subprocess_seccomp(machine: str) -> bytes:
     """Return a classic-BPF seccomp program that denies new *processes*.
 
-    fork/vfork/clone3 return EPERM; ``clone`` is allowed only when the caller
-    sets ``CLONE_THREAD`` (i.e. real thread creation), so the target can still
-    spawn threads but cannot fork a child process. A syscall from an unexpected
-    architecture kills the process. Raises ``MCPStdioSandboxUnavailable`` for an
+    fork/vfork return EPERM; clone3 returns ENOSYS so glibc falls back to
+    ``clone``, which is allowed only when the caller sets ``CLONE_THREAD``
+    (i.e. real thread creation) — the target can still spawn threads but
+    cannot fork a child process. A syscall from an unexpected architecture
+    kills the process. Raises ``MCPStdioSandboxUnavailable`` for an
     architecture this builder does not cover — the backend then fails closed
     rather than claim an unenforced restriction.
     """
@@ -357,9 +365,10 @@ def build_no_subprocess_seccomp(machine: str) -> bytes:
     arch, deny_nrs, clone_nr = entry
 
     # Layout: arch guard, load nr, clone→handler, always-deny checks, allow,
-    # clone handler (allow only CLONE_THREAD else EPERM).
+    # clone handler (allow only CLONE_THREAD else EPERM), clone3→ENOSYS.
     handler = 4 + 1 + len(deny_nrs) + 1  # first instruction of the clone handler
     deny_index = handler + 3  # RET EPERM (shared deny target)
+    enosys_index = handler + 5  # RET ENOSYS (clone3 → glibc clone fallback)
     program = [
         _bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARCH),
         _bpf(_BPF_JEQ_K, 1, 0, arch),  # arch ok → skip kill
@@ -369,7 +378,8 @@ def build_no_subprocess_seccomp(machine: str) -> bytes:
     program.append(_bpf(_BPF_JEQ_K, handler - 4 - 1, 0, clone_nr))  # index 4: clone → handler
     for offset, nr in enumerate(deny_nrs):
         index = 5 + offset
-        program.append(_bpf(_BPF_JEQ_K, deny_index - index - 1, 0, nr))  # match → EPERM
+        target = enosys_index if nr == _NR_CLONE3 else deny_index
+        program.append(_bpf(_BPF_JEQ_K, target - index - 1, 0, nr))  # match → EPERM/ENOSYS
     program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))  # non-process syscall
     # clone handler
     program.append(_bpf(_BPF_LD_ABS_W, 0, 0, _OFF_ARG0_LO))  # index `handler`
@@ -377,6 +387,7 @@ def build_no_subprocess_seccomp(machine: str) -> bytes:
     program.append(_bpf(_BPF_JEQ_K, 1, 0, _CLONE_THREAD))  # CLONE_THREAD → allow
     program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ERRNO_EPERM))  # index `deny_index`
     program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ALLOW))
+    program.append(_bpf(_BPF_RET_K, 0, 0, _RET_ERRNO_ENOSYS))  # index `enosys_index`
     return b"".join(program)
 
 
@@ -472,6 +483,13 @@ class BubblewrapSandboxBackend:
             "--dir",
             profile.working_directory,
         ]
+        # Recreate the host's merged-usr skeleton: profile paths are
+        # canonicalized (/lib -> /usr/lib), but the kernel resolves ELF
+        # interpreters via the literal /lib*//bin symlinks. A symlink grants
+        # no access beyond what the profile bound (or dangles harmlessly).
+        for link in ("/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32"):
+            if os.path.islink(link):
+                argv += ["--symlink", os.readlink(link), link]
         for path in profile.writable_paths:
             argv += ["--bind", path, path]
         for path in profile.read_only_paths:

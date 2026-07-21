@@ -8,6 +8,7 @@ the CI live class exercises.
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import struct
@@ -25,7 +26,7 @@ from agent_interlock import (
     build_no_subprocess_seccomp,
     sha256_file,
 )
-from agent_interlock.mcp_stdio import _RET_ALLOW, _RET_ERRNO_EPERM, _SECCOMP_FD_TOKEN
+from agent_interlock.mcp_stdio import _RET_ALLOW, _RET_ERRNO_ENOSYS, _RET_ERRNO_EPERM, _SECCOMP_FD_TOKEN
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "mcp_stdio_fixture_server.py"
@@ -38,6 +39,13 @@ def launcher() -> StdioArtifactPin:
     return StdioArtifactPin(sys.executable, sha256_file(sys.executable))
 
 
+def _runtime_closure() -> tuple[str, ...]:
+    # bwrap starts from an empty root: the interpreter's ELF loader, libc, and
+    # stdlib live outside the pinned binary and must be declared explicitly
+    # (the deploy contract test_bubblewrap_sandbox documents).
+    return tuple(p for p in (sys.base_prefix, "/lib", "/lib64", "/usr/lib") if os.path.isdir(p))
+
+
 def profile(*, allow_child_processes: bool):
     return StdioSandboxProfile(
         profile_id="bwrap-seccomp",
@@ -45,7 +53,7 @@ def profile(*, allow_child_processes: bool):
         arguments=(str(FIXTURE), "normal", "-", "-"),
         additional_artifacts=(StdioArtifactPin(str(FIXTURE), sha256_file(str(FIXTURE))),),
         working_directory=str(ROOT),
-        read_only_paths=(str(FIXTURE),),
+        read_only_paths=(str(FIXTURE), *_runtime_closure()),
         allow_child_processes=allow_child_processes,
     )
 
@@ -115,24 +123,26 @@ class SeccompBpfStructureTests(unittest.TestCase):
         with self.assertRaises(MCPStdioSandboxUnavailable):
             build_no_subprocess_seccomp("s390x")
 
-    def test_terminal_instruction_allows_by_default(self):
-        # A non-process syscall must reach an ALLOW return, never fall into EPERM.
+    def test_terminal_instruction_is_the_clone3_enosys_return(self):
+        # clone3 jumps to the trailing ENOSYS return (glibc clone fallback);
+        # non-process syscalls reach ALLOW (proven by the simulate tests).
         instructions = unpack(build_no_subprocess_seccomp("x86_64"))
-        self.assertEqual(instructions[-1][3], _RET_ALLOW)
+        self.assertEqual(instructions[-1][3], _RET_ERRNO_ENOSYS)
 
     def test_x86_64_filter_decisions_are_correct(self):
         program = build_no_subprocess_seccomp("x86_64")
         self.assertEqual(simulate(program, 57, 0xDEAD, 0), _KILL)  # wrong arch
-        for nr in (57, 58, 435, 56):  # fork, vfork, clone3, clone(process)
+        for nr in (57, 58, 56):  # fork, vfork, clone(process)
             self.assertEqual(simulate(program, nr, _X86_64, 0), _RET_ERRNO_EPERM)
+        self.assertEqual(simulate(program, 435, _X86_64, 0), _RET_ERRNO_ENOSYS)  # clone3 → glibc falls back to clone
         self.assertEqual(simulate(program, 56, _X86_64, _CLONE_THREAD), _RET_ALLOW)  # thread
         for nr in (0, 59):  # read, execve must run
             self.assertEqual(simulate(program, nr, _X86_64, 0), _RET_ALLOW)
 
     def test_aarch64_filter_decisions_are_correct(self):
         program = build_no_subprocess_seccomp("aarch64")
-        for nr in (220, 435):  # clone(process), clone3
-            self.assertEqual(simulate(program, nr, _AARCH64, 0), _RET_ERRNO_EPERM)
+        self.assertEqual(simulate(program, 220, _AARCH64, 0), _RET_ERRNO_EPERM)  # clone(process)
+        self.assertEqual(simulate(program, 435, _AARCH64, 0), _RET_ERRNO_ENOSYS)  # clone3 → glibc falls back to clone
         self.assertEqual(simulate(program, 220, _AARCH64, _CLONE_THREAD), _RET_ALLOW)  # thread
         self.assertEqual(simulate(program, 63, _AARCH64, 0), _RET_ALLOW)  # read
         self.assertEqual(simulate(program, 220, _X86_64, 0), _KILL)  # wrong arch
