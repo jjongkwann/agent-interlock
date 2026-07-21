@@ -251,6 +251,7 @@ from .receipts import (
     ReceiptSummary,
 )
 from .registry import DefinitionRegistry, InMemoryRevisionStore, InvalidStateTransition, RevisionStore, ToolRevision
+from .run_control import RunBinding, RunControlError, RunControlService
 from .sandbox_supervisor import SandboxHealth, SandboxSupervisor, SupervisedProcess
 from .sdk import Actor, Interlock
 from .signing import ALGORITHM as SIGNING_ALGORITHM
@@ -512,6 +513,9 @@ __all__ = [
     "ReceiptStatus",
     "ReceiptSummary",
     "RuntimeConfigProbe",
+    "RunBinding",
+    "RunControlError",
+    "RunControlService",
     "RuntimeGraphDiff",
     "RuntimeTelemetryImport",
     "SandboxAttestation",

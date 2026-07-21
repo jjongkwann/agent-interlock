@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 문서 맵
-date: 2026-07-20
-version: 1.4
+date: 2026-07-21
+version: 1.7
 status: active
 ---
 
@@ -26,6 +26,8 @@ status: active
 | 로컬 MCP process와 부작용 증거 구현 | [11 MCP stdio Sandbox·Receipt](11-mcp-stdio-sandbox-receipts.md) | [09 MCP Transport 집행](09-mcp-transport-enforcement.md) |
 | PostgreSQL Ledger와 event/trace API 운영 | [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md) | [01 프로젝트 기획](01-project-plan.md#9-postgresql-mvp-ddl) |
 | Trust Boundary 기반 A2A·오케스트레이션 구현 | [13 A2A 오케스트레이션 플랫폼](13-a2a-orchestration-platform.md) | [07 Security Architecture Studio](07-security-architecture-studio-design.md) |
+| 전체 플랫폼을 안전하게 E2E 검증 | [14 가짜 데이터 플랫폼 E2E](14-fake-platform-e2e-scenario.md) | [13 A2A 오케스트레이션 플랫폼](13-a2a-orchestration-platform.md) |
+| 수동 Chrome E2E 화면 증거 확인 | [15 수동 브라우저 E2E 증거](15-manual-browser-e2e-evidence.md) | [14 가짜 데이터 플랫폼 E2E](14-fake-platform-e2e-scenario.md) |
 
 ## 2. 문서별 책임
 
@@ -44,6 +46,8 @@ status: active
 | `11-mcp-stdio-sandbox-receipts.md` | stdio 제한, 서명 attestation, Bubblewrap, Architecture-bound egress와 fake receipt reference | platform별 live sandbox·seccomp·egress proxy 설치·운영 정책 |
 | `12-postgresql-ledger-api.md` | PostgreSQL adapter, RLS·append-only migration, `/v1/events`·trace API와 signed audit reference | HA proxy·pool·partition scheduler·외부 KMS/mTLS/WORM 운영 |
 | `13-a2a-orchestration-platform.md` | 방향성 Trust Boundary, A2A 1.0 core, Task workflow와 runtime orchestration 계약 | 외부 IdP·분산 queue/store·streaming/push 운영 배포 |
+| `14-fake-platform-e2e-scenario.md` | test-only fixture로 설계·승격·A2A·Run Control·승인·MCP·증거·Chrome E2E를 재현하는 절차와 합격 기준 | 실제 고객 데이터·외부 메일 전송·운영 adapter/queue/store 구성 |
+| `15-manual-browser-e2e-evidence.md` | Chrome 브라우저 프레임을 제거한 1600×900 수동 E2E 화면 증거와 실행 결과 | 자동 회귀 시험의 합격 판정이나 운영 telemetry 무결성 보증 |
 
 ## 3. 추적 ID
 

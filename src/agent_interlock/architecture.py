@@ -357,6 +357,32 @@ class ArchitectureGraph:
             api_version=str(manifest.get("apiVersion", "interlock.dev/v1alpha1")),
         )
 
+    def to_manifest(self) -> dict[str, Any]:
+        """Return the complete, executable Architecture-as-Code document.
+
+        ``to_design_graph`` is intentionally presentation-oriented and omits
+        identities and detailed policy inputs. Deployment bundles must instead
+        carry this lossless representation so that boundaries and workflow
+        tasks are covered by the reviewed digest.
+        """
+
+        return {
+            "apiVersion": self.api_version,
+            "kind": "Architecture",
+            "metadata": {"id": self.id, "version": self.version},
+            "spec": {
+                "trustZones": [_trust_zone_value(zone) for zone in self.trust_zones],
+                "trustBoundaries": [_boundary_value(boundary) for boundary in self.boundaries],
+                "nodes": [_node_value(node) for node in self.nodes],
+                "edges": [_edge_value(edge) for edge in self.edges],
+                **(
+                    {"orchestration": _orchestration_value(self.orchestration)}
+                    if self.orchestration is not None
+                    else {}
+                ),
+            },
+        }
+
     def to_design_graph(self) -> dict[str, Any]:
         return {
             "architectureId": self.id,
@@ -1271,6 +1297,94 @@ def _control_value(control: SecurityControl) -> dict[str, str]:
         "enforcementPoint": control.enforcement_point.value,
         "assurance": control.assurance.value,
         "description": control.description,
+    }
+
+
+def _trust_zone_value(zone: ArchitectureTrustZone) -> dict[str, Any]:
+    return {
+        "id": zone.id,
+        "label": zone.label,
+        "kind": zone.kind.value,
+        "description": zone.description,
+        "bounds": {
+            "x": zone.bounds[0],
+            "y": zone.bounds[1],
+            "width": zone.bounds[2],
+            "height": zone.bounds[3],
+        },
+    }
+
+
+def _node_value(node: ArchitectureNode) -> dict[str, Any]:
+    actor = node.actor
+    return {
+        "id": actor.id,
+        "type": actor.type.value,
+        "owner": actor.owner,
+        "identity": actor.identity,
+        "capabilities": sorted(actor.capabilities),
+        "dataAccess": sorted(actor.data_access),
+        "sideEffects": sorted(item.value for item in actor.side_effects),
+        "inputSchema": dict(actor.input_schema),
+        "outputSchema": dict(actor.output_schema),
+        "tenantMode": actor.tenant_mode,
+        "failureMode": actor.failure_mode.value,
+        "allowedDomains": sorted(actor.allowed_domains),
+        "maxDelegationDepth": actor.max_delegation_depth,
+        **({"definitionDigest": actor.definition_digest} if actor.definition_digest is not None else {}),
+        "controls": [_control_value(control) for control in node.controls],
+        **({"position": {"x": node.position[0], "y": node.position[1]}} if node.position is not None else {}),
+        **({"trustZone": node.trust_zone.value} if node.trust_zone is not None else {}),
+        **({"trustZoneId": node.trust_zone_id} if node.trust_zone_id is not None else {}),
+    }
+
+
+def _policy_value(policy: LinkPolicy) -> dict[str, Any]:
+    return {
+        "id": policy.id,
+        "version": policy.version,
+        "mode": policy.mode.value,
+        "allowedPurposes": sorted(policy.allowed_purposes),
+        "allowedDataClasses": sorted(policy.allowed_data_classes),
+        "deniedDataClasses": sorted(policy.denied_data_classes),
+        "requireActiveDefinition": policy.require_active_definition,
+        "requireDigestPin": policy.require_digest_pin,
+        "requireExplicitDestination": policy.require_explicit_destination,
+        "newDestinationAction": policy.new_destination_action.value,
+        "tokenPassthrough": policy.token_passthrough,
+        "requireAudience": policy.require_audience,
+        "requireResource": policy.require_resource,
+        "requireActorBinding": policy.require_actor_binding,
+        "maxDelegationDepth": policy.max_delegation_depth,
+        "externalWriteRequiresApproval": policy.external_write_requires_approval,
+        "failureMode": policy.failure_mode.value,
+        "decisionTtlSeconds": policy.decision_ttl_seconds,
+    }
+
+
+def _edge_value(edge: ArchitectureEdge) -> dict[str, Any]:
+    return {
+        "id": edge.id,
+        "relationshipId": edge.relationship_id,
+        "source": edge.source,
+        "target": edge.target,
+        "relationship": edge.relationship,
+        "policy": _policy_value(edge.policy),
+        "controls": [_control_value(control) for control in edge.controls],
+        "dynamic": edge.dynamic,
+        **({"boundaryId": edge.boundary_id} if edge.boundary_id is not None else {}),
+        **(
+            {
+                "targetSelector": {
+                    "types": sorted(item.value for item in edge.target_selector.actor_types),
+                    "requiredCapabilities": sorted(edge.target_selector.required_capabilities),
+                    "idPattern": edge.target_selector.id_pattern,
+                    "sameTenant": edge.target_selector.same_tenant,
+                }
+            }
+            if edge.target_selector is not None
+            else {}
+        ),
     }
 
 

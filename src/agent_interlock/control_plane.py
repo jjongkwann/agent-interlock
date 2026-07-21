@@ -30,6 +30,7 @@ from .ledger_http import (
     LedgerAPIError,
     _single_header,
 )
+from .run_control import RunControlError, RunControlService
 from .studio_deploy import (
     DeploymentApproval,
     DeploymentBundle,
@@ -44,6 +45,10 @@ SCOPE_READ = "deploy:read"
 SCOPE_PROPOSE = "deploy:propose"
 SCOPE_APPROVE = "deploy:approve"
 SCOPE_PROMOTE = "deploy:promote"
+SCOPE_RUN_CREATE = "run:create"
+SCOPE_RUN_READ = "run:read"
+SCOPE_RUN_APPROVE = "run:approve"
+SCOPE_RUN_CANCEL = "run:cancel"
 
 _ERROR_STATUS = {
     "L1-STUDIO-TWO-PERSON-APPROVAL-REQUIRED": 422,
@@ -55,6 +60,7 @@ _ERROR_STATUS = {
 
 
 _LOOPBACK_ORIGIN = re.compile(r"^http://(localhost|127\.0\.0\.1)(:\d{1,5})?$")
+_RUN_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,11 +89,13 @@ class ControlPlaneAPI:
         authenticator: LedgerAPIAuthenticator,
         *,
         trusted_approvers: Mapping[str, TrustedApprovalKey],
+        run_service: RunControlService | None = None,
         config: ControlPlaneConfig | None = None,
     ) -> None:
         self.store = store
         self.authenticator = authenticator
         self.trusted_approvers = dict(trusted_approvers)
+        self.run_service = run_service
         self.config = config or ControlPlaneConfig()
         self._approvals: dict[str, dict[tuple[str, str], DeploymentApproval]] = {}
         self._lock = threading.RLock()
@@ -103,6 +111,101 @@ class ControlPlaneAPI:
             if parts.query:
                 raise LedgerAPIError(400, "CONTROL-QUERY-UNEXPECTED", "query parameters are not allowed")
             segments = [item for item in parts.path.split("/") if item]
+            if handler.command == "GET" and segments == ["v1", "runs"]:
+                self._require_scope(principal, SCOPE_RUN_READ)
+                service = self._require_run_service()
+                self._send_json(handler, 200, {"runs": list(service.list(tenant_id=principal.tenant_id))})
+                return
+            if handler.command == "POST" and segments == ["v1", "runs"]:
+                self._require_scope(principal, SCOPE_RUN_CREATE)
+                service = self._require_run_service()
+                value = self._read_json(handler)
+                if not isinstance(value, Mapping):
+                    raise LedgerAPIError(400, "RUN-REQUEST-INVALID", "request must be a JSON object")
+                workflow_input = value.get("input", {})
+                run_id = value.get("runId")
+                trace_id = value.get("traceId")
+                if run_id is not None and (not isinstance(run_id, str) or not _RUN_IDENTIFIER.fullmatch(run_id)):
+                    raise LedgerAPIError(
+                        400,
+                        "RUN-ID-INVALID",
+                        "runId must be a safe identifier of at most 128 characters",
+                    )
+                if trace_id is not None and (not isinstance(trace_id, str) or not _RUN_IDENTIFIER.fullmatch(trace_id)):
+                    raise LedgerAPIError(
+                        400,
+                        "RUN-TRACE-ID-INVALID",
+                        "traceId must be a safe identifier of at most 128 characters",
+                    )
+                run = service.create(
+                    tenant_id=principal.tenant_id,
+                    workflow_input=workflow_input,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                )
+                self._send_json(handler, 202, {"run": run})
+                return
+            if handler.command == "GET" and len(segments) == 3 and segments[:2] == ["v1", "runs"]:
+                self._require_scope(principal, SCOPE_RUN_READ)
+                service = self._require_run_service()
+                self._send_json(handler, 200, {"run": service.get(tenant_id=principal.tenant_id, run_id=segments[2])})
+                return
+            if (
+                handler.command == "GET"
+                and len(segments) == 4
+                and segments[:2] == ["v1", "runs"]
+                and segments[3] == "events"
+            ):
+                self._require_scope(principal, SCOPE_RUN_READ)
+                service = self._require_run_service()
+                self._send_json(
+                    handler,
+                    200,
+                    {"events": list(service.events(tenant_id=principal.tenant_id, run_id=segments[2]))},
+                )
+                return
+            if (
+                handler.command == "POST"
+                and len(segments) == 4
+                and segments[:2] == ["v1", "runs"]
+                and segments[3] == "resume"
+            ):
+                self._require_scope(principal, SCOPE_RUN_CREATE)
+                service = self._require_run_service()
+                self._read_empty_json(handler)
+                run = service.resume(tenant_id=principal.tenant_id, run_id=segments[2])
+                self._send_json(handler, 202, {"run": run})
+                return
+            if (
+                handler.command == "POST"
+                and len(segments) == 4
+                and segments[:2] == ["v1", "runs"]
+                and segments[3] == "cancel"
+            ):
+                self._require_scope(principal, SCOPE_RUN_CANCEL)
+                service = self._require_run_service()
+                self._read_empty_json(handler)
+                run = service.cancel(tenant_id=principal.tenant_id, run_id=segments[2])
+                self._send_json(handler, 200, {"run": run})
+                return
+            if (
+                handler.command == "POST"
+                and len(segments) == 6
+                and segments[:2] == ["v1", "runs"]
+                and segments[3] == "tasks"
+                and segments[5] == "approve"
+            ):
+                self._require_scope(principal, SCOPE_RUN_APPROVE)
+                service = self._require_run_service()
+                self._read_empty_json(handler)
+                run = service.approve(
+                    tenant_id=principal.tenant_id,
+                    run_id=segments[2],
+                    task_id=segments[4],
+                    approved_by=principal.subject,
+                )
+                self._send_json(handler, 202, {"run": run})
+                return
             if handler.command == "GET" and segments == ["v1", "deploy", "status"]:
                 self._require_scope(principal, SCOPE_READ)
                 with self._lock:
@@ -155,6 +258,13 @@ class ControlPlaneAPI:
         except StudioDeploymentError as error:
             status = _ERROR_STATUS.get(error.reason_code, 422)
             self._send_json(handler, status, {"error": {"code": error.reason_code, "message": str(error)}}, close=True)
+        except RunControlError as error:
+            self._send_json(
+                handler,
+                error.status,
+                {"error": {"code": error.code, "message": error.message}},
+                close=True,
+            )
         except LedgerAPIError as error:
             self._send_json(
                 handler,
@@ -213,6 +323,16 @@ class ControlPlaneAPI:
             self._approvals.pop(digest, None)
             active = self.store.active()
         self._send_json(handler, 200, {"active": active, "commit": commit})
+
+    def _require_run_service(self) -> RunControlService:
+        if self.run_service is None:
+            raise RunControlError(503, "RUN-SERVICE-UNAVAILABLE", "run control is not configured")
+        return self.run_service
+
+    def _read_empty_json(self, handler: BaseHTTPRequestHandler) -> None:
+        value = self._read_json(handler)
+        if not isinstance(value, Mapping) or value:
+            raise LedgerAPIError(400, "RUN-REQUEST-INVALID", "request body must be an empty JSON object")
 
     def _authenticate(self, handler: BaseHTTPRequestHandler):
         value = _single_header(handler, "Authorization", required=True, unauthorized=True)

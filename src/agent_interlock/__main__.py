@@ -66,6 +66,7 @@ def _compile_shadow(graph, compiler, findings) -> int:  # noqa: ANN001
         "version": graph.version,
         "actors": sorted(compiled.actors),
         "links": links,
+        "architecture": graph.to_manifest(),
     }
     print(
         json.dumps(
@@ -315,6 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "architectureId": graph.id,
                 "version": graph.version,
                 "actors": sorted(compiled.actors),
+                "architecture": graph.to_manifest(),
                 "links": [
                     {
                         "edgeId": edge.id,

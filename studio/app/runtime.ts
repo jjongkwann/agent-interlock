@@ -178,12 +178,3 @@ function text(value: unknown): string | undefined {
 function booleanValue(value: unknown): boolean {
   return value === true || String(value).toLowerCase() === "true" || value === 1;
 }
-
-export const demoRuntimeTelemetry = [
-  { event_type: "INTERACTION_REQUESTED", occurred_at: "2026-07-20T01:00:00Z", tenant_id: "tenant-demo", environment: "DEV", data_source: "DEMO", trace_id: "trace-demo", span_id: "span-delegation", interaction_id: "interaction-delegation", source_actor_id: "agent.support", target_actor_id: "agent.research.runtime-42", relationship_type: "DELEGATES", relationship_id: "REL-06", payload: {} },
-  { event_type: "CONTROL_EVALUATED", occurred_at: "2026-07-20T01:00:01Z", tenant_id: "tenant-demo", environment: "DEV", data_source: "DEMO", trace_id: "trace-demo", span_id: "span-delegation", interaction_id: "interaction-delegation", payload: { control: { decision: "ALLOW", actualEnforced: true, policyId: "demo-delegation", mode: "ENFORCE", reasonCodes: [] } } },
-  { event_type: "INTERACTION_REQUESTED", occurred_at: "2026-07-20T01:01:00Z", tenant_id: "tenant-demo", environment: "DEV", data_source: "DEMO", trace_id: "trace-demo", span_id: "span-tool", interaction_id: "interaction-tool", source_actor_id: "agent.support", target_actor_id: "tool.email", relationship_type: "INVOKES", relationship_id: "REL-05", payload: {} },
-  { event_type: "CONTROL_EVALUATED", occurred_at: "2026-07-20T01:01:01Z", tenant_id: "tenant-demo", environment: "DEV", data_source: "DEMO", trace_id: "trace-demo", span_id: "span-tool", interaction_id: "interaction-tool", payload: { control: { decision: "ALLOW", actualEnforced: true, policyId: "demo-tool", mode: "ENFORCE", reasonCodes: [] } } },
-  { event_type: "INTERACTION_REQUESTED", occurred_at: "2026-07-20T01:02:00Z", tenant_id: "tenant-demo", environment: "DEV", data_source: "DEMO", trace_id: "trace-demo", span_id: "span-bypass", interaction_id: "interaction-bypass", source_actor_id: "agent.research.runtime-42", target_actor_id: "external.unknown", relationship_type: "SENDS", relationship_id: "REL-07", payload: {} },
-  { event_type: "SECURITY_OUTCOME_SET", occurred_at: "2026-07-20T01:02:01Z", tenant_id: "tenant-demo", environment: "DEV", data_source: "DEMO", trace_id: "trace-demo", span_id: "span-bypass", interaction_id: "interaction-bypass", payload: { securityOutcome: "PARTIALLY_EXECUTED" } },
-];

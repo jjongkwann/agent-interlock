@@ -61,6 +61,12 @@ class StudioRoundTripTests(unittest.TestCase):
         # And the compiler's parser accepts the studio export shape.
         ArchitectureGraph.from_dict(manifest)
 
+    def test_executable_manifest_round_trip_is_lossless(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        graph = ArchitectureGraph.from_dict(manifest)
+        restored = ArchitectureGraph.from_dict(graph.to_manifest())
+        self.assertEqual(restored, graph)
+
     def test_trust_zone_round_trips_through_the_architecture_parser(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         manifest["spec"]["trustZones"].append(
@@ -110,6 +116,12 @@ class CompileShadowTests(unittest.TestCase):
         self.assertTrue(bundle["bundleDigest"].startswith("sha256:"))
         self.assertTrue(bundle["links"])
         self.assertTrue(all(link["mode"] == "SHADOW" for link in bundle["links"]))
+        self.assertEqual(bundle["architecture"]["kind"], "Architecture")
+        self.assertEqual(
+            len(bundle["architecture"]["spec"]["trustBoundaries"]),
+            len(ArchitectureGraph.from_dict(json.loads(MANIFEST.read_text(encoding="utf-8"))).boundaries),
+        )
+        self.assertTrue(bundle["architecture"]["spec"]["orchestration"]["tasks"])
 
     def test_shadow_bundle_digest_is_stable(self):
         first = json.loads(run_cli(["architecture", "compile", "--shadow", str(MANIFEST)])[1])

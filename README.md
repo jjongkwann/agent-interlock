@@ -44,6 +44,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - [`docs/11-mcp-stdio-sandbox-receipts.md`](docs/11-mcp-stdio-sandbox-receipts.md): stdio process sandbox attestation과 fake external receipt reconciliation
 - [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.md): PostgreSQL RLS·append-only Ledger adapter와 event/trace API
 - [`docs/13-a2a-orchestration-platform.md`](docs/13-a2a-orchestration-platform.md): Trust Boundary에서 A2A Broker·Task workflow·오케스트레이션까지의 실행 계약
+- [`docs/14-fake-platform-e2e-scenario.md`](docs/14-fake-platform-e2e-scenario.md): 가짜 고객 데이터로 설계→승격→A2A→승인→MCP→증거·drift를 검증하는 전체 시나리오
 
 ## 기본 구현 전략
 
@@ -87,6 +88,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - 실제 HTTP socket A2A carrier의 Origin·auth·body size·`A2A-Version` 집행과 0.3 명시 호환 profile
 - REL-06 actor/audience/resource/token/delegation/data/schema와 Trust Boundary를 함께 집행하는 A2A Broker
 - coordinator·dependency·A2A/MCP/LOCAL/HUMAN transport·retry·timeout·approval·budget 기반 Task workflow engine
+- active ENFORCE bundle에 결합된 tenant-scoped Run Control API와 Studio Runs 운영 화면
 - Ledger·OTLP JSON runtime import와 미선언 관계·통제 우회 분석
 - M7 Agent config read·2인 승인 deploy·runtime drift guard
 - Studio manifest를 검토 가능한 SHADOW 배포 번들로 compile하는 CLI
@@ -103,6 +105,12 @@ PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
 
 # Trust Boundary → A2A Broker → Task orchestration → Ledger 수직 슬라이스
 PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
+
+# 외부 부작용 없는 fake-data 플랫폼 E2E
+.venv/bin/python -m pytest -q tests/test_platform_e2e.py
+
+# test-only adapter로 실제 Run Control HTTP create/approve/cancel E2E
+.venv/bin/python -m pytest -q tests/test_run_control.py
 
 # 보안 아키텍처 lint·compile
 PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
@@ -145,6 +153,8 @@ python3 -m pip install -e '.[postgres]'
 | `tests/test_ledger_http.py` | 실제 socket 기반 tenant·scope·idempotency·pagination 시험 |
 | `tests/test_postgres_ledger.py` | DB role binding과 선택적 PostgreSQL 16 live 시험 |
 | `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, 실제 HTTP socket, orchestration 시험 |
+| `tests/test_platform_e2e.py` | fake data로 compile·2인 승격·실제 localhost A2A·승인·MCP·Runtime/Statistics/Drift 전체 시험 |
+| `tests/fixtures/platform_e2e/` | `.invalid` 주소와 결정적 fake 고객·지식·receipt fixture |
 | `examples/secure_email.py` | 최소 실행 예제 |
 | `examples/secure_multi_agent_architecture.json` | Multi-Agent 보안 아키텍처 예제 |
 | `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |

@@ -1,0 +1,98 @@
+[
+  {
+    "event_type": "INTERACTION_REQUESTED",
+    "occurred_at": "2026-07-20T01:00:00Z",
+    "tenant_id": "tenant-test-only",
+    "environment": "DEV",
+    "data_source": "DEMO",
+    "trace_id": "trace-test-only",
+    "span_id": "span-delegation-test-only",
+    "interaction_id": "interaction-delegation-test-only",
+    "source_actor_id": "agent.support",
+    "target_actor_id": "agent.research.runtime-test-only",
+    "relationship_type": "DELEGATES",
+    "relationship_id": "REL-06",
+    "payload": {}
+  },
+  {
+    "event_type": "CONTROL_EVALUATED",
+    "occurred_at": "2026-07-20T01:00:01Z",
+    "tenant_id": "tenant-test-only",
+    "environment": "DEV",
+    "data_source": "DEMO",
+    "trace_id": "trace-test-only",
+    "span_id": "span-delegation-test-only",
+    "interaction_id": "interaction-delegation-test-only",
+    "payload": {
+      "control": {
+        "decision": "ALLOW",
+        "actualEnforced": true,
+        "policyId": "policy-delegation-test-only",
+        "mode": "ENFORCE",
+        "reasonCodes": []
+      }
+    }
+  },
+  {
+    "event_type": "INTERACTION_REQUESTED",
+    "occurred_at": "2026-07-20T01:01:00Z",
+    "tenant_id": "tenant-test-only",
+    "environment": "DEV",
+    "data_source": "DEMO",
+    "trace_id": "trace-test-only",
+    "span_id": "span-tool-test-only",
+    "interaction_id": "interaction-tool-test-only",
+    "source_actor_id": "agent.support",
+    "target_actor_id": "tool.email",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "payload": {}
+  },
+  {
+    "event_type": "CONTROL_EVALUATED",
+    "occurred_at": "2026-07-20T01:01:01Z",
+    "tenant_id": "tenant-test-only",
+    "environment": "DEV",
+    "data_source": "DEMO",
+    "trace_id": "trace-test-only",
+    "span_id": "span-tool-test-only",
+    "interaction_id": "interaction-tool-test-only",
+    "payload": {
+      "control": {
+        "decision": "ALLOW",
+        "actualEnforced": true,
+        "policyId": "policy-tool-test-only",
+        "mode": "ENFORCE",
+        "reasonCodes": []
+      }
+    }
+  },
+  {
+    "event_type": "INTERACTION_REQUESTED",
+    "occurred_at": "2026-07-20T01:02:00Z",
+    "tenant_id": "tenant-test-only",
+    "environment": "DEV",
+    "data_source": "DEMO",
+    "trace_id": "trace-test-only",
+    "span_id": "span-bypass-test-only",
+    "interaction_id": "interaction-bypass-test-only",
+    "source_actor_id": "agent.research.runtime-test-only",
+    "target_actor_id": "external.unknown",
+    "relationship_type": "SENDS",
+    "relationship_id": "REL-07",
+    "payload": {}
+  },
+  {
+    "event_type": "SECURITY_OUTCOME_SET",
+    "occurred_at": "2026-07-20T01:02:01Z",
+    "tenant_id": "tenant-test-only",
+    "environment": "DEV",
+    "data_source": "DEMO",
+    "trace_id": "trace-test-only",
+    "span_id": "span-bypass-test-only",
+    "interaction_id": "interaction-bypass-test-only",
+    "payload": {
+      "securityOutcome": "PARTIALLY_EXECUTED"
+    }
+  }
+]

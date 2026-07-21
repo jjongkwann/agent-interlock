@@ -73,6 +73,9 @@ class StudioDeploymentTests(unittest.TestCase):
             for approver, key_id in pairs
         )
 
+    def test_empty_store_history_is_empty(self):
+        self.assertEqual(self.store.history(), ())
+
     def test_propose_then_two_person_promote(self):
         self.store.propose(self.bundle)
         self.assertIsNone(self.store.active())

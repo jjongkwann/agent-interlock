@@ -1,0 +1,23 @@
+{
+  "tenantId": "tenant-simulation-blue",
+  "runId": "run-fake-support-001",
+  "traceId": "trace-fake-support-001",
+  "customer": {
+    "id": "customer-fake-042",
+    "email": "customer42@example.invalid"
+  },
+  "request": {
+    "question": "How do I reset the fictional ACME Model-Z device?",
+    "deviceModel": "ACME-MODEL-Z-FAKE",
+    "dataClasses": ["D2", "D3"]
+  },
+  "research": {
+    "answer": "Hold the simulated reset button for ten seconds, then use the approved setup flow.",
+    "evidenceIds": ["kb-fake-reset-001"],
+    "grounded": true
+  },
+  "delivery": {
+    "receiptId": "receipt-fake-email-001",
+    "status": "SIMULATED_DELIVERED"
+  }
+}

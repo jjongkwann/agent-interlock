@@ -29,6 +29,7 @@ from .architecture import (
     TaskTransport,
 )
 from .ledger import InMemoryLedger, Ledger
+from .models import DataSource, Environment
 
 
 class OrchestrationError(RuntimeError):
@@ -100,9 +101,18 @@ AcceptanceEvaluator = Callable[[OrchestrationTask, TaskExecutionResult], tuple[b
 class A2AOrchestrationAdapter:
     """Turns a workflow task into a policy-bound A2A ``message/send`` call."""
 
-    def __init__(self, broker: A2ABroker, principal_provider: PrincipalProvider) -> None:
+    def __init__(
+        self,
+        broker: A2ABroker,
+        principal_provider: PrincipalProvider,
+        *,
+        environment: Environment = Environment.DEV,
+        data_source: DataSource = DataSource.PRODUCTION,
+    ) -> None:
         self.broker = broker
         self.principal_provider = principal_provider
+        self.environment = environment
+        self.data_source = data_source
 
     def execute(self, value: TaskExecutionInput) -> TaskExecutionResult:
         if time.time() >= value.deadline_epoch:
@@ -137,6 +147,8 @@ class A2AOrchestrationAdapter:
                 data_classes=task.data_classes,
                 idempotency_key=f"{value.run_id}:{task.id}:{value.attempt}",
                 trace_id=value.trace_id,
+                environment=self.environment,
+                data_source=self.data_source,
             ),
         )
         if remote.status.state != A2ATaskState.COMPLETED:
@@ -236,28 +248,30 @@ class InMemoryWorkflowRunStore:
         if max_runs < 1:
             raise ValueError("max_runs must be positive")
         self._max_runs = max_runs
-        self._runs: dict[str, WorkflowRun] = {}
+        self._runs: dict[tuple[str, str], WorkflowRun] = {}
         self._lock = threading.RLock()
 
     def create(self, run: WorkflowRun) -> None:
         with self._lock:
-            if run.id in self._runs:
+            key = (run.tenant_id, run.id)
+            if key in self._runs:
                 raise OrchestrationError("ORCH-RUN-DUPLICATE", "workflow run id already exists")
             if len(self._runs) >= self._max_runs:
                 raise OrchestrationError("ORCH-RUN-CAPACITY", "workflow run store is at capacity")
-            self._runs[run.id] = run
+            self._runs[key] = run
 
     def save(self, run: WorkflowRun) -> None:
         with self._lock:
-            prior = self._runs.get(run.id)
-            if prior is None or prior.tenant_id != run.tenant_id:
+            key = (run.tenant_id, run.id)
+            prior = self._runs.get(key)
+            if prior is None:
                 raise OrchestrationError("ORCH-RUN-NOT-FOUND", "workflow run is not visible to this tenant")
-            self._runs[run.id] = run
+            self._runs[key] = run
 
     def get(self, *, tenant_id: str, run_id: str) -> WorkflowRun:
         with self._lock:
-            run = self._runs.get(run_id)
-            if run is None or run.tenant_id != tenant_id:
+            run = self._runs.get((tenant_id, run_id))
+            if run is None:
                 raise OrchestrationError("ORCH-RUN-NOT-FOUND", "workflow run is not visible to this tenant")
             return run
 
@@ -308,6 +322,28 @@ class OrchestrationEngine:
         run_id: str | None = None,
         trace_id: str | None = None,
     ) -> WorkflowRun:
+        run = self.create(
+            tenant_id=tenant_id,
+            workflow_input=workflow_input,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+        return self.resume(tenant_id=run.tenant_id, run_id=run.id)
+
+    def create(
+        self,
+        *,
+        tenant_id: str,
+        workflow_input: Mapping[str, Any],
+        run_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> WorkflowRun:
+        """Persist a PENDING run without dispatching a task.
+
+        Control planes use this split phase to return a stable run ID before
+        dispatch begins on a worker. ``start`` remains the synchronous API.
+        """
+
         if not tenant_id:
             raise ValueError("tenant_id is required")
         now = _now()
@@ -325,7 +361,7 @@ class OrchestrationEngine:
         )
         self.run_store.create(run)
         self._append_run_event("WORKFLOW_RUN_CREATED", run)
-        return self._execute(replace(run, state=WorkflowRunState.RUNNING, updated_at=_now()))
+        return run
 
     def resume(self, *, tenant_id: str, run_id: str) -> WorkflowRun:
         run = self.run_store.get(tenant_id=tenant_id, run_id=run_id)
@@ -359,6 +395,14 @@ class OrchestrationEngine:
         self._append_run_event("WORKFLOW_RUN_CANCELED", canceled)
         return canceled
 
+    def fail(self, *, tenant_id: str, run_id: str, reason_code: str) -> WorkflowRun:
+        """Fail a non-terminal run when its hosting worker cannot continue."""
+
+        run = self.run_store.get(tenant_id=tenant_id, run_id=run_id)
+        if run.state in _RUN_TERMINAL:
+            return run
+        return self._fail_run(run, reason_code)
+
     def _execute(self, run: WorkflowRun) -> WorkflowRun:
         self.run_store.save(run)
         self._append_run_event("WORKFLOW_RUN_STARTED", run)
@@ -367,6 +411,9 @@ class OrchestrationEngine:
         budget = _Budget(policy.max_messages - run.messages_used)
         task_specs = {task.id: task for task in self.definition.tasks}
         while True:
+            latest = self.run_store.get(tenant_id=run.tenant_id, run_id=run.id)
+            if latest.state == WorkflowRunState.CANCELED:
+                return latest
             if time.monotonic() - started > policy.max_duration_seconds:
                 return self._fail_run(run, "ORCH-RUN-DEADLINE")
             waiting = [task for task in run.tasks.values() if task.state == WorkflowTaskState.WAITING_APPROVAL]
@@ -398,6 +445,8 @@ class OrchestrationEngine:
                 return self._fail_run(run, "ORCH-DAG-STALLED")
             wave = ready[: policy.max_parallelism]
             run = self._run_wave(run, wave, budget)
+            if run.state == WorkflowRunState.CANCELED:
+                return run
             if policy.fail_fast and any(
                 run.tasks[task.id].state == WorkflowTaskState.FAILED
                 and task.on_failure == TaskFailureAction.FAIL_WORKFLOW
@@ -443,6 +492,9 @@ class OrchestrationEngine:
             messages_used=self.definition.run_policy.max_messages - budget.messages_remaining,
             updated_at=_now(),
         )
+        latest = self.run_store.get(tenant_id=run.tenant_id, run_id=run.id)
+        if latest.state == WorkflowRunState.CANCELED:
+            return latest
         self.run_store.save(updated)
         for task_id in results:
             self._append_task_event(updated, results[task_id])

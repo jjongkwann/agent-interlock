@@ -54,6 +54,7 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /definitionDigest/);
   assert.match(page, /allowedDomains/);
   assert.match(page, /Runtime graph/);
+  assert.match(page, /label: "Runs"/);
   assert.match(page, /Import telemetry/);
   assert.match(page, /interlock\.control\.evaluated/);
   assert.match(page, /stdio-process-sandbox/);
@@ -98,6 +99,15 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(panels, /Design does not become runtime directly/);
   assert.match(panels, /Telemetry cannot be aggregated/);
   assert.match(panels, /Sign approval context/);
+  assert.match(panels, /Deployment-bound workflow runs/);
+  assert.match(panels, /Start run/);
+  assert.match(panels, /\/v1\/runs/);
+  assert.match(panels, /WAITING_APPROVAL/);
+  assert.match(panels, /missing adapters fail closed/);
+  assert.match(page, /controlPlaneToken/);
+  assert.doesNotMatch(panels, /localStorage|sessionStorage/);
+  assert.doesNotMatch(page, /demoRuntimeTelemetry|Load drift demo/);
+  assert.doesNotMatch(panels, /fake adapter|fake run/i);
   assert.match(page, /— undeclared/);
   assert.match(page, /Compare design with runtime to find undeclared/);
   assert.match(layout, /Agent Interlock · Security Architecture Studio/);

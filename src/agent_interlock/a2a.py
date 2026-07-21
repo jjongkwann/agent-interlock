@@ -722,6 +722,16 @@ class A2ABroker:
             rejected = replace(task, status=A2ATaskStatus(A2ATaskState.REJECTED))
             self.task_store.update(tenant_id=context.principal.tenant_id, task=rejected)
             self._append_task_event("A2A_TASK_REJECTED", rejected, common, reasons)
+            self.ledger.append(
+                "ACTION_EXECUTED",
+                payload={
+                    "result": "COMPLETED",
+                    "connectorExecutionId": None,
+                    "enforcement": "A2A_BROKER",
+                    "taskId": task_id,
+                },
+                **common,
+            )
             self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
             raise A2APolicyError(reasons)
 
@@ -751,7 +761,12 @@ class A2ABroker:
             self._append_task_event("A2A_TASK_FAILED", completed, common, (failure_code,))
             self.ledger.append(
                 "ACTION_EXECUTED",
-                payload={"result": "FAILED", "taskId": task_id, "failure": failure_code},
+                payload={
+                    "result": "FAILED",
+                    "connectorExecutionId": task_id,
+                    "taskId": task_id,
+                    "failure": failure_code,
+                },
                 **common,
             )
             self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "UNKNOWN"}, **common)
@@ -762,7 +777,7 @@ class A2ABroker:
         self._append_task_event("A2A_TASK_STATUS_UPDATED", completed, common)
         self.ledger.append(
             "ACTION_EXECUTED",
-            payload={"result": "COMPLETED", "taskId": task_id},
+            payload={"result": "COMPLETED", "connectorExecutionId": task_id, "taskId": task_id},
             **common,
         )
         self.ledger.append(
@@ -772,7 +787,7 @@ class A2ABroker:
         )
         self.ledger.append(
             "SECURITY_OUTCOME_SET",
-            payload={"securityOutcome": "SUCCEEDED" if reasons else "UNKNOWN"},
+            payload={"securityOutcome": "SUCCEEDED"},
             **common,
         )
         return completed
@@ -902,9 +917,18 @@ class A2AJSONRPCRouter:
     _TASK_NOT_CANCELABLE = -32002
     _POLICY_BLOCKED = -32099
 
-    def __init__(self, broker: A2ABroker, *, target_actor_id: str) -> None:
+    def __init__(
+        self,
+        broker: A2ABroker,
+        *,
+        target_actor_id: str,
+        environment: Environment = Environment.DEV,
+        data_source: DataSource = DataSource.PRODUCTION,
+    ) -> None:
         self.broker = broker
         self.target_actor_id = target_actor_id
+        self.environment = environment
+        self.data_source = data_source
 
     def handle(
         self,
@@ -987,6 +1011,8 @@ class A2AJSONRPCRouter:
                 data_classes=frozenset(data_classes_value),
                 idempotency_key=_required_string({"idempotencyKey": idempotency_key}, "idempotencyKey"),
                 trace_id=_optional_string(trace_id, "traceId"),
+                environment=self.environment,
+                data_source=self.data_source,
             ),
         )
 

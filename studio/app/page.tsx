@@ -3,12 +3,11 @@
 import { ChangeEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   computeRuntimeDiff,
-  demoRuntimeTelemetry,
   matchesEdge,
   parseRuntimeTelemetry,
   type RuntimeImport,
 } from "./runtime";
-import { DeployPanel, StatsPanel } from "./panels";
+import { DeployPanel, RunsPanel, StatsPanel } from "./panels";
 import { ledgerEventsForStatistics } from "./analytics.mjs";
 
 type NodeType = "USER" | "AGENT" | "SUBAGENT" | "RAG" | "TOOL" | "MEMORY" | "SCHEDULER" | "EXTERNAL";
@@ -16,7 +15,7 @@ type TrustZone = "INTERNAL" | "EXTERNAL";
 type Mode = "OBSERVE" | "SHADOW" | "ENFORCE";
 type Assurance = "DECLARED" | "OBSERVED" | "ENFORCED" | "RECONCILED";
 type EnforcementPoint = "INPUT_GATEWAY" | "RAG_GATEWAY" | "MCP_GATEWAY" | "A2A_BROKER" | "EGRESS_GATEWAY" | "SANDBOX" | "AUDIT_SINK";
-type GraphView = "design" | "runtime" | "drift" | "stats" | "deploy";
+type GraphView = "design" | "runtime" | "drift" | "stats" | "deploy" | "runs";
 type DesignSurface = "topology" | "workflow";
 type Selection = { kind: "node" | "edge" | "zone" | "task"; id: string };
 type MobilePanel = "palette" | "inspector" | null;
@@ -142,39 +141,38 @@ type ZoneGesture = {
 };
 
 const initialZones: TrustZoneDefinition[] = [
-  { id: "zone.external.ingress", label: "External callers", kind: "EXTERNAL", description: "Untrusted callers and ingress identities", x: 20, y: 54, width: 205, height: 570 },
-  { id: "zone.internal.control", label: "Internal control plane", kind: "INTERNAL", description: "Coordinator, managed tools, and evidence services", x: 265, y: 54, width: 230, height: 570 },
-  { id: "zone.internal.worker", label: "Internal worker plane", kind: "INTERNAL", description: "Delegated agents and scoped execution services", x: 515, y: 54, width: 240, height: 570 },
-  { id: "zone.external.egress", label: "External destinations", kind: "EXTERNAL", description: "Third-party and untrusted egress destinations", x: 775, y: 54, width: 255, height: 570 },
+  { id: "zone.external-input", label: "External callers", kind: "EXTERNAL", description: "Untrusted callers and ingress identities", x: 20, y: 54, width: 205, height: 570 },
+  { id: "zone.control", label: "Internal control plane", kind: "INTERNAL", description: "Coordinator, managed tools, and evidence services", x: 265, y: 54, width: 230, height: 570 },
+  { id: "zone.worker", label: "Internal worker plane", kind: "INTERNAL", description: "Delegated agents and tenant-scoped retrieval", x: 515, y: 54, width: 240, height: 570 },
+  { id: "zone.external-output", label: "External destinations", kind: "EXTERNAL", description: "Third-party and untrusted egress destinations", x: 775, y: 54, width: 255, height: 570 },
 ];
 
 const initialNodes: ArchitectureNode[] = [
-  { id: "user.customer", label: "Customer", type: "USER", owner: "Customer Platform", identity: "oidc://customer", capabilities: ["SUPPORT_REQUEST"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external.ingress", x: 42, y: 255 },
-  { id: "agent.support", label: "Support Agent", type: "AGENT", owner: "Customer Platform", identity: "spiffe://prod/agent/support", capabilities: ["SUPPORT_REPLY", "DELEGATE_RESEARCH"], tenantMode: "REQUIRED", maxDelegationDepth: 2, trustZone: "INTERNAL", trustZoneId: "zone.internal.control", x: 286, y: 255 },
-  { id: "agent.research", label: "Research Sub-Agent", type: "SUBAGENT", owner: "Customer Platform", identity: "spiffe://prod/agent/research", capabilities: ["KNOWLEDGE_SEARCH"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.internal.worker", x: 536, y: 88 },
-  { id: "rag.support", label: "Support Knowledge", type: "RAG", owner: "Knowledge Platform", identity: "spiffe://prod/rag/support", capabilities: ["TENANT_RETRIEVAL"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external.egress", x: 788, y: 88 },
-  { id: "tool.email", label: "Send Email", type: "TOOL", owner: "Messaging Platform", identity: "spiffe://prod/tool/email", capabilities: ["EMAIL_SEND"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.internal.control", definitionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", x: 286, y: 350 },
-  { id: "external.customer", label: "Customer Email", type: "EXTERNAL", owner: "Messaging Platform", identity: "dns://customer.example", capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external.egress", allowedDomains: ["customer.example"], x: 788, y: 350 },
-  { id: "external.ledger", label: "Interlock Ledger", type: "EXTERNAL", owner: "Security Platform", identity: "spiffe://prod/interlock/ledger", capabilities: ["APPEND_ONLY_AUDIT"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.internal.control", x: 286, y: 520 },
+  { id: "user.customer", label: "Customer", type: "USER", owner: "Customer Platform", identity: "oidc://customer", capabilities: ["SUPPORT_REQUEST"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-input", x: 42, y: 255 },
+  { id: "agent.support", label: "Support Agent", type: "AGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/support", capabilities: ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"], tenantMode: "REQUIRED", maxDelegationDepth: 2, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 255 },
+  { id: "agent.research", label: "Research Sub-Agent", type: "SUBAGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/research", capabilities: ["KNOWLEDGE_SEARCH"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 88 },
+  { id: "rag.support-knowledge", label: "Support Knowledge", type: "RAG", owner: "Knowledge Platform", identity: "spiffe://prod.example/rag/support", capabilities: ["TENANT_RETRIEVAL"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 350 },
+  { id: "tool.send-email", label: "Send Email", type: "TOOL", owner: "Messaging Platform", identity: "spiffe://prod.example/tool/send-email", capabilities: ["EMAIL_SEND"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", definitionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", x: 286, y: 350 },
+  { id: "external.customer-email", label: "Customer Email", type: "EXTERNAL", owner: "Messaging Platform", identity: "dns://customer.example", capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-output", allowedDomains: ["customer.example"], x: 788, y: 350 },
+  { id: "external.audit-ledger", label: "Interlock Ledger", type: "EXTERNAL", owner: "Security Platform", identity: "spiffe://prod.example/interlock/ledger", capabilities: ["APPEND_ONLY_AUDIT"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 520 },
 ];
 
 const audit = (id: string): Control => ({ id, objective: "EVIDENCE", timing: "POST_EXECUTION", point: "AUDIT_SINK", assurance: "OBSERVED" });
 const prevent = (id: string, point: EnforcementPoint): Control => ({ id, objective: "PREVENT", timing: "PRE_EXECUTION", point, assurance: "ENFORCED" });
 
 const initialEdges: ArchitectureEdge[] = [
-  { id: "edge.user-support", source: "user.customer", target: "agent.support", relationshipId: "REL-01", relationship: "REQUESTS", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3"], approvalRequired: false, dynamic: false, sameTenant: true, maxDepth: 0, boundaryId: "boundary.ingress-control", controls: [prevent("input-identity-taint", "INPUT_GATEWAY"), audit("input-audit")] },
+  { id: "edge.user-support", source: "user.customer", target: "agent.support", relationshipId: "REL-01", relationship: "REQUESTS", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3"], approvalRequired: false, dynamic: false, sameTenant: true, maxDepth: 0, boundaryId: "boundary.external-control-input", controls: [prevent("input-identity-taint", "INPUT_GATEWAY"), audit("input-audit")] },
   { id: "edge.support-research", source: "agent.support", target: "agent.research", relationshipId: "REL-06", relationship: "DELEGATES", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3", "D7"], approvalRequired: false, dynamic: true, sameTenant: true, maxDepth: 2, boundaryId: "boundary.control-worker-a2a", controls: [prevent("delegation-binding", "A2A_BROKER"), audit("delegation-audit")] },
-  { id: "edge.research-rag", source: "agent.research", target: "rag.support", relationshipId: "REL-03", relationship: "READS", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3", "D7"], approvalRequired: false, dynamic: false, sameTenant: true, maxDepth: 0, boundaryId: "boundary.worker-egress-rag", controls: [prevent("rag-tenant-acl", "RAG_GATEWAY"), audit("rag-provenance")] },
-  { id: "edge.support-email", source: "agent.support", target: "tool.email", relationshipId: "REL-05", relationship: "INVOKES", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3", "D7"], approvalRequired: true, dynamic: false, sameTenant: true, maxDepth: 0, controls: [prevent("mcp-call-guard", "MCP_GATEWAY"), prevent("stdio-process-sandbox", "SANDBOX"), audit("mcp-audit")] },
-  { id: "edge.email-customer", source: "tool.email", target: "external.customer", relationshipId: "REL-07", relationship: "SENDS", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D3", "D7"], approvalRequired: true, dynamic: false, sameTenant: true, maxDepth: 0, boundaryId: "boundary.control-egress", controls: [prevent("egress-dlp", "EGRESS_GATEWAY"), { ...audit("egress-receipt"), assurance: "RECONCILED", objective: "DETECT" }] },
-  { id: "edge.support-ledger", source: "agent.support", target: "external.ledger", relationshipId: "REL-12", relationship: "LOGS_TO", mode: "ENFORCE", failureMode: "DEGRADE_READ_ONLY", allowedData: ["D2", "D3", "D7"], approvalRequired: false, dynamic: false, sameTenant: true, maxDepth: 0, controls: [{ ...audit("append-only-audit"), assurance: "RECONCILED" }] },
+  { id: "edge.research-rag", source: "agent.research", target: "rag.support-knowledge", relationshipId: "REL-03", relationship: "READS", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3", "D7"], approvalRequired: false, dynamic: false, sameTenant: true, maxDepth: 0, controls: [prevent("rag-tenant-acl", "RAG_GATEWAY"), audit("rag-provenance")] },
+  { id: "edge.support-email", source: "agent.support", target: "tool.send-email", relationshipId: "REL-05", relationship: "INVOKES", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3", "D7"], approvalRequired: true, dynamic: false, sameTenant: true, maxDepth: 0, controls: [prevent("mcp-call-guard", "MCP_GATEWAY"), prevent("stdio-process-sandbox", "SANDBOX"), audit("mcp-audit")] },
+  { id: "edge.email-customer", source: "tool.send-email", target: "external.customer-email", relationshipId: "REL-07", relationship: "SENDS", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D3", "D7"], approvalRequired: true, dynamic: false, sameTenant: true, maxDepth: 0, boundaryId: "boundary.control-external-egress", controls: [prevent("egress-dlp", "EGRESS_GATEWAY"), { ...audit("egress-receipt"), assurance: "RECONCILED", objective: "DETECT" }] },
+  { id: "edge.support-ledger", source: "agent.support", target: "external.audit-ledger", relationshipId: "REL-12", relationship: "LOGS_TO", mode: "ENFORCE", failureMode: "DEGRADE_READ_ONLY", allowedData: ["D2", "D3", "D7"], approvalRequired: false, dynamic: false, sameTenant: true, maxDepth: 0, controls: [{ ...audit("append-only-audit"), assurance: "RECONCILED" }] },
 ];
 
 const initialBoundaries: TrustBoundaryDefinition[] = [
-  { id: "boundary.ingress-control", label: "External request ingress", sourceZoneId: "zone.external.ingress", targetZoneId: "zone.internal.control", point: "INPUT_GATEWAY", allowedRelationships: ["REQUESTS"], allowedData: ["D2", "D3"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 262144, description: "Authenticated and tenant-bound request ingress" },
-  { id: "boundary.control-worker-a2a", label: "Control to worker A2A", sourceZoneId: "zone.internal.control", targetZoneId: "zone.internal.worker", point: "A2A_BROKER", allowedRelationships: ["DELEGATES"], allowedData: ["D2", "D3", "D7"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 1048576, description: "Policy-bound A2A delegation boundary" },
-  { id: "boundary.worker-egress-rag", label: "Worker retrieval boundary", sourceZoneId: "zone.internal.worker", targetZoneId: "zone.external.egress", point: "RAG_GATEWAY", allowedRelationships: ["READS"], allowedData: ["D2", "D3", "D7"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 1048576, description: "Tenant-scoped retrieval boundary" },
-  { id: "boundary.control-egress", label: "Approved external egress", sourceZoneId: "zone.internal.control", targetZoneId: "zone.external.egress", point: "EGRESS_GATEWAY", allowedRelationships: ["SENDS"], allowedData: ["D3", "D7"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 1048576, description: "Destination, DLP, approval, and receipt boundary" },
+  { id: "boundary.external-control-input", label: "External request ingress", sourceZoneId: "zone.external-input", targetZoneId: "zone.control", point: "INPUT_GATEWAY", allowedRelationships: ["REQUESTS"], allowedData: ["D2", "D3"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 262144, description: "Authenticated and tenant-bound request ingress" },
+  { id: "boundary.control-worker-a2a", label: "Control to worker A2A", sourceZoneId: "zone.control", targetZoneId: "zone.worker", point: "A2A_BROKER", allowedRelationships: ["DELEGATES"], allowedData: ["D2", "D3", "D7"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 1048576, description: "Policy-bound A2A delegation boundary" },
+  { id: "boundary.control-external-egress", label: "Approved external egress", sourceZoneId: "zone.control", targetZoneId: "zone.external-output", point: "EGRESS_GATEWAY", allowedRelationships: ["SENDS"], allowedData: ["D3", "D7"], deniedData: ["D5", "D8"], mode: "ENFORCE", failureMode: "FAIL_CLOSED", requireIdentity: true, requireTenantBinding: true, maxPayloadBytes: 1048576, description: "Destination, DLP, approval, and receipt boundary" },
 ];
 
 const initialOrchestration: OrchestrationDesign = {
@@ -187,7 +185,7 @@ const initialOrchestration: OrchestrationDesign = {
   failFast: true,
   tasks: [
     { id: "task.research", label: "Research the support request", sourceActorId: "agent.support", targetActorId: "agent.research", transport: "A2A", purpose: "SUPPORT_RESEARCH", dependsOn: [], dataClasses: ["D2", "D3", "D7"], acceptanceCriteria: ["Answer is grounded in tenant-scoped knowledge"], maxAttempts: 2, timeoutSeconds: 120, approvalRequired: false, onFailure: "FAIL_WORKFLOW", x: 120, y: 180 },
-    { id: "task.send-reply", label: "Send the approved reply", sourceActorId: "agent.support", targetActorId: "tool.email", transport: "MCP", purpose: "SUPPORT_REPLY", dependsOn: ["task.research"], dataClasses: ["D3", "D7"], acceptanceCriteria: ["Delivery receipt matches the approved destination"], maxAttempts: 1, timeoutSeconds: 60, approvalRequired: true, onFailure: "FAIL_WORKFLOW", x: 480, y: 180 },
+    { id: "task.send-reply", label: "Send the approved reply", sourceActorId: "agent.support", targetActorId: "tool.send-email", transport: "MCP", purpose: "SUPPORT_REPLY", dependsOn: ["task.research"], dataClasses: ["D3", "D7"], acceptanceCriteria: ["Delivery receipt matches the approved destination"], maxAttempts: 1, timeoutSeconds: 60, approvalRequired: true, onFailure: "FAIL_WORKFLOW", x: 480, y: 180 },
   ],
 };
 
@@ -215,6 +213,7 @@ const HISTORY_LIMIT = 40;
 const graphViewOptions: ReadonlyArray<{ id: GraphView; label: string; phase: string; description: string }> = [
   { id: "design", label: "Design graph", phase: "Declare intent", description: "Edit intended actors, trust zones, relationships, and security controls." },
   { id: "deploy", label: "Deploy", phase: "Compile & promote", description: "Compile outside the browser, then approve and promote a signed SHADOW bundle." },
+  { id: "runs", label: "Runs", phase: "Execute workflow", description: "Start and operate the workflow from the exact active ENFORCE deployment bundle." },
   { id: "runtime", label: "Runtime graph", phase: "Observe reality", description: "Render actors and calls observed in imported Ledger or OTLP telemetry." },
   { id: "drift", label: "Drift", phase: "Reconcile", description: "Compare design with runtime to find undeclared, bypassed, or unobserved relationships." },
   { id: "stats", label: "Statistics", phase: "Analyze evidence", description: "Aggregate Ledger interactions by actor, mode, relationship, policy, and outcome." },
@@ -346,6 +345,8 @@ export default function Home() {
   const [zoneAssignmentActor, setZoneAssignmentActor] = useState("");
   const [notice, setNotice] = useState("Architecture v1.0.0 · all changes are local drafts");
   const [activeGraph, setActiveGraph] = useState<GraphView>("design");
+  const [controlPlaneUrl, setControlPlaneUrl] = useState("http://127.0.0.1:8792");
+  const [controlPlaneToken, setControlPlaneToken] = useState("");
   const [runtimeImport, setRuntimeImport] = useState<RuntimeImport | null>(null);
   const [rawLedgerEvents, setRawLedgerEvents] = useState<Array<Record<string, unknown>> | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -386,7 +387,7 @@ export default function Home() {
       if (template) return { ...template, id, label: `${template.label} · runtime`, x: Math.min(850, template.x + 22), y: Math.min(555, template.y + 105) };
       const inferredType: NodeType = id.startsWith("agent.") ? "SUBAGENT" : id.startsWith("tool.") ? "TOOL" : id.startsWith("rag.") ? "RAG" : id.startsWith("memory.") ? "MEMORY" : "EXTERNAL";
       const externalZone = [...zones].reverse().find((zone) => zone.kind === "EXTERNAL") ?? zones[0];
-      return { id, label: "Undeclared Actor", type: inferredType, owner: "Runtime only", identity: `observed://${id}`, capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: externalZone?.kind ?? "EXTERNAL", trustZoneId: externalZone?.id ?? "zone.external.egress", x: (externalZone?.x ?? 775) + 18 + (index % 2) * 25, y: Math.min(555, 420 + index * 48) };
+      return { id, label: "Undeclared Actor", type: inferredType, owner: "Runtime only", identity: `observed://${id}`, capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: externalZone?.kind ?? "EXTERNAL", trustZoneId: externalZone?.id ?? "zone.external-output", x: (externalZone?.x ?? 775) + 18 + (index % 2) * 25, y: Math.min(555, 420 + index * 48) };
     });
   }, [runtimeImport, nodeMap, nodes, zones]);
 
@@ -1070,6 +1071,8 @@ export default function Home() {
     setConnectFrom(null);
     setMobilePanel(null);
     if ((view === "runtime" || view === "drift") && !runtimeImport) setNotice("Import Ledger or OTLP JSON telemetry to build the runtime graph");
+    else if (view === "runs") setNotice("Connect to Run Control to operate the exact active ENFORCE deployment");
+    else if (view === "deploy") setNotice("Compile and sign outside the browser, then promote through the Control Plane");
   }
 
   function reviseDesignFromDrift() {
@@ -1213,7 +1216,6 @@ export default function Home() {
             <p className="panel-note">Import Interlock Ledger events or OTLP/HTTP JSON. Files stay in this browser session.</p>
             <input ref={telemetryInput} className="file-input" type="file" accept="application/json,.json" onChange={importTelemetryFile} />
             <button className="telemetry-button primary" onClick={() => telemetryInput.current?.click()}><span>↑</span>Import telemetry</button>
-            <button className="telemetry-button" onClick={() => applyTelemetry(demoRuntimeTelemetry, "Drift demo")}><span>▶</span>Load drift demo</button>
             <div className="runtime-source-card"><span>FORMAT</span><strong>{runtimeImport?.format ?? "No telemetry"}</strong><small>{runtimeImport ? `${runtimeImport.observations.length} observed relationships` : "JSON · maximum 5 MB"}</small></div>
             <div className="toolbox-rule" />
             <div className="runtime-contract"><strong>Security context</strong><code>interlock.source.actor.id</code><code>interlock.target.actor.id</code><code>interlock.relationship.id</code><code>interlock.control.evaluated</code></div>
@@ -1237,7 +1239,8 @@ export default function Home() {
             </div>
           </div>
           {activeGraph === "stats" ? <StatsPanel rawLedgerEvents={rawLedgerEvents} importedFormat={runtimeImport?.format ?? null} notify={setNotice} onImportTelemetry={() => telemetryInput.current?.click()} />
-          : activeGraph === "deploy" ? <DeployPanel notify={setNotice} onBackToDesign={() => selectGraph("design")} />
+          : activeGraph === "deploy" ? <DeployPanel notify={setNotice} onBackToDesign={() => selectGraph("design")} apiUrl={controlPlaneUrl} token={controlPlaneToken} onApiUrlChange={setControlPlaneUrl} onTokenChange={setControlPlaneToken} />
+          : activeGraph === "runs" ? <RunsPanel notify={setNotice} apiUrl={controlPlaneUrl} token={controlPlaneToken} onApiUrlChange={setControlPlaneUrl} onTokenChange={setControlPlaneToken} onOpenRuntimeTelemetry={(events, source) => applyTelemetry(events, source, "runtime")} />
           : <div ref={canvasScroll} tabIndex={0} aria-label={`${activeView.label} canvas`} className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerEnter={() => { pointerOverGraph.current = true; }} onPointerLeave={() => { pointerOverGraph.current = false; }} onPointerMove={onCanvasMove} onPointerUp={finishPointerInteraction} onPointerCancel={finishPointerInteraction}>
             <div className="graph-surface" style={{ width: boardSize.width * zoom, height: boardSize.height * zoom }}>
             <div className={`graph-board ${dragging ? `drag-zone-${nodeMap[dragging.id]?.trustZone.toLowerCase()}` : ""} ${zoneGesture ? "editing-zone" : ""}`} style={{ width: boardSize.width, height: boardSize.height, transform: `scale(${zoom})` }}>
@@ -1256,7 +1259,7 @@ export default function Home() {
                   : <span className="zone-label static"><b>{zone.kind}</b><small>{zone.label}</small></span>}
                 {activeGraph === "design" && <button className="zone-resize-handle" aria-label={`Resize zone: ${zone.label}`} title="Drag to resize" onPointerDown={(event) => onZonePointerDown(event, zone, "resize")}>↘</button>}
               </div>)}
-              {(activeGraph === "runtime" || activeGraph === "drift") && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>No runtime telemetry</strong><p>Import Ledger events or OTLP JSON to reconcile actual calls with this architecture.</p><button onClick={() => applyTelemetry(demoRuntimeTelemetry, "Drift demo")}>Load drift demo</button></div>}
+              {(activeGraph === "runtime" || activeGraph === "drift") && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>No runtime telemetry</strong><p>Import Ledger events or OTLP JSON emitted by a real run to reconcile actual calls with this architecture.</p><button onClick={() => telemetryInput.current?.click()}>Import telemetry</button></div>}
               <svg className="edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label="Architecture relationships">
                 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" /></marker></defs>
                 {visualEdges.map((edge) => {
@@ -1288,7 +1291,7 @@ export default function Home() {
               <div className="runtime-health"><span className={!runtimeImport ? "pending" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "unsafe" : "safe"}>{!runtimeImport ? "·" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "!" : "✓"}</span><div><strong>{runtimeImport ? runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "Runtime drift detected" : "Runtime conforms" : "Awaiting telemetry"}</strong><small>{runtimeImport?.format ?? "Ledger or OTLP JSON"}</small></div></div>
               <div className="runtime-metrics"><div><span>{runtimeImport ? runtimeImport.observations.length : "—"}</span><small>Observed</small></div><div><span>{runtimeImport ? runtimeDiff.undeclared.length : "—"}</span><small>Undeclared</small></div><div><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : "—"}</span><small>Bypass</small></div></div>
               <div className="control-heading"><span>Reconciliation results</span><small>{runtimeResultCount}</small></div>
-              {!runtimeImport && <div className="runtime-empty-note">Import telemetry or load the drift demo to see actual relationship evidence.</div>}
+              {!runtimeImport && <div className="runtime-empty-note">Import runtime telemetry to see actual relationship evidence.</div>}
               {runtimeImport && runtimeDiff.undeclared.map((item) => <button className="drift-card critical" key={`undeclared-${item.interactionId}`} onClick={() => { focusNode(item.target); setMobilePanel(null); }}><i>!</i><span><strong>Undeclared relationship</strong><small>{item.source} → {item.target}</small><code>{item.relationshipId} · {item.interactionId}</code></span></button>)}
               {runtimeImport && runtimeDiff.controlBypassInteractionIds.map((id) => { const observation = runtimeImport.observations.find((item) => item.interactionId === id); return <button className="drift-card critical" key={`bypass-${id}`} onClick={() => { if (observation) focusNode(observation.target); setMobilePanel(null); }}><i>!</i><span><strong>Control evaluation missing</strong><small>Interaction reached runtime without control evidence</small><code>{id}</code></span></button>; })}
               {runtimeImport && runtimeDiff.unobservedEdgeIds.slice(0, 4).map((id) => { const edge = edges.find((item) => item.id === id); return <button className="drift-card warning" key={`unobserved-${id}`} onClick={() => { if (edge) focusNode(edge.target); setMobilePanel(null); }}><i>–</i><span><strong>Design edge not observed</strong><small>No matching call in this telemetry set</small><code>{id}</code></span></button>; })}

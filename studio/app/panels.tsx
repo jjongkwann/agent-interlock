@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { summarizeSecurityStatistics } from "./analytics.mjs";
 import type { Counters, SecurityStatistics, SecurityStatisticsPartition } from "./analytics";
 
@@ -190,12 +190,270 @@ type BundleFile = {
   version: string;
   bundleDigest: string;
   deployable: boolean;
-  raw: Record<string, unknown>;
+  rawText: string;
 };
 
-export function DeployPanel({ notify, onBackToDesign }: { notify: (message: string) => void; onBackToDesign: () => void }) {
-  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8792");
-  const [token, setToken] = useState("");
+type RunTask = {
+  taskId: string;
+  state: string;
+  attempts: number;
+  output?: Record<string, unknown>;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  externalTaskId?: string | null;
+};
+
+type WorkflowRun = {
+  id: string;
+  architectureId: string;
+  architectureVersion: string;
+  traceId: string;
+  state: string;
+  tasks: Record<string, RunTask>;
+  createdAt: string;
+  updatedAt: string;
+  messagesUsed: number;
+  errorCode?: string | null;
+  bundleDigest: string;
+};
+
+type RunEvent = {
+  [key: string]: unknown;
+  event_type?: string;
+  occurred_at?: string;
+  payload?: Record<string, unknown>;
+};
+
+const TERMINAL_RUN_STATES = new Set(["COMPLETED", "FAILED", "CANCELED"]);
+
+type ControlPlaneConnectionProps = {
+  apiUrl: string;
+  token: string;
+  onApiUrlChange: (value: string) => void;
+  onTokenChange: (value: string) => void;
+};
+
+function readRun(value: unknown): WorkflowRun | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const run = value as Partial<WorkflowRun>;
+  if (typeof run.id !== "string" || typeof run.state !== "string" || !run.tasks || typeof run.tasks !== "object") return null;
+  return run as WorkflowRun;
+}
+
+export function RunsPanel({
+  notify,
+  apiUrl,
+  token,
+  onApiUrlChange,
+  onTokenChange,
+  onOpenRuntimeTelemetry,
+}: {
+  notify: (message: string) => void;
+  onOpenRuntimeTelemetry: (events: Array<Record<string, unknown>>, source: string) => void;
+} & ControlPlaneConnectionProps) {
+  const [inputText, setInputText] = useState("{}");
+  const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null);
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [busy, setBusy] = useState(false);
+  const shouldAutoLoad = useRef(Boolean(token));
+  const autoLoadStarted = useRef(false);
+
+  const call = useCallback(async (path: string, init?: RequestInit): Promise<Record<string, unknown>> => {
+    const response = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = body as { error?: { code?: string; message?: string } };
+      throw new Error(error.error?.code ?? error.error?.message ?? `HTTP ${response.status}`);
+    }
+    return body as Record<string, unknown>;
+  }, [apiUrl, token]);
+
+  const loadRun = useCallback(async (runId: string, announce = false) => {
+    try {
+      const [runBody, eventBody] = await Promise.all([
+        call(`/v1/runs/${encodeURIComponent(runId)}`),
+        call(`/v1/runs/${encodeURIComponent(runId)}/events`),
+      ]);
+      const run = readRun(runBody.run);
+      if (!run) throw new Error("RUN-RESPONSE-INVALID");
+      setSelectedRun(run);
+      setRuns((items) => items.map((item) => item.id === run.id ? run : item));
+      setEvents(Array.isArray(eventBody.events) ? eventBody.events as RunEvent[] : []);
+      if (announce) notify(`Run refreshed · ${run.state}`);
+    } catch (error) {
+      if (announce) notify(`Run refresh failed · ${error instanceof Error ? error.message : "request error"}`);
+    }
+  }, [call, notify]);
+
+  const refreshRuns = useCallback(async (announce = true) => {
+    setBusy(true);
+    try {
+      const body = await call("/v1/runs");
+      const nextRuns = (Array.isArray(body.runs) ? body.runs : []).map(readRun).filter((item): item is WorkflowRun => Boolean(item));
+      setRuns(nextRuns);
+      const nextId = selectedRunId && nextRuns.some((run) => run.id === selectedRunId) ? selectedRunId : nextRuns[0]?.id ?? null;
+      setSelectedRunId(nextId);
+      setSelectedRun(nextId ? nextRuns.find((run) => run.id === nextId) ?? null : null);
+      if (nextId) await loadRun(nextId);
+      else setEvents([]);
+      if (announce) notify(`Runs refreshed · ${nextRuns.length} visible`);
+    } catch (error) {
+      if (announce) notify(`Runs failed · ${error instanceof Error ? error.message : "request error"}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [call, loadRun, notify, selectedRunId]);
+
+  useEffect(() => {
+    if (!shouldAutoLoad.current || autoLoadStarted.current) return;
+    autoLoadStarted.current = true;
+    void refreshRuns(false);
+  }, [refreshRuns]);
+
+  useEffect(() => {
+    if (!selectedRunId || (selectedRun && TERMINAL_RUN_STATES.has(selectedRun.state))) return;
+    const timer = window.setInterval(() => { void loadRun(selectedRunId); }, 1500);
+    return () => window.clearInterval(timer);
+  }, [loadRun, selectedRun, selectedRunId]);
+
+  async function startRun() {
+    setBusy(true);
+    try {
+      const input = JSON.parse(inputText);
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Input must be a JSON object");
+      const body = await call("/v1/runs", { method: "POST", body: JSON.stringify({ input }) });
+      const run = readRun(body.run);
+      if (!run) throw new Error("RUN-RESPONSE-INVALID");
+      setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)]);
+      setSelectedRunId(run.id);
+      setSelectedRun(run);
+      setEvents([]);
+      notify(`Run started · ${run.id}`);
+    } catch (error) {
+      notify(`Start failed · ${error instanceof Error ? error.message : "request error"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runCommand(path: string, success: string) {
+    if (!selectedRunId) return;
+    setBusy(true);
+    try {
+      const body = await call(`/v1/runs/${encodeURIComponent(selectedRunId)}${path}`, { method: "POST", body: "{}" });
+      const run = readRun(body.run);
+      if (run) setSelectedRun(run);
+      notify(success);
+      await loadRun(selectedRunId);
+    } catch (error) {
+      notify(`Run command failed · ${error instanceof Error ? error.message : "request error"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approveTask(taskId: string) {
+    if (!selectedRunId) return;
+    setBusy(true);
+    try {
+      await call(`/v1/runs/${encodeURIComponent(selectedRunId)}/tasks/${encodeURIComponent(taskId)}/approve`, { method: "POST", body: "{}" });
+      notify(`Approval submitted · ${taskId}`);
+      await loadRun(selectedRunId);
+    } catch (error) {
+      notify(`Approval failed · ${error instanceof Error ? error.message : "request error"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedTasks = selectedRun ? Object.entries(selectedRun.tasks) : [];
+  const terminal = selectedRun ? TERMINAL_RUN_STATES.has(selectedRun.state) : false;
+  return (
+    <div className="stats-panel runs-panel">
+      <div className="deploy-header">
+        <div className="panel-heading"><span>RUN</span><strong>Deployment-bound workflow runs</strong></div>
+        <p className="panel-note">A run uses the exact architecture in the active ENFORCE bundle. The host must provide every A2A, MCP, Local, or Human transport adapter; missing adapters fail closed.</p>
+      </div>
+
+      <div className="control-plane-card runs-connection">
+        <div><strong>Run Control</strong><span>Bearer credentials stay in this browser session only.</span></div>
+        <div className="live-controls live-control-grid compact">
+          <label><span>Control plane URL</span><input value={apiUrl} onChange={(event) => onApiUrlChange(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
+          <label><span>Bearer token</span><input value={token} onChange={(event) => onTokenChange(event.target.value)} placeholder="run scopes" type="password" /></label>
+          <button className="secondary-button" disabled={busy} onClick={() => void refreshRuns()}>{busy ? "Working…" : "Refresh runs"}</button>
+        </div>
+      </div>
+
+      <section className="run-start-card">
+        <div><strong>Start from active deployment</strong><span>Input is sent to the deployed workflow coordinator. Run and trace IDs are generated server-side.</span></div>
+        <label className="deploy-field"><span>Workflow input · JSON object</span><textarea className="run-input" value={inputText} onChange={(event) => setInputText(event.target.value)} spellCheck={false} /></label>
+        <button className="primary-button run-start-button" disabled={busy || !inputText.trim()} onClick={() => void startRun()}>Start run</button>
+      </section>
+
+      <div className="runs-layout">
+        <section className="run-list-card">
+          <div className="run-section-heading"><div><strong>Runs</strong><span>{runs.length} visible to this tenant</span></div></div>
+          <div className="run-list">
+            {runs.length === 0 && <div className="run-empty">Connect and refresh to inspect tenant-scoped runs.</div>}
+            {runs.map((run) => <button key={run.id} className={selectedRunId === run.id ? "active" : ""} onClick={() => { setSelectedRunId(run.id); setSelectedRun(run); void loadRun(run.id); }}><span><strong>{run.id}</strong><small>{run.architectureId} · v{run.architectureVersion}</small></span><i className={`run-state state-${run.state.toLowerCase()}`}>{run.state.replaceAll("_", " ")}</i></button>)}
+          </div>
+        </section>
+
+        <section className="run-detail-card">
+          {!selectedRun && <div className="run-empty detail">Select a run to inspect task state, approvals, and ledger evidence.</div>}
+          {selectedRun && <>
+            <div className="run-detail-header">
+              <div><span>RUN</span><strong>{selectedRun.id}</strong><small><code>{selectedRun.bundleDigest}</code></small></div>
+              <i className={`run-state state-${selectedRun.state.toLowerCase()}`}>{selectedRun.state.replaceAll("_", " ")}</i>
+            </div>
+            <div className="run-meta"><span><b>Trace</b><code>{selectedRun.traceId}</code></span><span><b>Messages</b>{selectedRun.messagesUsed}</span><span><b>Updated</b>{selectedRun.updatedAt}</span>{selectedRun.errorCode && <span className="run-error"><b>Error</b>{selectedRun.errorCode}</span>}</div>
+            <div className="run-actions">
+              <button className="secondary-button" disabled={busy} onClick={() => void loadRun(selectedRun.id, true)}>Refresh</button>
+              <button className="primary-button" disabled={busy || events.length === 0} onClick={() => onOpenRuntimeTelemetry(events, `Run ${selectedRun.id}`)}>Open runtime graph</button>
+              <button className="secondary-button" disabled={busy || terminal} onClick={() => void runCommand("/resume", "Resume requested")}>Resume</button>
+              <button className="danger-button" disabled={busy || terminal} onClick={() => void runCommand("/cancel", "Run canceled")}>Cancel</button>
+            </div>
+            <div className="run-section-heading"><div><strong>Tasks</strong><span>{selectedTasks.length} deployment tasks</span></div></div>
+            <div className="run-task-list">
+              {selectedTasks.map(([taskId, task]) => <article className="run-task" key={taskId}>
+                <div><span><strong>{taskId}</strong><small>{task.attempts} attempt{task.attempts === 1 ? "" : "s"}{task.externalTaskId ? ` · ${task.externalTaskId}` : ""}</small></span><i className={`run-state state-${task.state.toLowerCase()}`}>{task.state.replaceAll("_", " ")}</i></div>
+                {(task.errorCode || task.errorMessage) && <p className="run-task-error">{task.errorCode}{task.errorMessage ? ` · ${task.errorMessage}` : ""}</p>}
+                {task.output && Object.keys(task.output).length > 0 && <pre><code>{JSON.stringify(task.output, null, 2)}</code></pre>}
+                {task.state === "WAITING_APPROVAL" && <button className="primary-button approve-task" disabled={busy} onClick={() => void approveTask(taskId)}>Approve task</button>}
+              </article>)}
+            </div>
+            <div className="run-section-heading events-heading"><div><strong>Ledger evidence</strong><span>{events.length} trace events</span></div></div>
+            <div className="run-events">
+              {events.length === 0 && <div className="run-empty">No events returned for this trace.</div>}
+              {[...events].reverse().slice(0, 30).map((event, index) => <div key={`${event.occurred_at ?? "event"}-${index}`}><span>{event.occurred_at ?? "—"}</span><strong>{event.event_type ?? "UNKNOWN_EVENT"}</strong>{event.payload?.reason_code && <code>{String(event.payload.reason_code)}</code>}</div>)}
+            </div>
+          </>}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+export function DeployPanel({
+  notify,
+  onBackToDesign,
+  apiUrl,
+  token,
+  onApiUrlChange,
+  onTokenChange,
+}: {
+  notify: (message: string) => void;
+  onBackToDesign: () => void;
+} & ControlPlaneConnectionProps) {
   const [active, setActive] = useState<Record<string, unknown> | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [bundle, setBundle] = useState<BundleFile | null>(null);
@@ -226,9 +484,10 @@ export function DeployPanel({ notify, onBackToDesign }: { notify: (message: stri
 
   async function importBundle(file: File) {
     try {
-      const value = JSON.parse(await file.text());
+      const rawText = await file.text();
+      const value = JSON.parse(rawText);
       if (!value.bundleDigest || !value.deployable) throw new Error("not a deployable --shadow bundle");
-      setBundle({ architectureId: value.architectureId, version: String(value.version), bundleDigest: value.bundleDigest, deployable: true, raw: value });
+      setBundle({ architectureId: value.architectureId, version: String(value.version), bundleDigest: value.bundleDigest, deployable: true, rawText });
       setPendingApprovals(0);
       notify(`Bundle loaded · ${value.bundleDigest.slice(0, 18)}…`);
     } catch (error) {
@@ -239,7 +498,10 @@ export function DeployPanel({ notify, onBackToDesign }: { notify: (message: stri
   async function propose() {
     if (!bundle) return;
     try {
-      const body = await call("/v1/bundles", { method: "POST", body: JSON.stringify(bundle.raw) });
+      // Preserve the compiler's numeric JSON lexemes. Parsing and then
+      // JSON.stringify-ing can turn `110.0` into `110`, invalidating the
+      // canonical bundle digest even though the numeric value is unchanged.
+      const body = await call("/v1/bundles", { method: "POST", body: bundle.rawText });
       notify(`Proposed · commit ${(body.commit as string).slice(0, 10)}`);
     } catch (error) {
       notify(`Propose failed · ${error instanceof Error ? error.message : "request error"}`);
@@ -310,8 +572,8 @@ export function DeployPanel({ notify, onBackToDesign }: { notify: (message: stri
       <div className="control-plane-card">
         <div><strong>Control plane</strong><span>Connect to inspect status and submit the bundle.</span></div>
         <div className="live-controls live-control-grid compact">
-          <label><span>Control plane URL</span><input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
-          <label><span>Bearer token</span><input value={token} onChange={(event) => setToken(event.target.value)} placeholder="deployment scope" type="password" /></label>
+          <label><span>Control plane URL</span><input value={apiUrl} onChange={(event) => onApiUrlChange(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
+          <label><span>Bearer token</span><input value={token} onChange={(event) => onTokenChange(event.target.value)} placeholder="deployment scope" type="password" /></label>
           <button className="secondary-button" onClick={refreshStatus}>Refresh status</button>
         </div>
       </div>

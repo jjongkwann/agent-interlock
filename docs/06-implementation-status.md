@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
-date: 2026-07-20
-version: 0.9.0
+date: 2026-07-21
+version: 0.10.0
 status: active
 ---
 
@@ -41,11 +41,13 @@ status: active
 | A2A 1.0 protocol core·Agent Card·Task | `a2a.py` `A2ABroker`·`A2AJSONRPCRouter` | v1 `SendMessage/GetTask/CancelTask`, v0.3 명시 호환, policy/idempotency 시험 |
 | 인증된 A2A HTTP carrier | `a2a_http.py` | 실제 socket Origin·auth·version·body limit·well-known Agent Card 시험 |
 | Multi-Agent Task workflow engine | `orchestration.py` `OrchestrationEngine` | A2A dependency, approval pause/resume, missing adapter fail-closed 시험 |
+| Deployment-bound Run Control API | `run_control.py`, `control_plane.py` `/v1/runs` | actual ENFORCE bundle binding, scope·tenant 격리, approval·cancel, adapter 누락 fail-closed HTTP 시험 |
 | Dynamic Sub-Agent Edge 계약 | `DynamicTargetSelector` | dynamic instance 회귀 시험 |
 | Design/Runtime drift·bypass 비교 | `compare_runtime` | `RuntimeGraphDiffTests` |
 | 박스 기반 보안 설계 편집기 | `studio/app/page.tsx` | Studio build·rendered HTML 계약 시험 |
 | Ledger·OTLP JSON runtime import | `telemetry.py`, `studio/app/runtime.ts` | `RuntimeTelemetryImportTests`, Studio parser 시험 |
-| Runtime Graph·Drift reconciliation 화면 | `studio/app/page.tsx` | OTLP drift demo·render 시험 |
+| Runtime Graph·Drift reconciliation 화면 | `studio/app/page.tsx` | OTLP fixture import·render 시험; 제품 내장 demo 경로 없음 |
+| Studio Runs 운영 화면 | `studio/app/panels.tsx` | Run Control create/list/get/approve/resume/cancel/events route 계약과 Studio build 시험 |
 | MCP JSON-RPC Tool transport 집행 | `mcp_transport.py` | `MCPTransportVerticalSliceTests` |
 | Architecture exact digest runtime binding | `bind_compiled_architecture` | mismatch·drift·삭제 회귀 시험 |
 | Streamable HTTP JSON/SSE downstream client | `mcp_http.py` | lifecycle·session·SSE·redirect·size 시험 |
@@ -95,6 +97,7 @@ status: active
 | Run Control Plane (특권 배포 명령 API) | `control_plane.py` `ControlPlaneAPI` | 서버는 approver-bound 공개키만 보유, 제출 시 서명 검증, promote/rollback 2인 게이트, 미승격 bundle rollback 거부, `deploy:*` scope 시험 |
 | API CORS (Studio read-only Live Attach) | `ledger_http.py`·`control_plane.py` | 인증 전 origin 거부, preflight OPTIONS, 허용 origin echo, loopback http 개발 origin 허용 시험 |
 | Studio 통계·배포 뷰 | `studio/app/panels.tsx` (`StatsPanel`·`DeployPanel`), `page.tsx` stats/deploy 뷰 | 오프라인 ledger import 집계 + Live `/v1/statistics` fetch, control plane 승격 패널(서명 키는 브라우저 밖), build·lint·계약 시험 |
+| fake-data 플랫폼 전체 E2E | `tests/test_platform_e2e.py`, `tests/fixtures/platform_e2e/` | 전체 manifest digest→git propose→Ed25519 2인 ENFORCE→실제 localhost A2A→approval pause/resume→fake MCP 1회→Ledger Runtime/Statistics/Drift + D5 차단·미선언 bypass 시험 |
 
 ## 현재 자동화된 L1 범위
 
@@ -102,7 +105,7 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-20 전체 회귀는 Python 451개 test 통과·12개 skip·15개 subtest 통과 + Studio 8개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+2026-07-20 전체 회귀는 Python 454개 test 통과·12개 skip·15개 subtest 통과 + Studio 8개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service

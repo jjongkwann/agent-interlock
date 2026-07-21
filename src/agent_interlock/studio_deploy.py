@@ -68,6 +68,7 @@ class DeploymentBundle:
             "version": value["version"],
             "actors": value["actors"],
             "links": value["links"],
+            **({"architecture": value["architecture"]} if "architecture" in value else {}),
         }
         recomputed = canonical_digest(body)
         if recomputed != value.get("bundleDigest"):
@@ -276,5 +277,9 @@ class GitBundleStore:
         return self._commit(f"studio: rollback to {target_digest}")
 
     def history(self) -> tuple[str, ...]:
+        try:
+            _git(self.repo, "rev-parse", "--verify", "HEAD")
+        except subprocess.CalledProcessError:
+            return ()
         log = _git(self.repo, "log", "--format=%s")
         return tuple(line for line in log.splitlines() if line)
