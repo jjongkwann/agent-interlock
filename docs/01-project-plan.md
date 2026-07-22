@@ -1,5 +1,5 @@
 ---
-title: Agentic AI 보안 이벤트 DB 및 탐지·방지 플랫폼 기획
+title: Agentic AI Security Event DB and Detection/Prevention Platform Plan
 tags: [ai-agent, security, telemetry, detection, prevention, postgresql, architecture]
 date: 2026-07-15
 version: 1.1
@@ -7,66 +7,68 @@ status: planning
 source: agentic-위협매트릭스-통합-최종-v3-2026-07.md
 ---
 
-# Agentic AI 보안 이벤트 DB 및 탐지·방지 플랫폼 기획 v1
+# Agentic AI Security Event DB and Detection/Prevention Platform Plan v1
 
-> 기준 문서: `agentic-위협매트릭스-통합-최종-v3-2026-07.md` v3.3  
-> 기본 가정: **단일 AI Agent 서비스 MVP → 다중 Agent 서비스 확장**, **PostgreSQL 우선**, **OBSERVE → SHADOW → ENFORCE** 단계 전환  
-> 핵심 목표: 사용자·Agent·Sub-agent·MCP/Tool·RAG·Memory·외부 시스템 사이의 통신과 데이터 이동을 관측하고, 정책을 판정하며, 필요한 경우 실행 전에 차단·격리·회수할 수 있는 보안 통제 계층을 만든다.
+> 한국어 원문: [01-project-plan.ko.md](01-project-plan.ko.md)
+
+> Reference document: `agentic-위협매트릭스-통합-최종-v3-2026-07.md` v3.3  
+> Baseline assumptions: **single AI Agent service MVP → expansion to multi-Agent services**, **PostgreSQL-first**, **staged transition through OBSERVE → SHADOW → ENFORCE**  
+> Core objective: build a security control layer that observes communication and data movement among Users, Agents, Sub-agents, MCP/Tools, RAG, Memory, and external systems, evaluates policy against that activity, and — when necessary — blocks, quarantines, or revokes it before execution.
 
 ---
 
-## 1. 결론 요약
+## 1. Executive Summary
 
-이 플랫폼은 단순 로그 저장소가 아니다. 다음 네 기능을 하나의 추적 가능한 흐름으로 결합한다.
+This platform is not a simple log store. It combines the following four functions into a single traceable flow.
 
-1. **관측:** Actor 간 요청, 데이터 흐름, 도구 호출, 위임, 외부 행동을 공통 이벤트로 수집한다.
-2. **판정:** 요청의 신원·권한·데이터 민감도·목적지·예상 부작용을 정책과 탐지 규칙으로 평가한다.
-3. **집행:** `ALLOW`, `BLOCK`, `HOLD`, `SANITIZE`, `QUARANTINE`, `REVOKE`, `KILL`을 실제 Gateway에서 실행한다.
-4. **검증:** 통제 판정, 조치 실행 결과, 공격의 최종 결과를 분리해 “탐지는 했지만 막지 못한 사건”을 식별한다.
+1. **Observation:** Collects requests between Actors, data flows, tool calls, delegations, and external actions as common events.
+2. **Decision:** Evaluates a request's identity, authorization, data sensitivity, destination, and expected side effects against policy and detection rules.
+3. **Enforcement:** Executes `ALLOW`, `BLOCK`, `HOLD`, `SANITIZE`, `QUARANTINE`, `REVOKE`, and `KILL` on the actual Gateway.
+4. **Verification:** Separates the control decision, the result of executing that action, and the attack's final outcome, so that "detected but not blocked" incidents can be identified.
 
-최소 구현 단위는 다음과 같다.
+The minimal unit of implementation is:
 
 > **SECURITY_STEP = Source Actor × Relationship × Target Actor/Resource × Interaction × Data Flow × Control Decision × Action Result × Security Outcome**
 
-한 번의 사용자 요청은 여러 `SECURITY_STEP`을 만들 수 있지만, `trace_id`와 `incident_id`로 하나의 호출체인과 보안사건으로 묶는다.
+A single user request can produce multiple `SECURITY_STEP`s, but a `trace_id` and an `incident_id` tie them together into one call chain and one security incident.
 
 ---
 
-## 2. 목표와 비목표
+## 2. Goals and Non-Goals
 
-### 2.1 목표
+### 2.1 Goals
 
-- Actor 간 통신과 데이터 송수신을 동일한 보안 이벤트 규격으로 정규화한다.
-- User → Agent → Model/RAG/Memory/Tool/Agent/External의 전체 호출체인을 추적한다.
-- 정책 판정과 실제 조치 결과를 감사 가능한 형태로 보존한다.
-- Prompt Injection, Tool Poisoning, 자격증명 오용, A2A 위조, 데이터 유출, 비용 폭주 등 연쇄 공격을 상관분석한다.
-- 고위험 행동은 실행 전 차단하고, 이미 시작된 작업은 trace 단위로 중지·격리한다.
-- 운영 데이터와 모의공격 데이터를 분리해 탐지율·오탐률을 올바르게 측정한다.
+- Normalize communication and data exchange between Actors into a single common security event schema.
+- Trace the entire call chain: User → Agent → Model/RAG/Memory/Tool/Agent/External.
+- Preserve policy decisions and actual action results in an auditable form.
+- Correlate chained attacks such as Prompt Injection, Tool Poisoning, credential misuse, A2A spoofing, data exfiltration, and cost blowouts.
+- Block high-risk actions before execution, and stop/quarantine already-started work at the trace level.
+- Separate production data from simulated-attack data so that detection rate and false-positive rate can be measured correctly.
 
-### 2.2 비목표
+### 2.2 Non-Goals
 
-- 모든 원문 Prompt와 응답을 평문으로 영구 저장하지 않는다.
-- LLM 판정 하나만으로 권한·송금·삭제·외부 반출을 허용하지 않는다.
-- 초기 MVP에서 모든 TG01–TG22와 모든 표준 ID를 한 번에 구현하지 않는다.
-- 운영 로그만으로 “전체 실제 공격 대비 탐지율”을 계산하지 않는다.
-- 본 플랫폼이 기존 IAM, SIEM, DLP, EDR, API Gateway를 전부 대체하지 않는다. 이들을 Agent 호출체인에 연결하는 보안 통제면을 제공한다.
-
----
-
-## 3. 설계 원칙
-
-1. **관계 중심:** 방어는 Actor나 자산의 속성이 아니라 Actor 간 관계를 통과하는 집행점에 둔다.
-2. **판정과 결과 분리:** `BLOCK` 판정과 실제 차단 성공은 다른 사실이다.
-3. **원문 최소화:** 기본 DB에는 메타데이터·해시·분류 결과만 저장하고 원문은 마스킹하거나 별도 암호화 증거 저장소에 둔다.
-4. **결정론 우선:** 신원, 권한, tenant, 목적지, 금액, 부작용은 코드·정책으로 강제한다. LLM 기반 분류기는 보조 신호로 사용한다.
-5. **전체 호출체인 추적:** 단일 요청이 아니라 `trace_id`, `agent_tree_id`, `delegation_id` 단위로 분석한다.
-6. **Fail 정책 명시:** 통제 장애 시 관계별 `FAIL_OPEN`, `FAIL_CLOSED`, `DEGRADE_READ_ONLY`를 사전에 정한다.
-7. **증거 무결성:** Agent가 자신의 보안 로그를 수정하거나 누락시킬 수 없도록 별도 Audit Sink로 전송한다.
-8. **점진적 집행:** 동일 규칙을 OBSERVE, SHADOW, ENFORCE 모드로 승격한다.
+- Do not permanently store all raw prompts and responses in plaintext.
+- Do not allow authorization, money transfer, deletion, or external exfiltration based on a single LLM verdict alone.
+- Do not implement every TG01–TG22 and every standard ID at once in the initial MVP.
+- Do not compute an "overall detection rate against all real attacks" from production logs alone.
+- This platform does not replace existing IAM, SIEM, DLP, EDR, or API Gateway systems entirely. It provides a security control plane that connects them to the Agent call chain.
 
 ---
 
-## 4. 전체 시스템 구조
+## 3. Design Principles
+
+1. **Relationship-centric:** Defense is placed at the enforcement point that a relationship between Actors passes through, not on properties of an Actor or asset.
+2. **Separate decision from outcome:** A `BLOCK` decision and an actual, successful block are different facts.
+3. **Minimize raw content:** The primary DB stores only metadata, hashes, and classification results; raw content is masked or kept in a separate encrypted evidence store.
+4. **Determinism first:** Identity, authorization, tenant, destination, amount, and side effects are enforced by code and policy. LLM-based classifiers are used only as supplementary signals.
+5. **Trace the full call chain:** Analyze at the level of `trace_id`, `agent_tree_id`, and `delegation_id`, not a single request.
+6. **Explicit fail policy:** Define `FAIL_OPEN`, `FAIL_CLOSED`, and `DEGRADE_READ_ONLY` per relationship in advance, for use when a control fails.
+7. **Evidence integrity:** Send events to a separate Audit Sink so an Agent cannot modify or drop its own security logs.
+8. **Progressive enforcement:** Promote the same rule through OBSERVE, SHADOW, and ENFORCE modes.
+
+---
+
+## 4. Overall System Architecture
 
 ```mermaid
 flowchart LR
@@ -95,40 +97,40 @@ flowchart LR
     HOT --> API["Query API·Dashboard·SIEM Export"]
 ```
 
-### 4.1 논리 컴포넌트
+### 4.1 Logical Components
 
-| 컴포넌트 | 책임 | MVP 구현 |
+| Component | Responsibility | MVP Implementation |
 |---|---|---|
-| Sensor/SDK | Agent 프레임워크 내부 단계 관측 | Python/TypeScript SDK, OpenTelemetry hook |
-| Security Gateway | 관계별 요청 중계·차단 | HTTP/gRPC middleware, Tool/RAG adapter |
-| Event Normalizer | 공급자별 로그를 공통 스키마로 변환 | Stateless service |
-| Policy Decision Point | 정책·권한·위험 점수 판정 | 정책 엔진 + 결정론적 규칙 |
-| Policy Enforcement Point | 차단·보류·정제·회수 실행 | 각 Gateway에 내장 |
-| Event Bus | 비동기 전송·재처리 | MVP는 DB 직접 기록 또는 경량 queue, 확장 시 Kafka 호환 |
-| Event Store | 검색·통계·상관분석 데이터 | PostgreSQL 파티셔닝 |
-| Evidence Store | 암호화 원문·파일·대용량 payload | S3 호환 Object Storage |
-| Detection Engine | 단건·시계열·그래프 규칙 | SQL/stream rule + 선택적 ML |
-| Incident Manager | 이벤트를 사건으로 병합 | trace·actor·resource 기반 correlation |
-| Response Orchestrator | 토큰 회수·trace kill·격리 | 승인 가능한 runbook executor |
-| Dashboard/API | 검색·통계·정책 운영 | REST API + 운영 UI |
+| Sensor/SDK | Observes internal steps within the Agent framework | Python/TypeScript SDK, OpenTelemetry hook |
+| Security Gateway | Relays/blocks requests per relationship | HTTP/gRPC middleware, Tool/RAG adapter |
+| Event Normalizer | Converts provider-specific logs into the common schema | Stateless service |
+| Policy Decision Point | Evaluates policy, authorization, and risk score | Policy engine + deterministic rules |
+| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway |
+| Event Bus | Asynchronous delivery and reprocessing | MVP writes directly to the DB or uses a lightweight queue; Kafka-compatible at scale |
+| Event Store | Data for search, statistics, and correlation | PostgreSQL partitioning |
+| Evidence Store | Encrypted raw content, files, and large payloads | S3-compatible Object Storage |
+| Detection Engine | Single-event, time-series, and graph rules | SQL/stream rules + optional ML |
+| Incident Manager | Merges events into incidents | trace/actor/resource-based correlation |
+| Response Orchestrator | Token revocation, trace kill, quarantine | Approvable runbook executor |
+| Dashboard/API | Search, statistics, policy operations | REST API + operations UI |
 
 ---
 
-## 5. 우선 적용할 Actor 관계
+## 5. Actor Relationships to Prioritize
 
-### 5.1 MVP 범위
+### 5.1 MVP Scope
 
-| 관계 ID | 흐름 | 집행점 | 우선 탐지 |
+| Relationship ID | Flow | Enforcement Point | Priority Detections |
 |---|---|---|---|
-| REL-01 | User → Agent | INPUT_GATEWAY | Prompt Injection, 세션 혼선, 사용자 사칭 |
-| REL-03 | Agent → RAG | RETRIEVAL_GATEWAY | cross-tenant 조회, RAG 오염, 대량 검색 |
-| REL-05 | Agent → Tool/MCP | TOOL_GATEWAY | 비신뢰 입력 기반 호출, 권한 초과, Tool drift |
-| REL-07 | Agent → External | EGRESS_GATEWAY | 비밀 유출, 새 목적지, 송금·삭제·메일 발송 |
-| REL-12 | All → Observability | AUDIT_SINK | 로그 누락, Gateway 우회, trace 단절 |
+| REL-01 | User → Agent | INPUT_GATEWAY | Prompt Injection, session confusion, user impersonation |
+| REL-03 | Agent → RAG | RETRIEVAL_GATEWAY | cross-tenant lookups, RAG poisoning, bulk search |
+| REL-05 | Agent → Tool/MCP | TOOL_GATEWAY | calls driven by untrusted input, authorization overreach, Tool drift |
+| REL-07 | Agent → External | EGRESS_GATEWAY | secret exfiltration, new destinations, money transfer/deletion/email sending |
+| REL-12 | All → Observability | AUDIT_SINK | missing logs, Gateway bypass, broken trace |
 
-### 5.2 확장 범위
+### 5.2 Extended Scope
 
-| 관계 ID | 흐름 | 집행점 |
+| Relationship ID | Flow | Enforcement Point |
 |---|---|---|
 | REL-02 | Agent → Model | MODEL_ROUTER |
 | REL-04 | Agent → Memory | MEMORY_STORE |
@@ -141,54 +143,54 @@ flowchart LR
 
 ---
 
-## 6. 이벤트 분류 체계
+## 6. Event Classification System
 
-하나의 범용 로그 테이블에 모든 의미를 넣지 않는다. 공통 Envelope와 이벤트별 Payload를 조합한다.
+We do not put all meaning into a single general-purpose log table. We combine a common Envelope with an event-specific Payload.
 
-| Event Type | 발생 시점 | 핵심 질문 |
+| Event Type | When It Occurs | Key Question |
 |---|---|---|
-| `INTERACTION_REQUESTED` | Actor가 다른 Actor/Resource에 요청 | 누가 누구에게 무엇을 요청했는가 |
-| `DATA_FLOW_OBSERVED` | 데이터가 신뢰경계를 통과 | 어떤 민감 데이터가 어디로 이동했는가 |
-| `CONTROL_EVALUATED` | 통제가 요청을 평가 | 어떤 정책이 어떤 근거로 무엇을 판정했는가 |
-| `ACTION_EXECUTED` | 차단·보류·격리·회수 실행 | 판정이 실제로 집행됐는가 |
-| `INTERACTION_COMPLETED` | 대상 호출 종료 | 요청이 성공·실패·부분 실행됐는가 |
-| `SECURITY_OUTCOME_SET` | 보안 결과 확정 | 공격이 차단·부분 실행·성공했는가 |
-| `DETECTION_RAISED` | 규칙·모델이 이상 징후 탐지 | 어떤 증거로 어떤 시나리오가 탐지됐는가 |
-| `INCIDENT_UPDATED` | 사건 생성·병합·상태 변경 | 어떤 이벤트들이 하나의 사건인가 |
-| `CONTROL_HEALTH_CHANGED` | 통제 상태 변경 | 통제가 정상 동작하고 있는가 |
-| `POLICY_CHANGED` | 정책 배포·승격·롤백 | 어떤 정책이 언제 누구에 의해 바뀌었는가 |
-| `TEST_EXECUTED` | 시뮬레이션·레드팀·장애훈련 | 통제가 실제로 공격과 장애를 막았는가 |
+| `INTERACTION_REQUESTED` | An Actor requests another Actor/Resource | Who requested what from whom |
+| `DATA_FLOW_OBSERVED` | Data crosses a Trust Boundary | What sensitive data moved where |
+| `CONTROL_EVALUATED` | A control evaluates the request | Which policy decided what, on what basis |
+| `ACTION_EXECUTED` | Block/hold/quarantine/revoke executes | Was the decision actually enforced |
+| `INTERACTION_COMPLETED` | The target call ends | Did the request succeed, fail, or partially execute |
+| `SECURITY_OUTCOME_SET` | The security outcome is finalized | Was the attack blocked, partially executed, or successful |
+| `DETECTION_RAISED` | A rule or model detects an anomaly | Which scenario was detected, on what evidence |
+| `INCIDENT_UPDATED` | An incident is created, merged, or its status changes | Which events belong to a single incident |
+| `CONTROL_HEALTH_CHANGED` | A control's status changes | Is the control operating normally |
+| `POLICY_CHANGED` | Policy is deployed, promoted, or rolled back | Which policy changed, when, and by whom |
+| `TEST_EXECUTED` | Simulation, red team, or failure drill | Did the control actually stop the attack or failure |
 
-### 6.1 공통 Event Envelope
+### 6.1 Common Event Envelope
 
-| 필드 | 형식 | 필수 | 설명 |
+| Field | Format | Required | Description |
 |---|---|---:|---|
-| `event_id` | UUIDv7 | Y | 전역 고유 이벤트 ID |
-| `event_type` | enum | Y | 위 이벤트 유형 |
-| `schema_version` | string | Y | 예: `1.0` |
-| `occurred_at` | timestamptz | Y | 원 시스템 발생 시각 |
-| `ingested_at` | timestamptz | Y | 수집 계층 도착 시각 |
-| `tenant_id` | UUID/string | Y | tenant 격리 키 |
+| `event_id` | UUIDv7 | Y | Globally unique event ID |
+| `event_type` | enum | Y | One of the event types above |
+| `schema_version` | string | Y | e.g., `1.0` |
+| `occurred_at` | timestamptz | Y | Time the event occurred in the originating system |
+| `ingested_at` | timestamptz | Y | Time the event arrived at the ingestion layer |
+| `tenant_id` | UUID/string | Y | Tenant isolation key |
 | `environment` | enum | Y | `DEV`, `STAGE`, `PROD` |
 | `data_source` | enum | Y | `PRODUCTION`, `SIMULATION`, `RED_TEAM`, `TEST` |
-| `trace_id` | string | Y | 전체 호출체인 |
-| `span_id` | string | Y | 단일 단계 |
-| `parent_span_id` | string | N | 부모 단계 |
-| `agent_tree_id` | string | N | 상·하위 Agent 트리 |
-| `interaction_id` | UUID | N | 요청–완료 묶음 |
-| `incident_id` | UUID | N | 보안사건 묶음 |
-| `source_actor_id` | UUID | Y | 요청 주체 |
-| `target_actor_id` | UUID | N | 대상 Actor |
-| `target_resource_id` | UUID | N | 대상 Resource |
-| `relationship_type` | enum | Y | `REQUESTS`, `INVOKES`, `READS` 등 |
+| `trace_id` | string | Y | Full call chain |
+| `span_id` | string | Y | A single step |
+| `parent_span_id` | string | N | Parent step |
+| `agent_tree_id` | string | N | Parent/child Agent tree |
+| `interaction_id` | UUID | N | Groups request through completion |
+| `incident_id` | UUID | N | Groups a security incident |
+| `source_actor_id` | UUID | Y | Requesting subject |
+| `target_actor_id` | UUID | N | Target Actor |
+| `target_resource_id` | UUID | N | Target Resource |
+| `relationship_type` | enum | Y | `REQUESTS`, `INVOKES`, `READS`, etc. |
 | `relationship_id` | string | Y | REL-01–REL-13 |
 | `tg_ids` | string[] | N | TG01–TG22 |
-| `scenario_ids` | string[] | N | 탐지·시험 시나리오 |
+| `scenario_ids` | string[] | N | Detection/test scenarios |
 | `severity` | enum | Y | `INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
-| `payload` | JSON object | Y | 이벤트 유형별 데이터 |
-| `integrity_hash` | string | Y | 정규화된 이벤트의 무결성 해시 |
+| `payload` | JSON object | Y | Event-type-specific data |
+| `integrity_hash` | string | Y | Integrity hash of the normalized event |
 
-### 6.2 관계 enum
+### 6.2 Relationship Enum
 
 ```text
 REQUESTS
@@ -206,7 +208,7 @@ LOGS_TO
 RETURNS_TO
 ```
 
-### 6.3 통제 판정과 결과 enum
+### 6.3 Control Decision and Result Enums
 
 ```text
 CONTROL_DECISION
@@ -221,9 +223,9 @@ SECURITY_OUTCOME
 
 ---
 
-## 7. 표준 JSON 이벤트 예시
+## 7. Standard JSON Event Examples
 
-### 7.1 Agent → Tool 요청
+### 7.1 Agent → Tool Request
 
 ```json
 {
@@ -260,7 +262,7 @@ SECURITY_OUTCOME
 }
 ```
 
-### 7.2 통제 판정
+### 7.2 Control Decision
 
 ```json
 {
@@ -285,7 +287,7 @@ SECURITY_OUTCOME
 }
 ```
 
-### 7.3 조치 실패와 공격 성공
+### 7.3 Action Failure and Attack Success
 
 ```json
 {
@@ -315,7 +317,7 @@ SECURITY_OUTCOME
 
 ---
 
-## 8. 데이터베이스 논리 모델
+## 8. Database Logical Model
 
 ```mermaid
 erDiagram
@@ -336,33 +338,33 @@ erDiagram
     SECURITY_EVENT ||--o| EVIDENCE_REF : references
 ```
 
-### 8.1 테이블 역할
+### 8.1 Table Roles
 
-| 테이블 | 역할 |
+| Table | Role |
 |---|---|
-| `tenants` | tenant와 보존·암호화 정책 |
-| `actors` | User, Agent, Tool, IdP 등 실행 주체 catalog |
-| `resources` | Prompt, Memory, RAG, Credential, Data 등 자산 catalog |
-| `interactions` | 요청부터 완료까지의 관계 단위 |
-| `security_events` | 공통 append-only 이벤트 원장 |
-| `data_flows` | 데이터 이동의 출처·목적지·민감도·크기 |
-| `control_instances` | 실제 배포된 통제 인스턴스와 상태 |
-| `control_policies` | 정책 버전과 배포 상태 |
-| `control_decisions` | 요청별 판정·근거·위험 점수 |
-| `action_results` | 차단·회수·격리의 실제 실행 결과 |
-| `security_outcomes` | 공격의 최종 결과와 부작용 |
-| `detection_rules` | 버전 관리되는 탐지 규칙 |
-| `detections` | 규칙이 발생시킨 탐지와 증거 |
-| `incidents` | 여러 이벤트를 묶는 사건 |
-| `incident_events` | 사건–이벤트 N:M 연결 |
-| `evidence_refs` | 암호화 원문 증거의 위치·해시·보존기간 |
-| `ingest_errors` | 정규화 실패·스키마 위반·유실 후보 |
+| `tenants` | Tenant and retention/encryption policy |
+| `actors` | Catalog of execution subjects: User, Agent, Tool, IdP, etc. |
+| `resources` | Catalog of assets: Prompt, Memory, RAG, Credential, Data, etc. |
+| `interactions` | Relationship unit from request through completion |
+| `security_events` | Common append-only event ledger |
+| `data_flows` | Source, destination, sensitivity, and size of data movement |
+| `control_instances` | Actually deployed control instances and their status |
+| `control_policies` | Policy versions and deployment status |
+| `control_decisions` | Per-request decision, reasoning, and risk score |
+| `action_results` | Actual execution results of block/revoke/quarantine |
+| `security_outcomes` | Final result of the attack and its side effects |
+| `detection_rules` | Version-controlled detection rules |
+| `detections` | Detections raised by rules, with evidence |
+| `incidents` | Incidents that group multiple events |
+| `incident_events` | N:M linkage between incidents and events |
+| `evidence_refs` | Location, hash, and retention period of encrypted raw evidence |
+| `ingest_errors` | Normalization failures, schema violations, candidate data loss |
 
 ---
 
 ## 9. PostgreSQL MVP DDL
 
-> 아래는 구현 출발점이다. 운영 전에는 조직의 PostgreSQL 버전, tenant 키 형식, 개인정보 정책에 맞게 migration으로 관리한다.
+> The following is an implementation starting point. Before going to production, manage it as migrations tailored to your organization's PostgreSQL version, tenant key format, and personal data policy.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -607,24 +609,24 @@ CREATE TABLE evidence_refs (
 );
 ```
 
-### 9.1 DDL 운영 주의
+### 9.1 DDL Operational Notes
 
-- 월별 partition을 자동 생성하고 보존기간 종료 시 partition 단위로 폐기한다.
-- `tenant_id`가 없는 이벤트는 ingest 단계에서 거부한다.
-- `security_events`는 UPDATE/DELETE를 애플리케이션 계정에 허용하지 않는다.
-- JSONB는 확장 필드에만 사용하고 통계 분모가 되는 필드는 정규 컬럼으로 둔다.
-- DB 장애 시 원본 이벤트는 로컬 bounded spool 또는 Event Bus에 보존하고 재전송한다.
-- 이벤트 중복은 `event_id`와 producer sequence로 제거한다.
-- 장기적으로 분석량이 커지면 PostgreSQL은 catalog·policy·incident를 유지하고 event fact는 ClickHouse로 복제한다.
+- Auto-generate monthly partitions, and drop them by partition when the retention period ends.
+- Reject events without a `tenant_id` at the ingest stage.
+- Do not allow application accounts to UPDATE/DELETE `security_events`.
+- Use JSONB only for extension fields; keep fields used as statistical denominators as regular columns.
+- On DB failure, retain the original events in a local bounded spool or the Event Bus and retransmit them.
+- Remove event duplicates using `event_id` and the producer sequence.
+- As analytical volume grows over time, keep catalog/policy/incident in PostgreSQL and replicate event facts to ClickHouse.
 
-### 9.2 테넌트 격리와 불변성 (RLS·append-only)
+### 9.2 Tenant Isolation and Immutability (RLS / Append-Only)
 
-tenant 격리는 애플리케이션 필터가 아니라 DB 정책으로 이중 강제한다. 아래 패턴을 `tenant_id`가 있는 모든 fact·catalog 테이블에 적용한다. `security_events`를 예로 든다.
+Tenant isolation is doubly enforced by DB policy, not by an application-level filter. Apply the pattern below to every fact/catalog table that has a `tenant_id`. `security_events` is used as the example.
 
 ```sql
--- 신뢰된 tenant는 세션에서 자유롭게 바꿀 수 있는 GUC가 아니라
--- 인증 연결의 session_user에서 파생한다. SET/SET ROLE로는 바꿀 수 없다.
-CREATE TABLE role_tenant (        -- 애플리케이션 역할 → tenant 결합(연결=인증 경계)
+-- The trusted tenant is not a GUC that can be freely changed within a session;
+-- it is derived from the session_user of the authenticated connection. It cannot be changed via SET/SET ROLE.
+CREATE TABLE role_tenant (        -- application role → tenant binding (connection = authentication boundary)
     role_name text PRIMARY KEY,
     tenant_id text NOT NULL REFERENCES tenants(tenant_id)
 );
@@ -634,20 +636,20 @@ SECURITY DEFINER SET search_path = pg_catalog, public AS
 $$ SELECT tenant_id FROM role_tenant WHERE role_name = session_user $$;
 REVOKE ALL ON FUNCTION current_tenant() FROM PUBLIC;
 
--- 테넌트 격리. FORCE는 '테이블 소유자'에게도 RLS를 적용한다.
---   단 superuser와 BYPASSRLS 속성 역할은 여전히 우회하므로,
---   애플리케이션·마이그레이션 역할에 그 속성을 부여하지 않는다(CORE-SIM-TENANT-004).
+-- Tenant isolation. FORCE applies RLS even to the "table owner."
+--   However, superuser and roles with the BYPASSRLS attribute can still bypass it,
+--   so do not grant that attribute to application/migration roles (CORE-SIM-TENANT-004).
 ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_events FORCE  ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON security_events
     USING (tenant_id = current_tenant())
     WITH CHECK (tenant_id = current_tenant());
--- session_user는 인증 연결에 고정되므로 custom GUC나 SET ROLE로 tenant를 바꿀 수 없다.
+-- session_user is fixed to the authenticated connection, so the tenant cannot be changed via a custom GUC or SET ROLE.
 
--- 불변성(append-only). 두 계층으로 방어한다.
---   (1) RBAC: 쓰기 역할에서 UPDATE/DELETE 권한 회수 → permission denied (트리거 도달 전)
---   (2) trigger: UPDATE 권한이 있는 역할이라도 append-only 위반 예외
--- app_writer와 시험용 역할은 배포 시 사전 생성된다(이 블록의 전제 조건).
+-- Immutability (append-only). Enforced in two layers.
+--   (1) RBAC: revoke UPDATE/DELETE from the writer role → permission denied (before the trigger is reached)
+--   (2) trigger: raises an append-only-violation exception even for a role that has UPDATE privilege
+-- app_writer and the test role are pre-created at deployment time (a precondition of this block).
 REVOKE UPDATE, DELETE ON security_events FROM app_writer;
 GRANT  INSERT, SELECT ON security_events TO app_writer;
 CREATE FUNCTION deny_event_mutation() RETURNS trigger LANGUAGE plpgsql AS
@@ -657,113 +659,113 @@ CREATE TRIGGER security_events_no_mutation
     FOR EACH ROW EXECUTE FUNCTION deny_event_mutation();
 ```
 
-> **왜 세션 GUC를 신뢰하지 않는가.** PostgreSQL은 임의의 2단계 custom parameter를 받아들이므로, `current_setting('app.tenant_id')`에 의존하면 애플리케이션 역할이 `SET app.tenant_id='다른-tenant'`로 경계를 넘을 수 있다(`SECURITY DEFINER`로 값을 넣어도 이후 직접 `SET`을 막지 못한다). 그래서 실행 migration은 **인증 연결에 고정되는 `session_user`**에서 tenant를 파생한다. `current_user`는 `SET ROLE`로 바뀔 수 있어 인증 주체의 고정 식별자로 사용하지 않는다. 대규모 멀티테넌시로 역할 수가 부담되면, 애플리케이션이 위조·재설정할 수 없는 신뢰 연결 계층 컨텍스트(전용 프록시·확장)로 대체하되 "앱이 값을 못 바꾼다"를 시험으로 증명해야 한다. 실행 가능한 축소 migration과 API 계약은 [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md)를 따른다.
+> **Why we don't trust the session GUC.** PostgreSQL accepts arbitrary two-tier custom parameters, so relying on `current_setting('app.tenant_id')` lets an application role cross the boundary with `SET app.tenant_id='another-tenant'` (even if `SECURITY DEFINER` sets the value, it cannot subsequently prevent a direct `SET`). That's why the executable migration derives the tenant from **`session_user`, which is fixed to the authenticated connection**. `current_user` can be changed via `SET ROLE`, so it is not used as the fixed identifier of the authenticated subject. If the role count becomes burdensome at large-scale multi-tenancy, replace this with a trusted connection-layer context that the application cannot forge or reset (a dedicated proxy or extension), but you must prove with a test that "the app cannot change the value." For the executable reduced migration and API contract, see [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md).
 
-- `tenant_id`가 없는 이벤트는 ingest에서 거부하고 `ingest_errors`에 남긴다.
-- evidence 조회도 tenant 경계를 넘지 못하며(§15.2), 조회 자체가 별도 보안 이벤트로 기록된다.
-- 이 격리와 우회 방지는 [05 L1 검증 계획](05-l1-security-validation-plan.md) §10의 `CORE-SIM-TENANT-001`(`SET app.tenant_id` 무효)·`002`(권한 회수)·`003`(append-only trigger)·`004`(RLS 우회 속성) 회귀 시험으로 검증한다.
+- Events without a `tenant_id` are rejected at ingest and recorded in `ingest_errors`.
+- Evidence lookups also cannot cross the tenant boundary (§15.2); the lookup itself is recorded as a separate security event.
+- This isolation and its bypass prevention are verified by the regression tests in [05 L1 Security Validation Plan](05-l1-security-validation-plan.md) §10: `CORE-SIM-TENANT-001` (`SET app.tenant_id` has no effect), `002` (privilege revocation), `003` (append-only trigger), and `004` (RLS bypass attribute).
 
 ---
 
-## 10. 수집과 정규화
+## 10. Collection and Normalization
 
-### 10.1 수집 지점
+### 10.1 Collection Points
 
-| 위치 | 반드시 수집할 값 |
+| Location | Values That Must Be Collected |
 |---|---|
-| Agent SDK | task, plan step, model/tool 선택, sub-agent 생성, trace |
-| Input Gateway | 사용자 신원, session, 입력 provenance, taint |
-| Model Router | model ID/version, prompt template version, token 사용량 |
-| RAG Gateway | subject/tenant, query, 필터, 반환 문서 ID·ACL |
+| Agent SDK | task, plan step, model/tool selection, sub-agent creation, trace |
+| Input Gateway | user identity, session, input provenance, taint |
+| Model Router | model ID/version, prompt template version, token usage |
+| RAG Gateway | subject/tenant, query, filters, returned document ID/ACL |
 | Memory Gateway | writer, source, TTL, memory version, read/write |
-| Tool Gateway | manifest digest, tool args hash, 권한, 목적지, 부작용 |
+| Tool Gateway | manifest digest, tool args hash, authorization, destination, side effects |
 | A2A Broker | card digest, sender/receiver, delegation, nonce, hop |
 | Egress Gateway | destination, data class, byte size, transaction effect |
 | Identity Provider | actor, audience, scope, issue/revoke, token lineage |
 | Sandbox/Runtime | process, filesystem, network, child process, exit |
 | Audit Sink | expected producer, sequence gap, heartbeat, ingest lag |
 
-### 10.2 데이터 정규화 순서
+### 10.2 Data Normalization Order
 
 ```text
-수신 → producer 인증 → schema 검증 → tenant 강제 → 시간 보정
-→ Actor/Resource resolve → 민감정보 탐지·마스킹 → hash 생성
-→ TG/관계 태깅 → 저장·정책 평가 → correlation
+receive → producer authentication → schema validation → tenant enforcement → time correction
+→ Actor/Resource resolve → sensitive-data detection/masking → hash generation
+→ TG/relationship tagging → storage/policy evaluation → correlation
 ```
 
-스키마 위반 이벤트를 조용히 버리지 않는다. `ingest_errors`에 producer, 오류, 원본 해시를 남기고, 고위험 관계에서 반복되면 `CONTROL_HEALTH_CHANGED`와 우회 탐지를 발생시킨다.
+Schema-violating events are not silently dropped. Record the producer, error, and original hash in `ingest_errors`, and if this repeats on a high-risk relationship, raise `CONTROL_HEALTH_CHANGED` and a bypass detection.
 
-### 10.3 OpenTelemetry 연계
+### 10.3 OpenTelemetry Integration
 
-- W3C `traceparent`를 Agent·Gateway·Tool 호출에 전달한다.
-- 외부 도구가 trace를 지원하지 않으면 Gateway가 span을 생성한다.
-- `trace_id`는 보안 상관키이고 인증 수단이 아니다.
-- 외부에서 받은 trace ID를 그대로 신뢰하지 않고 tenant 경계에서 재바인딩한다.
+- Propagate the W3C `traceparent` across Agent, Gateway, and Tool calls.
+- If an external tool doesn't support tracing, the Gateway generates the span.
+- `trace_id` is a security correlation key, not an authentication mechanism.
+- Do not trust a trace ID received from outside as-is; rebind it at the tenant boundary.
 
 ---
 
-## 11. 정책 판정과 집행
+## 11. Policy Decision and Enforcement
 
-### 11.1 판정 순서
+### 11.1 Decision Sequence
 
 ```mermaid
 flowchart TD
-    A["요청 수신"] --> B{"Actor 인증·tenant 일치?"}
-    B -->|아니오| X["BLOCK"]
-    B -->|예| C{"관계·권한 허용?"}
-    C -->|아니오| X
-    C -->|예| D{"데이터 민감도·목적지 허용?"}
-    D -->|아니오| H["HOLD / REDACT / BLOCK"]
-    D -->|예| E{"부작용·금액·가역성 위험?"}
-    E -->|고위험| F["CHALLENGE / 2인 승인"]
-    E -->|저위험| G{"이상행위 규칙 탐지?"}
-    G -->|예| H
-    G -->|아니오| I["ALLOW"]
+    A["Request received"] --> B{"Actor authenticated & tenant matches?"}
+    B -->|No| X["BLOCK"]
+    B -->|Yes| C{"Relationship/authorization allowed?"}
+    C -->|No| X
+    C -->|Yes| D{"Data sensitivity/destination allowed?"}
+    D -->|No| H["HOLD / REDACT / BLOCK"]
+    D -->|Yes| E{"Side effect/amount/reversibility risk?"}
+    E -->|High risk| F["CHALLENGE / two-person approval"]
+    E -->|Low risk| G{"Anomalous-behavior rule detected?"}
+    G -->|Yes| H
+    G -->|No| I["ALLOW"]
 ```
 
-### 11.2 관계별 장애 정책
+### 11.2 Fail Policy by Relationship
 
-| 관계 | 기본 장애 정책 | 이유 |
+| Relationship | Default Fail Policy | Reason |
 |---|---|---|
-| User → Agent 읽기 | 제한적 `FAIL_OPEN` 또는 `DEGRADE` | 낮은 부작용 |
-| Agent → RAG | `FAIL_CLOSED` | tenant/ACL 판정 없이는 유출 위험 |
-| Agent → Memory 쓰기 | `FAIL_CLOSED` | 지속 오염 위험 |
-| Agent → Tool 읽기 | 도구 등급별 | 민감정보 접근 여부 |
-| Agent → Tool 쓰기 | `FAIL_CLOSED` | 외부 부작용 |
-| Agent → External | `FAIL_CLOSED` | 유출·송금·발송 위험 |
-| Scheduler → Agent | `FAIL_CLOSED` | 무감시 반복 실행 |
-| All → Audit | 고위험 행동 `DEGRADE_READ_ONLY` | 관측 불가 상태에서 쓰기 금지 |
+| User → Agent read | Limited `FAIL_OPEN` or `DEGRADE` | Low side effect |
+| Agent → RAG | `FAIL_CLOSED` | Leak risk without a tenant/ACL decision |
+| Agent → Memory write | `FAIL_CLOSED` | Risk of persistent poisoning |
+| Agent → Tool read | Per tool tier | Whether sensitive data is accessed |
+| Agent → Tool write | `FAIL_CLOSED` | External side effect |
+| Agent → External | `FAIL_CLOSED` | Risk of exfiltration, money transfer, or sending |
+| Scheduler → Agent | `FAIL_CLOSED` | Unsupervised repeated execution |
+| All → Audit | High-risk actions `DEGRADE_READ_ONLY` | Writes prohibited while observation is unavailable |
 
-### 11.3 정책 모드
+### 11.3 Policy Modes
 
-| 모드 | 판정 | 실제 집행 | 용도 |
+| Mode | Decision | Actual Enforcement | Purpose |
 |---|---|---|---|
-| OBSERVE | 기록만 | 없음 | 기준선 수집 |
-| SHADOW | 차단 가상 판정 | 허용 | 영향·오탐 측정 |
-| ENFORCE | 실제 판정 | 차단·보류·정제 | 운영 방어 |
+| OBSERVE | Log only | None | Baseline collection |
+| SHADOW | Hypothetical block decision | Allow | Measure impact/false positives |
+| ENFORCE | Real decision | Block/hold/sanitize | Production defense |
 
-승격 조건은 단순 기간이 아니라 시뮬레이션 재현율, 정상 트래픽 오탐, p95 판정 지연, 우회율, rollback 준비 상태로 정한다.
+Promotion criteria are not simply elapsed time but simulation recall, false positives on normal traffic, p95 decision latency, bypass rate, and rollback readiness.
 
 ---
 
-## 12. MVP 탐지 규칙
+## 12. MVP Detection Rules
 
-| Rule ID | 관계 | 탐지 조건 | 기본 조치 | 대상 |
+| Rule ID | Relationship | Detection Condition | Default Action | Target |
 |---|---|---|---|---|
-| DET-001 | REL-01 | 비신뢰 콘텐츠의 명령 패턴 + 고위험 의도 | taint, HOLD | TG01 |
-| DET-002 | REL-03 | subject tenant와 검색 tenant 불일치 | BLOCK | TG06·TG18 |
-| DET-003 | REL-03 | 짧은 시간에 광범위 문서/벡터 열거 | rate limit, HOLD | TG06·TG22 |
-| DET-004 | REL-05 | 비신뢰 taint가 쓰기 Tool 인수로 전달 | BLOCK/승인 | TG09·TG20 |
-| DET-005 | REL-05 | 승인 manifest digest와 실행 digest 불일치 | QUARANTINE | TG07·TG08 |
-| DET-006 | REL-05 | Agent 권한보다 넓은 Tool scope 요청 | BLOCK | TG13 |
-| DET-007 | REL-07 | 새로운 외부 목적지 + PII/SECRET | BLOCK/승인 | TG20·TG22 |
-| DET-008 | REL-07 | 요청 목적과 무관한 대량 outbound | KILL trace | TG20·TG22 |
-| DET-009 | REL-12 | Agent 로그는 있으나 Gateway 로그 없음 | BYPASS incident | TG17 |
-| DET-010 | REL-12 | producer sequence gap 또는 heartbeat 상실 | 고위험 쓰기 중지 | TG17 |
-| DET-011 | Trace | sub-agent fan-out·재시도·비용 급증 | circuit break | TG10·TG21 |
-| DET-012 | Trace | BLOCK 판정 뒤 downstream 성공 이벤트 | CRITICAL incident | TG17·TG20 |
+| DET-001 | REL-01 | Command pattern in untrusted content + high-risk intent | taint, HOLD | TG01 |
+| DET-002 | REL-03 | Subject tenant and search tenant mismatch | BLOCK | TG06/TG18 |
+| DET-003 | REL-03 | Broad document/vector enumeration in a short time | rate limit, HOLD | TG06/TG22 |
+| DET-004 | REL-05 | Untrusted taint passed as a write Tool argument | BLOCK/approval | TG09/TG20 |
+| DET-005 | REL-05 | Approved manifest digest and execution digest mismatch | QUARANTINE | TG07/TG08 |
+| DET-006 | REL-05 | Tool scope requested wider than the Agent's authorization | BLOCK | TG13 |
+| DET-007 | REL-07 | New external destination + PII/SECRET | BLOCK/approval | TG20/TG22 |
+| DET-008 | REL-07 | Bulk outbound unrelated to the request's purpose | KILL trace | TG20/TG22 |
+| DET-009 | REL-12 | Agent log present but no Gateway log | BYPASS incident | TG17 |
+| DET-010 | REL-12 | Producer sequence gap or lost heartbeat | Halt high-risk writes | TG17 |
+| DET-011 | Trace | Sub-agent fan-out, retries, cost spike | circuit break | TG10/TG21 |
+| DET-012 | Trace | Downstream success event after a BLOCK decision | CRITICAL incident | TG17/TG20 |
 
-### 12.1 규칙 정의 예시
+### 12.1 Rule Definition Example
 
 ```yaml
 rule_id: DET-004
@@ -786,18 +788,18 @@ test_cases:
 
 ---
 
-## 13. 연쇄공격 상관분석
+## 13. Chained Attack Correlation
 
-단건 탐지만으로 Agent 공격을 판단하지 않는다. 다음 키를 사용해 그래프를 구성한다.
+We do not judge an Agent attack from a single detection alone. The following keys are used to build a graph.
 
-- `trace_id`: 한 요청의 end-to-end 경로
-- `agent_tree_id`: 주 Agent와 Sub-agent 계보
-- `delegation_id`: 위임 자격과 hop
-- `interaction_id`: 요청–판정–완료
-- `resource_id`: 동일 Memory/RAG/Credential 접근
-- `destination_id`: 동일 외부 목적지
+- `trace_id`: the end-to-end path of a single request
+- `agent_tree_id`: lineage of the primary Agent and its Sub-agents
+- `delegation_id`: delegation credential and hop
+- `interaction_id`: request–decision–completion
+- `resource_id`: access to the same Memory/RAG/Credential
+- `destination_id`: the same external destination
 
-### 13.1 대표 상관 시나리오
+### 13.1 Representative Correlation Scenario
 
 ```mermaid
 sequenceDiagram
@@ -808,115 +810,115 @@ sequenceDiagram
     participant E as External
     participant S as Security Plane
 
-    U->>A: 간접 Prompt Injection
-    A->>R: 관련 문서 검색
+    U->>A: Indirect Prompt Injection
+    A->>R: Search for related documents
     R-->>A: tainted content
-    A->>T: 민감 데이터 조회
+    A->>T: Query sensitive data
     T-->>A: customer records
-    A->>E: 새 목적지로 전송
-    S-->>S: 동일 trace의 taint→read→egress 상관
+    A->>E: Send to new destination
+    S-->>S: Correlate taint→read→egress within the same trace
     S-->>E: BLOCK
     S-->>A: KILL trace / token revoke
 ```
 
-### 13.2 Incident 병합 규칙
+### 13.2 Incident Merge Rules
 
-- 동일 trace에서 5분 내 발생한 관련 탐지는 기본적으로 하나의 Incident로 묶는다.
-- trace가 달라도 동일 compromised actor, credential, memory, destination이면 병합 후보로 둔다.
-- 자동 병합에는 근거 코드를 남기고 운영자가 분리할 수 있어야 한다.
-- 동일 이벤트를 여러 Incident에 연결할 수 있지만 대표 Incident를 지정한다.
+- Related detections occurring within 5 minutes on the same trace are merged into a single Incident by default.
+- Even across different traces, the same compromised actor, credential, memory, or destination makes detections a merge candidate.
+- Automatic merges must leave a reason code, and an operator must be able to split them apart.
+- The same event can be linked to multiple Incidents, but a representative Incident is designated.
 
 ---
 
-## 14. 자동 대응 Runbook
+## 14. Automated Response Runbooks
 
-| Response ID | 동작 | 사전조건 | 검증 |
+| Response ID | Action | Precondition | Verification |
 |---|---|---|---|
-| RESP-01 | `BLOCK_INTERACTION` | Gateway가 아직 dispatch 전 | downstream 완료 이벤트 부재 |
-| RESP-02 | `HOLD_FOR_APPROVAL` | 가역적 대기 가능 | 승인 만료·서명 검증 |
-| RESP-03 | `REVOKE_CREDENTIAL_LINEAGE` | delegation/token lineage 존재 | 모든 audience에서 회수 확인 |
-| RESP-04 | `KILL_TRACE` | agent_tree/queue 작업 식별 가능 | 하위 작업 종료 확인 |
-| RESP-05 | `QUARANTINE_TOOL` | Tool digest/instance 식별 | 신규 호출 0, 캐시 제거 |
-| RESP-06 | `ISOLATE_WORKLOAD` | sandbox/runtime 제어 가능 | network·process 차단 확인 |
-| RESP-07 | `ROLLBACK_MEMORY` | 안전 snapshot 존재 | 오염 파생 데이터 제거 |
-| RESP-08 | `BLOCK_DESTINATION` | egress gateway 제어 가능 | DNS/IP/URL 우회 시험 |
-| RESP-09 | `DEGRADE_READ_ONLY` | 관측·정책 장애 | 쓰기·외부 송신 0 |
+| RESP-01 | `BLOCK_INTERACTION` | Gateway has not yet dispatched | Absence of a downstream completion event |
+| RESP-02 | `HOLD_FOR_APPROVAL` | Reversible wait is possible | Approval expiry/signature verification |
+| RESP-03 | `REVOKE_CREDENTIAL_LINEAGE` | Delegation/token lineage exists | Confirm revocation across all audiences |
+| RESP-04 | `KILL_TRACE` | agent_tree/queue work is identifiable | Confirm termination of child work |
+| RESP-05 | `QUARANTINE_TOOL` | Tool digest/instance identified | Zero new calls, cache purged |
+| RESP-06 | `ISOLATE_WORKLOAD` | Sandbox/runtime control available | Confirm network/process blocked |
+| RESP-07 | `ROLLBACK_MEMORY` | A safe snapshot exists | Remove data derived from the poisoning |
+| RESP-08 | `BLOCK_DESTINATION` | Egress gateway control available | DNS/IP/URL bypass test |
+| RESP-09 | `DEGRADE_READ_ONLY` | Observation/policy failure | Zero writes/external sends |
 
-자동 대응은 `decision`을 기록하는 것에서 끝나지 않는다. 각 Runbook은 `action_result`와 독립 검증 이벤트를 생성해야 한다.
+Automated response does not end with recording the `decision`. Each Runbook must generate an `action_result` and an independent verification event.
 
 ---
 
-## 15. 개인정보·증거·로그 무결성
+## 15. Personal Data, Evidence, and Log Integrity
 
-### 15.1 저장 기본값
+### 15.1 Storage Defaults
 
-| 데이터 | 기본 저장 |
+| Data | Default Storage |
 |---|---|
-| Prompt/응답 원문 | 저장하지 않음 또는 즉시 마스킹 |
-| Tool arguments | 정형 필드·해시·민감도, 필요 필드만 |
-| RAG 문서 | 문서 ID·버전·ACL·hash, 본문 제외 |
-| Credential | 절대 원문 저장 금지, token ID·scope·audience만 |
-| 파일 | hash·MIME·크기·검사 결과, 원문은 격리 저장소 |
-| 외부 목적지 | 정규화된 domain/service/account |
-| 승인 | 승인자·대상·diff hash·만료·서명 |
+| Prompt/response raw content | Not stored, or masked immediately |
+| Tool arguments | Structured fields, hash, sensitivity — only the fields needed |
+| RAG documents | Document ID/version/ACL/hash, excluding body content |
+| Credential | Never store the raw value; only token ID/scope/audience |
+| File | hash/MIME/size/scan result; raw content in isolated storage |
+| External destination | Normalized domain/service/account |
+| Approval | Approver, target, diff hash, expiry, signature |
 
-### 15.2 증거 저장 원칙
+### 15.2 Evidence Storage Principles
 
-- 원문 증거는 tenant별 키로 암호화한다.
-- DB에는 URI, hash, key reference, 보존기간만 저장한다.
-- 증거 조회 자체도 별도 보안 이벤트로 기록한다.
-- 법적 보존과 일반 보존을 분리한다.
-- 관리자도 tenant를 건너 검색할 수 없게 RLS 또는 별도 DB 경계를 적용한다.
+- Raw evidence is encrypted with a per-tenant key.
+- The DB stores only the URI, hash, key reference, and retention period.
+- Evidence lookups themselves are recorded as a separate security event.
+- Legal hold and general retention are kept separate.
+- Apply RLS or a separate DB boundary so that even administrators cannot search across tenants.
 
-### 15.3 무결성
+### 15.3 Integrity
 
-- producer 인증과 event signing 또는 mTLS를 적용한다.
-- 이벤트의 canonical JSON hash를 저장한다.
-- producer별 monotonic sequence로 누락을 탐지한다.
-- 선택적으로 일정 구간의 hash chain 또는 외부 WORM 보관을 사용한다.
+- Apply producer authentication and event signing or mTLS.
+- Store the canonical JSON hash of the event.
+- Detect gaps using a per-producer monotonic sequence.
+- Optionally use a hash chain over a fixed interval, or external WORM storage.
 
 ---
 
-## 16. API 초안
+## 16. API Draft
 
-| Method | Path | 목적 |
+| Method | Path | Purpose |
 |---|---|---|
-| POST | `/v1/events` | 정규화 이벤트 수집 |
-| POST | `/v1/interactions/evaluate` | 동기 정책 판정 |
-| POST | `/v1/actions/{decision_id}/result` | 집행 결과 보고 |
-| POST | `/v1/outcomes` | 보안 결과 확정 |
-| GET | `/v1/traces/{trace_id}` | 호출체인 조회 |
-| GET | `/v1/incidents` | 사건 검색 |
-| POST | `/v1/incidents/{id}/responses` | 대응 Runbook 실행 |
-| GET | `/v1/controls/health` | 통제 상태 조회 |
-| POST | `/v1/rules/{id}/simulate` | 과거 이벤트에 규칙 시험 |
+| POST | `/v1/events` | Ingest normalized events |
+| POST | `/v1/interactions/evaluate` | Synchronous policy decision |
+| POST | `/v1/actions/{decision_id}/result` | Report enforcement result |
+| POST | `/v1/outcomes` | Finalize security outcome |
+| GET | `/v1/traces/{trace_id}` | Query call chain |
+| GET | `/v1/incidents` | Search incidents |
+| POST | `/v1/incidents/{id}/responses` | Execute response Runbook |
+| GET | `/v1/controls/health` | Query control status |
+| POST | `/v1/rules/{id}/simulate` | Test a rule against historical events |
 
-`POST /v1/events`와 `GET /v1/traces/{trace_id}`의 현재 실행 계약은 [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md)와 [`ledger-api.openapi.yaml`](../schemas/ledger-api.openapi.yaml)에 있다. mutation은 인증 principal·tenant·idempotency key를 결합한다. 동기 판정 API는 짧은 timeout과 idempotency key를 가져야 한다. timeout 시 행동은 요청에 맡기지 않고 관계별 장애 정책에서 결정한다.
+The current executable contract for `POST /v1/events` and `GET /v1/traces/{trace_id}` is in [12 PostgreSQL Ledger API](12-postgresql-ledger-api.md) and [`ledger-api.openapi.yaml`](../schemas/ledger-api.openapi.yaml). Mutations combine the authenticated principal, tenant, and idempotency key. Synchronous decision APIs must have a short timeout and an idempotency key. Behavior on timeout is not left to the request; it is determined by the per-relationship fail policy.
 
 ---
 
-## 17. 통계와 대시보드
+## 17. Statistics and Dashboard
 
-### 17.1 운영 지표
+### 17.1 Operational Metrics
 
-| 지표 | 정의 |
+| Metric | Definition |
 |---|---|
-| 통제 적용률 | 통제를 거친 요청 ÷ 통과했어야 할 요청 |
-| Gateway 우회율 | 대상 시스템 직접 호출 ÷ 전체 호출 |
-| 차단 집행 성공률 | `ACTION_RESULT=COMPLETED` ÷ 차단 계열 판정 |
-| 부분 실행률 | `PARTIALLY_EXECUTED` ÷ 공격 시도 |
-| 판정 지연 | 관계·통제별 p50/p95/p99 |
-| Trace 완전성 | 필수 span을 모두 가진 trace 비율 |
-| Token 회수 전파시간 | revoke 요청부터 최종 audience 무효화까지 |
-| Incident MTTD | 최초 악성 단계부터 최초 탐지까지 |
-| Incident MTTC | 최초 탐지부터 봉쇄 완료까지 |
-| 정책 오탐률 | 라벨된 정상 요청 중 차단·보류 비율 |
-| 비용 방어 효과 | 차단된 예상 비용·실제 절감 비용 |
+| Control coverage rate | Requests that passed through a control ÷ requests that should have |
+| Gateway bypass rate | Direct calls to the target system ÷ total calls |
+| Block enforcement success rate | `ACTION_RESULT=COMPLETED` ÷ block-family decisions |
+| Partial execution rate | `PARTIALLY_EXECUTED` ÷ attack attempts |
+| Decision latency | p50/p95/p99 per relationship/control |
+| Trace completeness | Share of traces with all required spans |
+| Token revocation propagation time | From revoke request to final audience invalidation |
+| Incident MTTD | From the first malicious step to the first detection |
+| Incident MTTC | From first detection to containment complete |
+| Policy false-positive rate | Share of labeled normal requests that were blocked/held |
+| Cost defense effect | Estimated blocked cost / actual cost saved |
 
-### 17.2 분석 SQL 예시
+### 17.2 Analytical SQL Examples
 
 ```sql
--- 탐지는 했지만 실제 차단에 실패한 요청
+-- Requests that were detected but where the actual block failed
 SELECT
     d.interaction_id,
     d.decision,
@@ -933,7 +935,7 @@ WHERE d.decision IN ('BLOCK', 'QUARANTINE', 'KILL')
 ```
 
 ```sql
--- Actor 관계별 위험 이벤트와 차단률
+-- High-risk events and block rate by Actor relationship
 SELECT
     i.relationship_id,
     count(*) FILTER (WHERE d.risk_score >= 80) AS high_risk,
@@ -947,20 +949,20 @@ JOIN interactions i USING (interaction_id)
 GROUP BY i.relationship_id;
 ```
 
-### 17.3 데이터 출처 분리
+### 17.3 Data Source Separation
 
 ```text
-PRODUCTION  실제 빈도·운영 영향·대응시간
-SIMULATION  알려진 공격에 대한 탐지·차단율
-RED_TEAM    예상하지 못한 우회와 미탐
-TEST        통제 장애·회수·복구 실효성
+PRODUCTION  actual frequency, operational impact, response time
+SIMULATION  detection/block rate against known attacks
+RED_TEAM    unanticipated bypasses and missed detections
+TEST        control failure, revocation, and recovery effectiveness
 ```
 
-운영 데이터만으로 탐지율을 계산하지 않는다. 미탐 공격은 운영 로그에 존재하지 않기 때문이다.
+We do not compute the detection rate from production data alone, because undetected attacks do not appear in production logs.
 
 ---
 
-## 18. 배포 구조와 확장 전략
+## 18. Deployment Architecture and Scaling Strategy
 
 ### 18.1 MVP
 
@@ -979,7 +981,7 @@ Agent Service
                └─ Incident/Outcome
 ```
 
-### 18.2 확장
+### 18.2 Scaling
 
 ```text
 Multiple Agent Services
@@ -994,92 +996,92 @@ Kafka-compatible Event Bus
         └─ SIEM/SOAR export
 ```
 
-이벤트량이 커져도 동기 판정 경로가 분석 DB에 의존하면 안 된다. Policy cache와 핵심 allow/deny 규칙은 Gateway 가까이에 두고, 비동기 분석 장애가 정상 요청 처리 전체를 멈추지 않게 한다. 단, 고위험 쓰기는 Audit/Policy 상태가 불명확할 때 fail-closed한다.
+Even as event volume grows, the synchronous decision path must not depend on the analytics DB. Keep the policy cache and core allow/deny rules close to the Gateway, so that an asynchronous analytics failure does not halt normal request processing entirely. However, high-risk writes fail closed whenever Audit/Policy status is unclear.
 
 ---
 
-## 19. 단계별 구현 계획
+## 19. Phased Implementation Plan
 
-### Phase 0 — 기준선과 위협모델 (1주)
+### Phase 0 — Baseline and Threat Model (1 week)
 
-- 서비스의 Actor·Resource·REL·TG 목록 확정
-- 고위험 Tool·외부 행동 목록 작성
-- 데이터 분류와 보존정책 합의
-- 관계별 fail 정책 결정
-- 정상 호출 trace 기준선 정의
+- Finalize the service's Actor/Resource/REL/TG lists
+- Compile a list of high-risk Tools and external actions
+- Agree on data classification and retention policy
+- Decide the fail policy per relationship
+- Define a baseline for normal call traces
 
-**완료 기준:** 모든 고위험 행동이 어떤 Gateway를 통과해야 하는지 소유자가 정해져 있다.
+**Completion criteria:** An owner has determined which Gateway every high-risk action must pass through.
 
-### Phase 1 — Observe MVP (2–3주)
+### Phase 1 — Observe MVP (2–3 weeks)
 
-- 공통 Event Envelope와 SDK 구현
-- REL-01·03·05·07·12 수집
-- PostgreSQL schema와 partition 운영
-- trace 조회 API와 기본 대시보드
-- 원문 마스킹·evidence reference
+- Implement the common Event Envelope and SDK
+- Collect REL-01/03/05/07/12
+- Operate the PostgreSQL schema and partitions
+- Trace query API and a basic dashboard
+- Raw-content masking and evidence references
 
-**완료 기준:** 사용자 요청에서 외부 행동까지 trace가 연결되고 필수 이벤트 누락률을 측정할 수 있다.
+**Completion criteria:** The trace connects from the user request to the external action, and the required-event drop rate can be measured.
 
-### Phase 2 — Shadow Detection (2–3주)
+### Phase 2 — Shadow Detection (2–3 weeks)
 
-- DET-001–012 구현
-- 과거 이벤트 replay와 rule versioning
-- SIMULATION/RED_TEAM dataset 구축
-- 가상 차단 영향과 오탐 측정
+- Implement DET-001–012
+- Historical event replay and rule versioning
+- Build SIMULATION/RED_TEAM datasets
+- Measure hypothetical block impact and false positives
 
-**완료 기준:** 각 규칙에 정상·공격 test case가 있고, 정책 승격 판단 자료가 생성된다.
+**Completion criteria:** Every rule has normal and attack test cases, and material for the policy promotion decision is generated.
 
-### Phase 3 — Selective Enforcement (2–4주)
+### Phase 3 — Selective Enforcement (2–4 weeks)
 
-- cross-tenant RAG, 비신뢰→고위험 Tool, PII→새 목적지 우선 차단
-- HOLD/승인 흐름 구현
-- action result와 outcome 검증
-- RESP-01·02·03·04·08·09 구현
+- Prioritize blocking cross-tenant RAG, untrusted → high-risk Tool, and PII → new destination
+- Implement the HOLD/approval flow
+- Verify action result and outcome
+- Implement RESP-01/02/03/04/08/09
 
-**완료 기준:** 차단 판정뿐 아니라 실제 downstream 부작용 부재가 자동 확인된다.
+**Completion criteria:** Not just the block decision but the actual absence of downstream side effects is automatically confirmed.
 
-### Phase 4 — Multi-Agent·Runtime 확장
+### Phase 4 — Multi-Agent / Runtime Expansion
 
-- A2A Broker와 delegation lineage
-- Memory rollback과 provenance
-- Scheduler·Webhook 서명 검증
-- Sandbox/EDR·SIEM·SOAR 연계
-- ClickHouse·Event Bus 확장
+- A2A Broker and delegation lineage
+- Memory rollback and provenance
+- Scheduler/Webhook signature verification
+- Sandbox/EDR/SIEM/SOAR integration
+- ClickHouse/Event Bus expansion
 
-**완료 기준:** agent tree 전체를 kill하고 토큰 회수가 모든 downstream에 전파됐는지 검증할 수 있다.
+**Completion criteria:** You can kill the entire agent tree and verify that token revocation propagated to every downstream.
 
 ---
 
-## 20. 시험 시나리오와 승인 기준
+## 20. Test Scenarios and Acceptance Criteria
 
-| Test ID | 시나리오 | 기대 결과 |
+| Test ID | Scenario | Expected Result |
 |---|---|---|
-| SIM-001 | 외부 문서의 Prompt Injection이 이메일 Tool 호출 유도 | taint 유지, HOLD/BLOCK |
-| SIM-002 | 다른 tenant의 RAG 문서 검색 | RETRIEVAL_GATEWAY 차단 |
-| SIM-003 | 승인 후 Tool manifest 변경 | Tool quarantine |
-| SIM-004 | 악성 MCP endpoint가 connector에서 shell 실행 유도 | endpoint 차단, workload 격리 |
-| SIM-005 | 위임 토큰을 다른 audience에서 재사용 | 인증 거부, lineage 회수 |
-| SIM-006 | Agent가 새 도메인으로 PII 전송 | egress 차단·Incident 생성 |
-| SIM-007 | Agent 로그만 보내고 Gateway 우회 | BYPASSED 탐지 |
-| SIM-008 | 차단 API 실패 후 Tool 호출 성공 | `BLOCK/FAILED/SUCCEEDED` 조합 탐지 |
-| SIM-009 | Sub-agent 무한 fan-out | budget/circuit breaker 작동 |
-| SIM-010 | Audit Sink 장애 | 고위험 행동 read-only degrade |
+| SIM-001 | Prompt Injection in an external document induces an email Tool call | Taint is preserved, HOLD/BLOCK |
+| SIM-002 | Searching RAG documents belonging to another tenant | RETRIEVAL_GATEWAY blocks |
+| SIM-003 | Tool manifest changes after approval | Tool quarantine |
+| SIM-004 | A malicious MCP endpoint induces shell execution from a connector | Endpoint blocked, workload isolated |
+| SIM-005 | A delegated token is reused with a different audience | Authentication rejected, lineage revoked |
+| SIM-006 | Agent sends PII to a new domain | Egress blocked, Incident created |
+| SIM-007 | Only the Agent log is sent, bypassing the Gateway | BYPASSED detection |
+| SIM-008 | Block API fails, then the Tool call succeeds | `BLOCK/FAILED/SUCCEEDED` combination detected |
+| SIM-009 | Sub-agent infinite fan-out | budget/circuit breaker triggers |
+| SIM-010 | Audit Sink failure | High-risk actions degrade to read-only |
 
-### 20.1 운영 승격 기준 예시
+### 20.1 Example Production Promotion Criteria
 
-- 필수 관계의 통제 적용률 ≥ 99.9%
-- 고위험 trace 완전성 ≥ 99.9%
-- 차단 조치 실행 성공률 ≥ 99.5%
-- 정책 판정 p95가 서비스 SLO 예산 이내
-- 시뮬레이션 공격 차단율 목표 충족
-- 정상 라벨 traffic 오탐률 목표 충족
-- rollback과 정책 비활성화가 정기 훈련에서 성공
+- Control coverage for required relationships ≥ 99.9%
+- High-risk trace completeness ≥ 99.9%
+- Block action execution success rate ≥ 99.5%
+- Policy decision p95 within the service's SLO budget
+- Simulated attack block rate meets target
+- False-positive rate on labeled normal traffic meets target
+- Rollback and policy deactivation succeed in regular drills
 
-수치는 조직의 위험 허용도와 트래픽 기준선으로 최종 조정한다.
+Final numbers are tuned to the organization's risk tolerance and traffic baseline.
 
 ---
 
-## 21. 권장 프로젝트 구조
+## 21. Recommended Project Structure
 
 ```text
 agent-security-plane/
@@ -1113,36 +1115,36 @@ agent-security-plane/
 
 ---
 
-## 22. 다음 설계 단계에서 확정할 사항
+## 22. Items to Finalize in the Next Design Phase
 
-1. 첫 적용 대상 Agent 서비스와 프레임워크
-2. Python·TypeScript 중 우선 SDK
-3. PostgreSQL 버전과 운영 환경
-4. 기존 API Gateway·IAM·SIEM·Object Storage
-5. Tool/MCP 호출 방식과 interception 가능 지점
-6. RAG·Memory 저장소와 tenant 강제 방식
-7. 개인정보·비밀정보 분류 체계
-8. 원문 증거 저장 허용 범위와 보존기간
-9. 자동 차단이 허용되는 행동과 사람 승인이 필요한 행동
-10. 서비스별 latency·availability SLO
+1. The first Agent service and framework to apply this to
+2. Which SDK to prioritize, Python or TypeScript
+3. PostgreSQL version and operating environment
+4. Existing API Gateway/IAM/SIEM/Object Storage
+5. Tool/MCP call mechanism and where interception is possible
+6. RAG/Memory stores and how tenant enforcement is applied
+7. Personal-data/secret classification scheme
+8. Scope allowed for storing raw evidence and its retention period
+9. Actions where automatic blocking is allowed vs. actions requiring human approval
+10. Per-service latency/availability SLOs
 
-이 항목들이 정해지면 다음 산출물로 분리한다.
+Once these items are decided, they are split into the following deliverables.
 
-- `event-envelope.schema.json`과 이벤트별 JSON Schema
-- 실행 가능한 PostgreSQL migration
-- OpenAPI 명세
-- DET-001–012 규칙 파일과 테스트 fixture
+- `event-envelope.schema.json` and per-event JSON Schemas
+- Executable PostgreSQL migrations
+- OpenAPI specification
+- DET-001–012 rule files and test fixtures
 - Gateway/SDK PoC
-- 운영 대시보드 요구사항
+- Operations dashboard requirements
 
 ---
 
-## 23. 최종 판단
+## 23. Final Assessment
 
-이 보안 해자의 핵심은 이벤트를 많이 모으는 것이 아니라 다음 세 질문에 항상 답할 수 있게 만드는 것이다.
+The essence of this security moat is not collecting a large number of events, but always being able to answer the following three questions.
 
-1. **누가 어떤 관계를 통해 무엇에 접근했는가?**
-2. **어떤 통제가 왜 허용·차단했고 그 조치가 실제 실행됐는가?**
-3. **호출체인 전체에서 공격이 최종적으로 차단됐는가, 일부라도 실행됐는가?**
+1. **Who accessed what, through which relationship?**
+2. **Which control allowed or blocked it, why, and was that action actually executed?**
+3. **Across the entire call chain, was the attack ultimately blocked, or did some part of it execute?**
 
-따라서 구현 우선순위는 대시보드보다 **관계별 Gateway, 공통 Event Envelope, trace 상관키, 판정–조치–결과 분리**에 둔다. 이 네 요소가 먼저 성립해야 이후 통계·탐지·자동대응이 신뢰할 수 있는 데이터 위에서 동작한다.
+Implementation priority is therefore placed on **per-relationship Gateways, a common Event Envelope, trace correlation keys, and separating decision–action–outcome**, ahead of dashboards. Only once these four elements are established can subsequent statistics, detection, and automated response operate on trustworthy data.

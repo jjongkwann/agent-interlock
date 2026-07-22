@@ -1,27 +1,29 @@
 ---
-title: Agent Interlock 개발자 프레임워크 및 그래프 설계
+title: Agent Interlock Developer Framework and Graph Design
 date: 2026-07-15
 version: 1.0
 status: planning
 ---
 
-# Agent Interlock 개발자 프레임워크 및 그래프 설계 v1
+# Agent Interlock Developer Framework and Graph Design v1
 
-## 1. 목적
+> 한국어 원문: [02-developer-framework-design.ko.md](02-developer-framework-design.ko.md)
 
-Agent Interlock는 보안팀이 운영 로그를 사후 분석하는 제품에 머물지 않는다. 개발자가 Agent, Tool, RAG, Memory, Scheduler, External Service를 만들 때부터 다음 내용을 선언하도록 한다.
+## 1. Purpose
 
-- 이 Actor는 누구인가
-- 무엇을 할 수 있는가
-- 어떤 데이터를 읽고 쓸 수 있는가
-- 누구와 어떤 관계로 연결될 수 있는가
-- 어떤 행동이 외부 부작용을 만드는가
-- 어떤 조건에서 승인·차단·격리가 필요한가
-- 장애 시 fail-open, fail-closed, read-only 중 무엇을 선택하는가
+Agent Interlock is not just a product for security teams to analyze operational logs after the fact. It requires developers to declare the following from the moment they build an Agent, Tool, RAG, Memory, Scheduler, or External Service:
 
-Runtime은 이 선언을 실제 호출에 강제하고, Ledger는 판정과 결과를 기록하며, Graph는 선언된 관계와 실제 실행의 차이를 보여준다.
+- Who is this Actor?
+- What can it do?
+- What data can it read and write?
+- Who can it connect to, and in what relationship?
+- Which actions produce external side effects?
+- Under what conditions is approval, blocking, or quarantine required?
+- On failure, which of fail-open, fail-closed, or read-only should be chosen?
 
-## 2. 개발자 경험
+The Runtime enforces this declaration against actual calls, the Ledger records the verdict and outcome, and the Graph shows the gap between the declared relationships and actual execution.
+
+## 2. Developer Experience
 
 ```mermaid
 flowchart LR
@@ -35,7 +37,7 @@ flowchart LR
     LEDGER --> GRAPH["Interlock Graph"]
 ```
 
-개발자가 수행할 핵심 작업은 `define`, `wrap`, `connect` 세 가지다.
+The core tasks developers perform are three: `define`, `wrap`, and `connect`.
 
 ```typescript
 const supportAgent = interlock.defineActor({
@@ -72,35 +74,35 @@ supportAgent.connect(emailTool, {
 
 ## 3. ActorSpec
 
-### 3.1 필수 필드
+### 3.1 Required Fields
 
-| 필드 | 설명 |
+| Field | Description |
 |---|---|
-| `id` | 환경 전체에서 안정적인 Actor ID |
-| `type` | USER, AGENT, SUBAGENT, TOOL, RAG, MEMORY, SCHEDULER, EXTERNAL 등 |
-| `owner` | 운영·사고대응 책임 팀 |
-| `identity` | workload identity 또는 인증 subject |
-| `capabilities` | 수행 가능한 행동 |
-| `dataAccess` | 읽기·쓰기 가능한 데이터 등급 |
-| `sideEffects` | 외부 쓰기, 삭제, 송금, 권한 변경 등 |
-| `inputSchema` | 허용 입력 구조 |
-| `outputSchema` | 허용 출력 구조 |
+| `id` | Actor ID stable across the entire environment |
+| `type` | USER, AGENT, SUBAGENT, TOOL, RAG, MEMORY, SCHEDULER, EXTERNAL, etc. |
+| `owner` | Team responsible for operations and incident response |
+| `identity` | Workload identity or authentication subject |
+| `capabilities` | Actions it can perform |
+| `dataAccess` | Data classes it can read and write |
+| `sideEffects` | External writes, deletions, payments, permission changes, etc. |
+| `inputSchema` | Allowed input structure |
+| `outputSchema` | Allowed output structure |
 | `tenantMode` | REQUIRED, OPTIONAL, GLOBAL |
 | `failureMode` | FAIL_OPEN, FAIL_CLOSED, DEGRADE_READ_ONLY |
 
-### 3.2 선택 필드
+### 3.2 Optional Fields
 
-- 허용 모델과 Tool
-- credential scope와 audience
-- 호출·token·비용·시간 예산
-- 동시 실행과 재시도 한도
-- 위임 가능 여부와 최대 깊이
-- 원문 증거 보관 여부
-- 데이터 보존기간
-- heartbeat와 health SLO
-- 배포 artifact digest와 provenance
+- Allowed models and Tools
+- credential scope and audience
+- Call, token, cost, and time budgets
+- Concurrency and retry limits
+- Whether delegation is allowed and the maximum depth
+- Whether to retain raw evidence
+- Data retention period
+- heartbeat and health SLO
+- Deployment artifact digest and provenance
 
-### 3.3 Manifest 표현
+### 3.3 Manifest Representation
 
 ```yaml
 apiVersion: interlock.dev/v1
@@ -126,34 +128,34 @@ spec:
 
 ## 4. ActorGuard
 
-ActorGuard는 기존 비즈니스 로직의 앞뒤에서 다음 처리를 수행한다.
+ActorGuard performs the following processing before and after the existing business logic:
 
 ```text
-입력 수신
-→ 호출 Actor 인증
-→ tenant·relationship 검증
-→ schema·민감정보·taint 검사
-→ LinkPolicy 판정
+Receive input
+→ Authenticate calling Actor
+→ Validate tenant/relationship
+→ Check schema, sensitive data, taint
+→ LinkPolicy verdict
 → ALLOW/BLOCK/HOLD/SANITIZE
-→ 원래 Actor 실행
-→ 출력·부작용 검사
-→ Action Result·Security Outcome 기록
+→ Execute the original Actor
+→ Check output and side effects
+→ Record Action Result and Security Outcome
 ```
 
-### 4.1 지원 형태
+### 4.1 Supported Forms
 
-| 형태 | 대상 | 특징 |
+| Form | Target | Characteristics |
 |---|---|---|
-| In-process SDK | 직접 개발하는 Agent·Tool | 가장 풍부한 내부 단계 관측 |
-| Framework Adapter | LangGraph 등 Agent runtime | 낮은 도입 비용 |
-| Sidecar Proxy | 수정하기 어려운 서비스 | 네트워크 경계 관측·차단 |
-| Gateway | MCP, A2A, RAG, Egress | 중앙 정책과 강제력 |
+| In-process SDK | Directly developed Agents/Tools | Richest observation of internal steps |
+| Framework Adapter | Agent runtimes such as LangGraph | Low adoption cost |
+| Sidecar Proxy | Services that are hard to modify | Observation and blocking at the network boundary |
+| Gateway | MCP, A2A, RAG, Egress | Centralized policy and enforcement |
 
-SDK가 없어도 Proxy로 통신은 관측할 수 있지만, plan step·memory provenance·sub-agent tree 같은 의미는 SDK가 있어야 정확히 수집할 수 있다.
+Even without an SDK, a Proxy can observe communication, but semantics such as plan steps, memory provenance, and sub-agent trees can only be captured accurately with an SDK.
 
-## 5. InterlockLink와 LinkPolicy
+## 5. InterlockLink and LinkPolicy
 
-보안 정책은 Actor 노드가 아니라 Actor 사이 Edge에 배치한다.
+Security policy is placed on the Edges between Actors, not on the Actor nodes.
 
 ```mermaid
 flowchart LR
@@ -163,24 +165,24 @@ flowchart LR
     T -->|"SENDS<br/>EgressPolicy"| E["Customer"]
 ```
 
-### 5.1 LinkPolicy 필드
+### 5.1 LinkPolicy Fields
 
-| 영역 | 옵션 |
+| Area | Options |
 |---|---|
-| 신원 | source/target type, workload ID, tenant |
-| 행동 | 허용 operation·capability·purpose |
-| 데이터 | 허용 등급, taint 전달, 마스킹 |
-| 목적지 | domain, account, region, network zone |
-| 위임 | actor/audience binding, hop, depth, TTL |
-| 부작용 | read/write/delete/payment/permission |
-| 승인 | 위험조건, 승인자, 만료, 2인 승인 |
-| 예산 | 호출·token·비용·시간·fan-out |
-| 증거 | metadata/hash/redacted/raw-encrypted |
-| 장애 | fail policy, timeout, fallback |
+| Identity | source/target type, workload ID, tenant |
+| Action | Allowed operation, capability, purpose |
+| Data | Allowed class, taint propagation, masking |
+| Destination | domain, account, region, network zone |
+| Delegation | actor/audience binding, hop, depth, TTL |
+| Side effect | read/write/delete/payment/permission |
+| Approval | Risk condition, approver, expiration, two-person approval |
+| Budget | Calls, tokens, cost, time, fan-out |
+| Evidence | metadata/hash/redacted/raw-encrypted |
+| Failure | fail policy, timeout, fallback |
 
 ## 6. Interlock Runtime
 
-Runtime은 Policy Decision Point와 Policy Enforcement Point를 분리한다.
+The Runtime separates the Policy Decision Point from the Policy Enforcement Point.
 
 ```mermaid
 sequenceDiagram
@@ -204,54 +206,54 @@ sequenceDiagram
     end
 ```
 
-정책 엔진 장애 시의 동작은 Runtime이 임의로 선택하지 않고 LinkPolicy의 `failureMode`를 따른다.
+The behavior when the policy engine fails is not chosen arbitrarily by the Runtime; it follows the `failureMode` in the LinkPolicy.
 
 ## 7. Interlock Ledger
 
-Ledger는 다음 이벤트를 분리한다.
+The Ledger separates the following events:
 
-| 이벤트 | 의미 |
+| Event | Meaning |
 |---|---|
-| Interaction Requested | 무엇을 요청했는가 |
-| Data Flow Observed | 어떤 데이터가 이동했는가 |
-| Control Evaluated | 어떤 통제가 무엇을 판정했는가 |
-| Action Executed | 차단·격리·회수가 실행됐는가 |
-| Interaction Completed | 대상 호출이 완료됐는가 |
-| Security Outcome Set | 공격이 최종 성공했는가 |
+| Interaction Requested | What was requested |
+| Data Flow Observed | What data moved |
+| Control Evaluated | Which control rendered what verdict |
+| Action Executed | Whether blocking, quarantine, or revocation was executed |
+| Interaction Completed | Whether the target call completed |
+| Security Outcome Set | Whether the attack ultimately succeeded |
 
-`decision=BLOCK`, `action_result=FAILED`, `security_outcome=SUCCEEDED`를 별개 값으로 유지해야 탐지는 했지만 막지 못한 사고를 찾을 수 있다.
+Keeping `decision=BLOCK`, `action_result=FAILED`, and `security_outcome=SUCCEEDED` as separate values makes it possible to find incidents that were detected but not actually stopped.
 
 ## 8. Interlock Graph
 
-### 8.1 정적 설계 그래프
+### 8.1 Static Design Graph
 
-ActorSpec과 LinkPolicy에서 생성한다.
+Generated from ActorSpec and LinkPolicy.
 
-- 등록된 Actor와 owner
-- 선언된 연결과 금지된 연결
-- capability와 데이터 접근 범위
-- 승인·예산·실패 정책
-- 통제가 없는 Edge
-- 과도한 권한과 순환 위임
-- 단일 장애점
+- Registered Actors and owners
+- Declared connections and forbidden connections
+- capability and data access scope
+- Approval, budget, and failure policy
+- Edges without controls
+- Excessive privilege and circular delegation
+- Single points of failure
 
-### 8.2 런타임 실행 그래프
+### 8.2 Runtime Execution Graph
 
-Ledger의 trace에서 생성한다.
+Generated from the Ledger's trace.
 
-- 실제 호출 순서와 latency
+- Actual call order and latency
 - Agent → Sub-agent fan-out
-- Tool·RAG·Memory 접근
-- 데이터 민감도와 taint 전파
-- 정책 판정과 차단 지점
-- 부분 실행과 외부 부작용
-- token·비용·재시도
+- Tool, RAG, Memory access
+- Data sensitivity and taint propagation
+- Policy verdicts and blocking points
+- Partial execution and external side effects
+- token, cost, retries
 
-### 8.3 공격 경로 그래프
+### 8.3 Attack Path Graph
 
 ```mermaid
 flowchart LR
-    D["악성 문서"] -->|"tainted"| R["RAG"]
+    D["Malicious Document"] -->|"tainted"| R["RAG"]
     R --> A["Agent"]
     A -->|"PII READ"| C["CRM Tool"]
     C --> A
@@ -263,96 +265,95 @@ flowchart LR
     class X blocked
 ```
 
-Edge를 선택하면 다음 정보를 제공한다.
+Selecting an Edge provides the following information:
 
 - source/target Actor
-- relationship과 operation
-- 전달 데이터 등급과 크기
-- 적용 Policy와 버전
-- decision·reason code
-- action result·security outcome
-- 관련 trace·Incident·TG·ATLAS·ASI
+- relationship and operation
+- Transferred data class and size
+- Applied Policy and version
+- decision, reason code
+- action result, security outcome
+- Related trace, Incident, TG, ATLAS, ASI
 
-### 8.4 선언과 실행의 차이
+### 8.4 Gap Between Declaration and Execution
 
-가장 중요한 탐지는 “실제 호출이 선언 그래프에 존재하는가”이다.
+The most important detection is whether the actual call exists in the declared graph.
 
 ```text
-Declared Edge 없음 + Runtime Call 있음  → UNDECLARED_RELATIONSHIP
+No Declared Edge + Runtime Call exists   → UNDECLARED_RELATIONSHIP
 Declared Tool digest ≠ Runtime digest    → ACTOR_DRIFT
-Declared data class 초과                 → DATA_SCOPE_VIOLATION
-Declared budget 초과                     → BUDGET_VIOLATION
-Gateway event 없음 + Target event 있음   → CONTROL_BYPASS
+Declared data class exceeded             → DATA_SCOPE_VIOLATION
+Declared budget exceeded                 → BUDGET_VIOLATION
+No Gateway event + Target event exists   → CONTROL_BYPASS
 ```
 
-## 9. Console 화면
+## 9. Console Screens
 
 1. **Inventory:** Actor, owner, identity, capability, health
-2. **Design Graph:** 선언 관계와 통제 공백
-3. **Live Graph:** 현재 trace와 실시간 판정
-4. **Incidents:** 공격 경로, 영향 Actor, 대응 상태
-5. **Policies:** LinkPolicy 작성·시뮬레이션·승격
-6. **Controls:** Gateway·ActorGuard 상태와 우회율
-7. **Data Flows:** 민감 데이터 이동과 목적지
-8. **Tests:** red-team·simulation 결과와 회귀
+2. **Design Graph:** Declared relationships and control gaps
+3. **Live Graph:** Current trace and real-time verdicts
+4. **Incidents:** Attack path, affected Actors, response status
+5. **Policies:** LinkPolicy authoring, simulation, promotion
+6. **Controls:** Gateway/ActorGuard status and bypass rate
+7. **Data Flows:** Sensitive data movement and destinations
+8. **Tests:** red-team/simulation results and regressions
 
-## 10. 구현 우선순위
+## 10. Implementation Priority
 
-### 1단계 — SDK 최소 기능
+### Phase 1 — Minimal SDK Functionality
 
-- TypeScript 또는 Python ActorSpec
-- `wrap()`과 `connect()`
-- JSON Schema 입출력 검증
-- OpenTelemetry trace 연동
-- Event Envelope 생성
+- TypeScript or Python ActorSpec
+- `wrap()` and `connect()`
+- JSON Schema input/output validation
+- OpenTelemetry trace integration
+- Event Envelope generation
 
-### 2단계 — Runtime과 Ledger
+### Phase 2 — Runtime and Ledger
 
 - Tool/RAG/Egress Gateway
 - OBSERVE·SHADOW·ENFORCE
-- PostgreSQL 이벤트 저장
-- 판정–조치–결과 분리
+- PostgreSQL event storage
+- Separation of verdict, action, and outcome
 
-### 3단계 — Graph
+### Phase 3 — Graph
 
-- ActorSpec 기반 정적 그래프
-- trace 기반 런타임 그래프
-- 미선언 Edge와 drift 탐지
-- Incident 공격 경로 표시
+- ActorSpec-based static graph
+- trace-based runtime graph
+- Undeclared Edge and drift detection
+- Incident attack path display
 
-### 4단계 — 다중 Agent 확장
+### Phase 4 — Multi-Agent Expansion
 
 - A2A Broker
 - delegation lineage
-- Memory provenance·rollback
-- Scheduler·Sandbox
-- 중앙 Console과 조직 단위 policy
+- Memory provenance/rollback
+- Scheduler/Sandbox
+- Central Console and org-level policy
 
-## 11. MVP 완료 기준
+## 11. MVP Completion Criteria
 
-- 개발자가 Actor 두 개를 선언하고 `connect()`로 관계를 만들 수 있다.
-- 기존 Tool을 `wrap()`해 호출 전 정책을 집행할 수 있다.
-- 모든 호출에 trace와 Interaction Event가 생성된다.
-- 선언되지 않은 Actor 관계를 탐지한다.
-- 비신뢰 입력이 외부 쓰기 Tool로 전달될 때 HOLD/BLOCK한다.
-- 정적 설계 그래프와 단일 trace 실행 그래프를 표시한다.
-- 차단 판정과 실제 집행 결과를 별도로 조회한다.
-- Runtime 장애 시 관계별 failureMode가 동작한다.
+- A developer can declare two Actors and create a relationship with `connect()`.
+- An existing Tool can be `wrap()`ped to enforce policy before the call.
+- Every call generates a trace and an Interaction Event.
+- Undeclared Actor relationships are detected.
+- HOLD/BLOCK is applied when untrusted input is passed to an external-write Tool.
+- The static design graph and a single-trace execution graph are displayed.
+- Blocking verdicts and actual enforcement results can be queried separately.
+- On Runtime failure, the per-relationship failureMode takes effect.
 
-## 12. 제품 명명 체계
+## 12. Product Naming Scheme
 
 ```text
-제품              Agent Interlock
-개발자 SDK         Interlock SDK
-Actor 선언         ActorSpec
-보안 Wrapper       ActorGuard
-관계               InterlockLink
-관계 정책          LinkPolicy
-실행 계층          Interlock Runtime
-이벤트 원장        Interlock Ledger
-그래프              Interlock Graph
-운영 UI            Interlock Console
+Product                Agent Interlock
+Developer SDK          Interlock SDK
+Actor Declaration      ActorSpec
+Security Wrapper       ActorGuard
+Relationship           InterlockLink
+Relationship Policy    LinkPolicy
+Execution Layer        Interlock Runtime
+Event Ledger           Interlock Ledger
+Graph                  Interlock Graph
+Operations UI          Interlock Console
 ```
 
-공식 설명은 **“AI Agent 상호작용 보안 프레임워크”**로 사용한다.
-
+The official description used is **“AI Agent Interaction Security Framework.”**

@@ -1,15 +1,17 @@
 ---
-title: Agent Interlock Security Architecture Studio 설계
+title: Agent Interlock Security Architecture Studio Design
 date: 2026-07-20
 version: 0.3.0
 status: active
 ---
 
-# Agent Interlock Security Architecture Studio 설계
+# Agent Interlock Security Architecture Studio Design
 
-## 1. 목표
+> 한국어 원문: [07-security-architecture-studio-design.ko.md](07-security-architecture-studio-design.ko.md)
 
-Security Architecture Studio는 Agent 시스템을 구현하기 전에 User, Agent, Sub-Agent, Scheduler, RAG, Memory, Tool, External을 정의하고 관계별 보안과 task 실행 순서를 선언하는 Architecture-as-Code 계층이다. Design에는 Actor topology와 Task workflow 두 surface가 있으며 JSON Architecture manifest가 source of truth다.
+## 1. Goals
+
+The Security Architecture Studio is an Architecture-as-Code layer that, before an Agent system is implemented, defines the User, Agent, Sub-Agent, Scheduler, RAG, Memory, Tool, and External actors and declares the security of each relationship and the task execution order. Design has two surfaces — Actor topology and Task workflow — and the JSON Architecture manifest is the source of truth.
 
 ```text
 Actor topology + Task workflow → Architecture manifest → Security lint → Compiler
@@ -17,22 +19,22 @@ Actor topology + Task workflow → Architecture manifest → Security lint → C
        → Declared/Observed Graph diff
 ```
 
-UI에서 프로덕션 정책을 직접 변경하지 않는다. 변경은 versioned manifest와 diff로 만들고 review, simulation, approval, rollback을 거쳐 배포한다.
+The UI never changes production policy directly. Changes are made as a versioned manifest and diff, then deployed through review, simulation, approval, and rollback.
 
-## 2. 네 가지 그래프
+## 2. The Four Graphs
 
-| 그래프 | 생성 근거 | 용도 |
+| Graph | Derived From | Purpose |
 |---|---|---|
-| Design Graph | Architecture manifest | 의도한 Actor·관계·보안 설계 |
-| Task Workflow | Architecture manifest | coordinator·task·dependency·transport·approval·budget 설계 |
-| Compiled Control Graph | ActorSpec·LinkPolicy·adapter 설정 | 실제 배치할 집행점 확인 |
-| Runtime Graph | Ledger·OpenTelemetry | 실제 호출과 우회·drift 확인 |
+| Design Graph | Architecture manifest | Intended Actor · relationship · security design |
+| Task Workflow | Architecture manifest | coordinator · task · dependency · transport · approval · budget design |
+| Compiled Control Graph | ActorSpec · LinkPolicy · adapter configuration | Confirms the enforcement points to actually deploy |
+| Runtime Graph | Ledger · OpenTelemetry | Confirms actual calls and bypass/drift |
 
-Runtime에서 발견된 Edge를 Design Graph에 자동 승인하지 않는다. 먼저 `UNDECLARED_RELATIONSHIP`으로 처리하고 운영자 승인을 거쳐 manifest revision으로 반영한다.
+An Edge discovered at runtime is never auto-approved into the Design Graph. It is first flagged as `UNDECLARED_RELATIONSHIP`, and only after operator approval is it folded into a manifest revision.
 
-## 3. 보안 통제 계약
+## 3. Security Control Contract
 
-모든 Control은 네 축을 가진다.
+Every Control has four axes.
 
 ```yaml
 id: delegation-binding
@@ -44,27 +46,27 @@ assurance: ENFORCED
 
 ### 3.1 Objective
 
-- `PREVENT`: 실행 전에 차단
-- `DETECT`: 실행 전후 위반 탐지
+- `PREVENT`: blocks before execution
+- `DETECT`: detects violations before or after execution
 - `RESPOND`: revoke, kill, quarantine, compensation
-- `EVIDENCE`: 판정·집행·결과 증거 보존
+- `EVIDENCE`: preserves verdict · enforcement · result evidence
 
 ### 3.2 Assurance
 
-- `DECLARED`: 설계에만 존재
-- `OBSERVED`: 실행 사실을 관측
-- `ENFORCED`: 집행점이 실행 전에 강제
-- `RECONCILED`: downstream receipt까지 대사
+- `DECLARED`: exists only in the design
+- `OBSERVED`: observes that execution occurred
+- `ENFORCED`: an enforcement point enforces it before execution
+- `RECONCILED`: reconciled all the way to the downstream receipt
 
-Canvas는 assurance를 색과 배지로 표시한다. `DECLARED`를 `ENFORCED`처럼 보이게 표시해서는 안 된다.
+The Canvas displays assurance with color and a badge. `DECLARED` must never be displayed in a way that makes it look like `ENFORCED`.
 
 ### 3.3 Enforcement Point
 
-`SANDBOX`는 REL-05 로컬 Tool의 filesystem·network·child-process 격리 profile과 attestation을 조작하는 집행점이다. `MCP_GATEWAY`의 definition/call 정책과 별도 Control로 두어 프로토콜 허용과 OS process 격리를 각각 표시한다.
+`SANDBOX` is the enforcement point that operates the filesystem · network · child-process isolation profile and attestation for the REL-05 local Tool. It is kept as a separate Control from the `MCP_GATEWAY` definition/call policy so that protocol permission and OS process isolation are each shown independently.
 
 ## 4. Dynamic Edge Contract
 
-Sub-Agent가 실행 중 생성되면 모든 instance ID를 설계 시점에 알 수 없다. Dynamic Edge는 허용되는 target 집합을 계약으로 선언한다.
+When a Sub-Agent is created at runtime, not every instance ID can be known at design time. A Dynamic Edge declares the allowed target set as a contract.
 
 ```yaml
 dynamic: true
@@ -80,33 +82,33 @@ policy:
   requireResource: true
 ```
 
-실제 Sub-Agent instance는 admission 단계에서 selector와 Agent identity를 확인하고, 실행 단계에서 delegation token과 depth·budget을 다시 검사한다.
+At admission, the actual Sub-Agent instance is checked against the selector and Agent identity; at execution, the delegation token and depth · budget are checked again.
 
-## 5. 현재 Security lint
+## 5. Current Security Lint
 
-- 관계별 필수 집행점 누락
-- Control 없는 관계
-- audit evidence 누락
-- `DECLARED` only 통제
-- 실행 후 `PREVENT`로 잘못 표시한 통제
-- D5 credential data 허용
-- 고위험 Edge의 OBSERVE only·FAIL_OPEN
-- RAG tenant optional
-- Tool digest pin 누락
-- A2A actor/audience/resource binding 약화
-- Actor보다 큰 delegation depth
+- Missing required enforcement point per relationship
+- A relationship with no Control
+- Missing audit evidence
+- `DECLARED`-only control
+- A post-execution control mislabeled as `PREVENT`
+- D5 credential data allowed
+- OBSERVE-only · FAIL_OPEN on a high-risk Edge
+- RAG tenant left optional
+- Missing Tool digest pin
+- Weakened A2A actor/audience/resource binding
+- Delegation depth greater than the Actor's
 - cross-tenant dynamic delegation
-- capability가 비어 있거나 ID pattern이 무제한인 dynamic delegation
+- Dynamic delegation with an empty capability or an unbounded ID pattern
 - delegation cycle
-- Egress 목적지 allowlist·명시 목적지 누락
-- Actor의 정확한 Trust Zone 소속 누락
-- cross-zone Edge의 방향성 Trust Boundary·enforcement·data contract 누락
-- A2A boundary의 identity·tenant binding·fail-closed 누락
-- workflow task의 transport Edge·acceptance criteria·고위험 승인·DAG·budget 누락
+- Missing egress destination allowlist · explicit destination
+- Missing exact Trust Zone membership for the Actor
+- Missing directional Trust Boundary · enforcement · data contract on a cross-zone Edge
+- Missing identity · tenant binding · fail-closed on an A2A boundary
+- Missing transport Edge · acceptance criteria · high-risk approval · DAG · budget on a workflow task
 
-CRITICAL finding이 있으면 compiler는 ActorSpec·LinkPolicy 생성을 거부한다.
+If there is a CRITICAL finding, the compiler refuses to generate ActorSpec/LinkPolicy.
 
-## 6. 실행 방법
+## 6. How to Run
 
 ```bash
 PYTHONPATH=src python3 -m agent_interlock architecture lint \
@@ -119,34 +121,34 @@ PYTHONPATH=src python3 -m agent_interlock architecture graph \
   examples/secure_multi_agent_architecture.json
 ```
 
-JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_interlock/architecture.py`를 기준으로 한다.
+The JSON contract is authoritative in `schemas/architecture.schema.json`, and the Python implementation is authoritative in `src/agent_interlock/architecture.py`.
 
-## 7. 현재 Studio 구현
+## 7. Current Studio Implementation
 
-`studio/`에는 로컬에서 실행할 수 있는 Canvas MVP가 포함되어 있다.
+`studio/` contains a Canvas MVP that can be run locally.
 
-- User, Agent, Sub-Agent, Scheduler, RAG, Tool, Memory, External 박스와 Manifest에 저장되는 INTERNAL/EXTERNAL trust zone
-- Trust zone 추가·선택·이름/분류/설명 편집·이동·크기 조절과 `trustZoneId` 기반 Actor 소속 관리
-- Zone 이동 시 소속 Actor 동반 이동, Actor의 Zone 간 drag/drop·Inspector 재배치, 소속 Actor 기준 Zone 맞춤
-- source zone→target zone 방향성 Trust Boundary 생성·선택·편집과 cross-zone Edge의 `boundaryId` 결합
-- Boundary별 enforcement point, relationship/data 계약, identity·tenant binding, payload limit, mode/failure 편집
-- 박스 추가·이동, 선택한 박스 간 Edge 생성
-- Edge별 OBSERVE/SHADOW/ENFORCE, failure mode, data class, 승인 조건 편집
-- Dynamic Sub-Agent의 same-tenant와 delegation depth 편집
-- Control별 DECLARED/OBSERVED/ENFORCED/RECONCILED 변경
-- Tool definition digest, External domain allowlist, Actor tenant/delegation boundary 편집
-- 위험한 D5, FAIL_OPEN, OBSERVE-only, 미고정 Tool, 무제한 Egress 등의 즉시 finding
-- Python compiler와 같은 `interlock.dev/v1alpha1` manifest 다운로드
-- Ledger·OTLP JSON import와 실제 Runtime Graph 생성
-- 미선언 관계, unobserved Design Edge, control bypass를 분리한 Drift 화면
-- Ledger interaction 통계 화면(오프라인 import + read-only Live Attach, data source·mode·관계·Actor·정책·사유별 집계)
-- CLI `architecture compile --shadow`의 CRITICAL review gate·전 Edge SHADOW 강제·안정적 bundle digest
-- manifest 기반 Python SDK skeleton·보안테스트 생성
-- Ed25519 2인 승인 기반 propose→promote→과거 active bundle rollback CLI와 Control Plane 연동
-- REL-07의 source Tool·External `allowedDomains`·LinkPolicy를 tenant/artifact/provenance/sandbox-bound egress 정책으로 compile하는 runtime adapter
-- Canvas에 포인터가 있을 때 일반 wheel과 macOS `Command + =/-`, Windows `Ctrl + =/-`로 graph만 확대/축소하며 브라우저 페이지 zoom과 분리
-- Design 내부 `Actor topology`/`Task workflow` 전환과 A2A/MCP/LOCAL/HUMAN task palette
-- Task별 source/target, dependency, data, acceptance, retry, timeout, on-failure, approval 편집과 workflow budget 설정
+- User, Agent, Sub-Agent, Scheduler, RAG, Tool, Memory, and External boxes, plus INTERNAL/EXTERNAL trust zones stored in the manifest
+- Trust zone add · select · name/classification/description editing · move · resize, and `trustZoneId`-based Actor membership management
+- Member Actors move together when a Zone moves, Actor drag/drop between Zones · Inspector reassignment, and Zone fitting based on member Actors
+- Creating · selecting · editing a directional source-zone→target-zone Trust Boundary, and binding cross-zone Edges to a `boundaryId`
+- Editing per-Boundary enforcement point, relationship/data contract, identity · tenant binding, payload limit, and mode/failure
+- Adding/moving boxes, creating Edges between selected boxes
+- Editing per-Edge OBSERVE/SHADOW/ENFORCE, failure mode, data class, and approval condition
+- Editing same-tenant and delegation depth for Dynamic Sub-Agents
+- Changing DECLARED/OBSERVED/ENFORCED/RECONCILED per Control
+- Editing Tool definition digest, External domain allowlist, and Actor tenant/delegation boundary
+- Immediate findings for dangerous D5, FAIL_OPEN, OBSERVE-only, unpinned Tools, unbounded Egress, and the like
+- Downloading the same `interlock.dev/v1alpha1` manifest the Python compiler uses
+- Ledger · OTLP JSON import and real Runtime Graph generation
+- A Drift view that separates undeclared relationships, unobserved Design Edges, and control bypasses
+- A Ledger interaction statistics view (offline import + read-only Live Attach, aggregated by data source · mode · relationship · Actor · policy · reason)
+- The CLI `architecture compile --shadow`'s CRITICAL review gate · all-Edge SHADOW enforcement · stable bundle digest
+- Manifest-based Python SDK skeleton · security-test generation
+- An Ed25519 two-person-approval propose→promote→rollback-to-a-past-active-bundle CLI, integrated with the Control Plane
+- A runtime adapter that compiles REL-07's source Tool/External `allowedDomains`/LinkPolicy into a tenant/artifact/provenance/sandbox-bound egress policy
+- Zooming only the graph — separate from browser page zoom — via the regular wheel and macOS `Command + =/-`/Windows `Ctrl + =/-` while the pointer is over the Canvas
+- Switching between `Actor topology`/`Task workflow` within Design, and an A2A/MCP/LOCAL/HUMAN task palette
+- Editing per-Task source/target, dependency, data, acceptance, retry, timeout, on-failure, and approval, plus workflow budget configuration
 
 ```bash
 cd studio
@@ -154,15 +156,15 @@ npm install
 npm run dev
 ```
 
-다운로드한 JSON은 배포 입력이 아니라 draft다. root CLI의 `lint`와 `compile`을 통과한 뒤 review와 SHADOW 검증을 거쳐야 한다.
+The downloaded JSON is a draft, not a deployment input. It must pass the root CLI's `lint` and `compile`, then go through review and SHADOW verification.
 
-## 8. 다음 단계
+## 8. Next Steps
 
-1. 원격 GitHub/GitLab PR review와 hosted deploy 연결
-2. Python 외 framework별 skeleton generator
-3. OTLP/gRPC Collector와 trace 운영 저장소
-4. A2A SSE streaming·push notification과 signed Agent Card admission
-5. durable A2A task/workflow run store와 분산 scheduler
-6. 대용량 통계 사전집계와 지속형 pending approval store
+1. Remote GitHub/GitLab PR review and hosted-deploy integration
+2. Skeleton generators for frameworks other than Python
+3. OTLP/gRPC Collector and a production trace store
+4. A2A SSE streaming · push notification and signed Agent Card admission
+5. A durable A2A task/workflow run store and a distributed scheduler
+6. Large-scale statistics pre-aggregation and a persistent pending-approval store
 
-Trust Boundary부터 A2A Broker와 Task workflow 실행까지의 전체 계약은 [13 A2A 오케스트레이션 플랫폼](13-a2a-orchestration-platform.md)을 따른다.
+The full contract from Trust Boundary through A2A Broker and Task workflow execution follows [13 A2A Orchestration Platform](13-a2a-orchestration-platform.md).

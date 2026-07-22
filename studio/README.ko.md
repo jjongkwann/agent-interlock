@@ -1,6 +1,6 @@
 # Agent Interlock Security Architecture Studio
 
-> 한국어 원문: [README.ko.md](README.ko.md)
+> English version: [README.md](README.md)
 
 Local visual editor for Agent Interlock Architecture-as-Code manifests. It lets you add and move actor boxes, connect trust boundaries, change link policy and control assurance, import Ledger or OTLP JSON runtime telemetry, inspect drift, and export a manifest accepted by the Python compiler.
 

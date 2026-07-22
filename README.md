@@ -2,210 +2,214 @@
 
 > Define actors. Secure interactions. See the whole graph.
 
+> 한국어 버전: [README.ko.md](README.ko.md) · Design docs are available in both English (`docs/*.md`) and Korean (`docs/*.ko.md`).
+
 [![CI](https://github.com/jjongkwann/agent-interlock/actions/workflows/ci.yml/badge.svg)](https://github.com/jjongkwann/agent-interlock/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-Agent Interlock는 AI Agent 시스템의 Actor를 선언적으로 정의하고, 각 Actor의 외부를 SDK·Proxy로 감싸며, Actor 간 통신과 데이터 이동을 관측·판정·차단하는 **Agentic AI Security Framework**다. 안전공학의 interlock — 선언된 조건이 충족되지 않으면 동작 자체가 불가능한 장치 — 를 Agent 간 상호작용에 적용한다: 선언된 경로만 연동을 허가하고, ENFORCE 승격에는 서명된 2인 승인을 요구하며, 모든 판정을 append-only Ledger에 남긴다.
+Agent Interlock is an **Agentic AI Security Framework** that declaratively defines the Actors of an AI agent system, wraps each Actor's surface with an SDK/Proxy, and observes, adjudicates, and blocks the communication and data movement between them. It applies the safety-engineering notion of an interlock — a mechanism that makes operation physically impossible unless declared conditions hold — to agent-to-agent interaction: only declared paths are permitted to connect, promotion to ENFORCE requires two signed approvals, and every verdict lands in an append-only Ledger.
 
-## 무엇을 막는가
+## What it blocks
 
-MCP·Tool 위협 M1–M9 전체를 데이터 흐름 단위로 집행한다. 각 위협의 상세 명세는 [docs/03 §6](docs/03-l1-mcp-tool-security-profile.md), 재현 시나리오와 34개 추적 ID는 [docs/05](docs/05-l1-security-validation-plan.md)·`tests/test_l1_matrix.py`에 있다.
+The full MCP/Tool threat set M1–M9 is enforced at the data-flow level. Per-threat specifications live in [docs/03 §6](docs/03-l1-mcp-tool-security-profile.md); reproduction scenarios and the 34 tracked test IDs live in [docs/05](docs/05-l1-security-validation-plan.md) and `tests/test_l1_matrix.py`.
 
-| ID | 위협 | 공격자가 조작하는 것 | 기본 판정 |
+| ID | Threat | What the attacker manipulates | Default verdict |
 |---|---|---|---|
-| `M1` | Tool Poisoning | Tool description/schema 속 숨은 지시 | `QUARANTINE`/`BLOCK` |
-| `M2` | Rug Pull | 승인 뒤 정의·endpoint·command 교체 | `QUARANTINE` |
-| `M3` | Tool Shadowing | 다른 Server/Tool을 조종하는 설명 | `BLOCK`/`HOLD` |
-| `M4` | Poisoned Tool Publish | package/image/Remote MCP 자체 | `QUARANTINE` |
-| `M5` | Confused Deputy / Token Passthrough | 토큰의 audience·scope·사용 주체 | `BLOCK` |
-| `M6` | MCP Server → Host Compromise | auth URL·redirect·result payload | `BLOCK`/`KILL` |
-| `M7` | Agent Config Discovery/Modification | Agent 구성 열거·수정 | `BLOCK`/`CHALLENGE` |
-| `M8` | Credential Harvesting | RAG/구성/결과 속 자격증명 | `SANITIZE`/`BLOCK` |
-| `M9` | Data Exfiltration | 호출 목적지·업무 데이터 payload | `BLOCK`/`HOLD` |
+| `M1` | Tool Poisoning | Hidden instructions in tool descriptions/schemas | `QUARANTINE`/`BLOCK` |
+| `M2` | Rug Pull | Definition/endpoint/command swapped after approval | `QUARANTINE` |
+| `M3` | Tool Shadowing | Descriptions that steer other servers/tools | `BLOCK`/`HOLD` |
+| `M4` | Poisoned Tool Publish | The package/image/remote MCP itself | `QUARANTINE` |
+| `M5` | Confused Deputy / Token Passthrough | Token audience, scope, acting principal | `BLOCK` |
+| `M6` | MCP Server → Host Compromise | Auth URLs, redirects, result payloads | `BLOCK`/`KILL` |
+| `M7` | Agent Config Discovery/Modification | Enumerating or mutating agent configuration | `BLOCK`/`CHALLENGE` |
+| `M8` | Credential Harvesting | Credentials inside RAG/config/results | `SANITIZE`/`BLOCK` |
+| `M9` | Data Exfiltration | Call destinations and business-data payloads | `BLOCK`/`HOLD` |
 
-판정은 관측(OBSERVE) → 그림자 집행(SHADOW) → 실집행(ENFORCE)으로 단계 승격하며, 차단뿐 아니라 증거를 남긴다: 모든 상호작용은 요청·판정·조치·결과가 분리된 이벤트로 Ledger에 기록되고, 설계 그래프와 런타임 trace의 drift가 비교된다.
+Verdicts are promoted in stages — observe (OBSERVE) → shadow enforcement (SHADOW) → live enforcement (ENFORCE) — and the framework leaves evidence, not just blocks: every interaction is recorded in the Ledger as separate request/verdict/action/outcome events, and the design graph is diffed against runtime traces for drift.
 
-## 빠른 시작
+## Quick start
 
 ```bash
-# 별도 설치 없이 테스트 (zero-dependency reference core)
+# Run the tests with no installation (zero-dependency reference core)
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-# 안전한 email Tool 호출 예제
+# Secure email tool-call example
 PYTHONPATH=src python3 examples/secure_email.py
 
-# Architecture → MCP transport → Ledger 수직 슬라이스
+# Architecture → MCP transport → Ledger vertical slice
 PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
 
-# Trust Boundary → A2A Broker → Task orchestration → Ledger 수직 슬라이스
+# Trust Boundary → A2A Broker → Task orchestration → Ledger vertical slice
 PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
 
-# 외부 부작용 없는 fake-data 플랫폼 E2E
+# Fake-data platform E2E with no external side effects
 .venv/bin/python -m pytest -q tests/test_platform_e2e.py
 
-# test-only adapter로 실제 Run Control HTTP create/approve/cancel E2E
+# Real Run Control HTTP create/approve/cancel E2E via a test-only adapter
 .venv/bin/python -m pytest -q tests/test_run_control.py
 
-# 보안 아키텍처 lint·compile
+# Lint and compile a security architecture
 PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
 PYTHONPATH=src python3 -m agent_interlock architecture compile examples/secure_multi_agent_architecture.json
 PYTHONPATH=src python3 -m agent_interlock architecture compile --shadow examples/secure_multi_agent_architecture.json
 PYTHONPATH=src python3 -m agent_interlock architecture runtime-diff examples/secure_multi_agent_architecture.json examples/runtime_drift_otlp.json
 
-# 박스 기반 Security Architecture Studio
+# Box-based Security Architecture Studio
 cd studio
 npm install
 npm run dev
 
-# editable install을 원하는 경우
+# Editable install
 python3 -m pip install -e .
 
-# PostgreSQL adapter까지 설치하는 경우
+# With the PostgreSQL adapter
 python3 -m pip install -e '.[postgres]'
 ```
 
-## 제품 구성
+## Product components
 
-| 구성요소 | 역할 |
+| Component | Role |
 |---|---|
-| Interlock SDK | ActorSpec 선언, 기존 코드 wrap, trace·event 생성 |
-| Interlock Runtime | Actor 간 통신 가로채기와 정책 집행 |
-| Interlock Orchestrator | 검증된 Task DAG와 A2A·MCP·Human transport 실행 |
-| Interlock A2A Broker | Agent Card·Task 처리와 REL-06·Trust Boundary 사전 집행 |
-| Interlock Ledger | 요청·데이터 흐름·판정·조치·결과 저장 |
-| Interlock Graph | 정적 관계·런타임 호출·공격 경로 시각화 |
-| Interlock Console | 정책·Incident·통제 상태 운영 |
+| Interlock SDK | Declare ActorSpecs, wrap existing code, generate traces/events |
+| Interlock Runtime | Intercept inter-Actor communication and enforce policy |
+| Interlock Orchestrator | Execute verified Task DAGs over A2A/MCP/Human transports |
+| Interlock A2A Broker | Handle Agent Cards/Tasks with REL-06 and Trust Boundary pre-enforcement |
+| Interlock Ledger | Store requests, data flows, verdicts, actions, outcomes |
+| Interlock Graph | Visualize static relationships, runtime calls, attack paths |
+| Interlock Console | Operate policies, incidents, control status |
 
-## 핵심 개념
+## Core concepts
 
 ```text
-ActorSpec       Actor의 신원·능력·입출력·권한·부작용 선언
-ActorGuard      Agent·Tool·RAG·Memory 코드를 감싸는 보안 Wrapper
-InterlockLink   Actor 간 허용 관계
-LinkPolicy      관계별 데이터·목적지·승인·예산·차단 정책
-InteractionEvent 요청·데이터 흐름·판정·조치·결과 이벤트
-InterlockLedger 보안 이벤트 원장
-InterlockGraph  설계·실행·공격 경로 그래프
+ActorSpec       Declares an Actor's identity, capabilities, I/O, permissions, side effects
+ActorGuard      Security wrapper around Agent/Tool/RAG/Memory code
+InterlockLink   Permitted relationship between Actors
+LinkPolicy      Per-relationship data, destination, approval, budget, blocking policy
+InteractionEvent Request, data-flow, verdict, action, outcome events
+InterlockLedger Ledger of security events
+InterlockGraph  Design, execution, and attack-path graphs
 ```
 
-## 문서
+## Documentation
 
-- [`docs/00-document-map.md`](docs/00-document-map.md): 문서별 책임, 권장 읽기 순서, ID와 변경 원칙
-- [`docs/01-project-plan.md`](docs/01-project-plan.md): 이벤트 DB, 탐지·차단 플랫폼, PostgreSQL DDL, 구현 로드맵
-- [`docs/02-developer-framework-design.md`](docs/02-developer-framework-design.md): SDK, Actor Wrapper, LinkPolicy, Graph 중심 개발자 경험
-- [`docs/03-l1-mcp-tool-security-profile.md`](docs/03-l1-mcp-tool-security-profile.md): L1 M1–M9의 데이터 흐름, 공격 예시, 관측·통제 매핑
-- [`docs/04-mcp-tool-gateway-spec.md`](docs/04-mcp-tool-gateway-spec.md): MCP Tool Gateway의 컴포넌트, 상태, 정책, 이벤트, API 계약
-- [`docs/05-l1-security-validation-plan.md`](docs/05-l1-security-validation-plan.md): M1–M9 공격 재현, 기대 판정, 증거, 운영 승격 기준
-- [`docs/06-implementation-status.md`](docs/06-implementation-status.md): 설계 계약과 현재 코드·시험 추적표
-- [`docs/07-security-architecture-studio-design.md`](docs/07-security-architecture-studio-design.md): 박스 기반 Architecture-as-Code와 Studio 사용법
-- [`docs/08-runtime-telemetry-reconciliation.md`](docs/08-runtime-telemetry-reconciliation.md): Ledger·OTLP 실행 trace와 Design/Runtime drift 계약
-- [`docs/09-mcp-transport-enforcement.md`](docs/09-mcp-transport-enforcement.md): Architecture manifest와 MCP JSON-RPC 집행을 연결하는 어댑터
-- [`docs/10-mcp-oauth-identity-guard.md`](docs/10-mcp-oauth-identity-guard.md): OAuth discovery, PKCE, SSRF/redirect와 token identity binding
-- [`docs/11-mcp-stdio-sandbox-receipts.md`](docs/11-mcp-stdio-sandbox-receipts.md): stdio process sandbox attestation과 fake external receipt reconciliation
-- [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.md): PostgreSQL RLS·append-only Ledger adapter와 event/trace API
-- [`docs/13-a2a-orchestration-platform.md`](docs/13-a2a-orchestration-platform.md): Trust Boundary에서 A2A Broker·Task workflow·오케스트레이션까지의 실행 계약
-- [`docs/14-fake-platform-e2e-scenario.md`](docs/14-fake-platform-e2e-scenario.md): 가짜 고객 데이터로 설계→승격→A2A→승인→MCP→증거·drift를 검증하는 전체 시나리오
+Design docs are English-first; each has a Korean original alongside it (`*.ko.md`).
 
-## 기본 구현 전략
+- [`docs/00-document-map.md`](docs/00-document-map.md): Doc responsibilities, recommended reading order, IDs, change rules
+- [`docs/01-project-plan.md`](docs/01-project-plan.md): Event DB, detection/blocking platform, PostgreSQL DDL, implementation roadmap
+- [`docs/02-developer-framework-design.md`](docs/02-developer-framework-design.md): SDK, Actor Wrapper, LinkPolicy, graph-centric developer experience
+- [`docs/03-l1-mcp-tool-security-profile.md`](docs/03-l1-mcp-tool-security-profile.md): L1 M1–M9 data flows, attack examples, observation/control mapping
+- [`docs/04-mcp-tool-gateway-spec.md`](docs/04-mcp-tool-gateway-spec.md): MCP Tool Gateway components, state, policy, events, API contract
+- [`docs/05-l1-security-validation-plan.md`](docs/05-l1-security-validation-plan.md): M1–M9 attack reproduction, expected verdicts, evidence, promotion criteria
+- [`docs/06-implementation-status.md`](docs/06-implementation-status.md): Design contracts traced to current code and tests
+- [`docs/07-security-architecture-studio-design.md`](docs/07-security-architecture-studio-design.md): Box-based Architecture-as-Code and Studio usage
+- [`docs/08-runtime-telemetry-reconciliation.md`](docs/08-runtime-telemetry-reconciliation.md): Ledger/OTLP execution traces and the design/runtime drift contract
+- [`docs/09-mcp-transport-enforcement.md`](docs/09-mcp-transport-enforcement.md): Adapter binding architecture manifests to MCP JSON-RPC enforcement
+- [`docs/10-mcp-oauth-identity-guard.md`](docs/10-mcp-oauth-identity-guard.md): OAuth discovery, PKCE, SSRF/redirect, token identity binding
+- [`docs/11-mcp-stdio-sandbox-receipts.md`](docs/11-mcp-stdio-sandbox-receipts.md): stdio process sandbox attestation and fake external receipt reconciliation
+- [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.md): PostgreSQL RLS, append-only Ledger adapter, event/trace API
+- [`docs/13-a2a-orchestration-platform.md`](docs/13-a2a-orchestration-platform.md): Execution contract from Trust Boundary through A2A Broker, Task workflows, orchestration
+- [`docs/14-fake-platform-e2e-scenario.md`](docs/14-fake-platform-e2e-scenario.md): Full design→promotion→A2A→approval→MCP→evidence/drift scenario on fake customer data
 
-1. 단일 Agent 서비스에서 User→Agent, Agent→RAG, Agent→Tool, Agent→External 관측
-2. PostgreSQL 기반 Interaction Ledger 구축
-3. OBSERVE → SHADOW → ENFORCE 단계적 승격
-4. ActorSpec·LinkPolicy를 코드와 manifest로 지원
-5. 정적 설계 그래프와 런타임 trace 그래프 제공
-6. 방향성 Trust Boundary와 A2A·Scheduler·Sandbox를 함께 compile하고 집행
+## Implementation strategy
 
-## 현재 구현
+1. Observe User→Agent, Agent→RAG, Agent→Tool, Agent→External in a single-agent service
+2. Build the PostgreSQL-based Interaction Ledger
+3. Promote in stages: OBSERVE → SHADOW → ENFORCE
+4. Support ActorSpec/LinkPolicy in both code and manifests
+5. Provide the static design graph and the runtime trace graph
+6. Compile and enforce directional Trust Boundaries together with A2A, Scheduler, Sandbox
 
-문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. Core는 외부 런타임 의존성이 없고 PostgreSQL adapter만 optional `postgres` extra를 사용한다.
+## Current implementation
 
-**SDK·Gateway 정책 코어**
+The repository includes a Python 3.11 reference core following the docs' original implementation order. The core has zero external runtime dependencies; only the PostgreSQL adapter uses the optional `postgres` extra.
+
+**SDK / Gateway policy core**
 
 - `ActorSpec`, `LinkPolicy`, `define_actor()`, `connect()`, `wrap()` SDK
-- MCP Tool 정의 canonical/raw digest와 `DISCOVERED` → `APPROVED` → `ACTIVE` 상태 전이
-- definition drift, metadata instruction, cross-server reference 격리
-- 호출 인수 schema, 데이터 등급, secret, 목적지, token binding, 선언 부작용 정책
-- hash·목적지에 결합된 승인과 hash-bound connector 실행
-- `OBSERVE`, `SHADOW`, `ENFORCE` 모드
-- Tool result secret 정제, `UNTRUSTED_TOOL_RESULT` taint, schema 격리
+- Canonical/raw digests for MCP tool definitions with `DISCOVERED` → `APPROVED` → `ACTIVE` state transitions
+- Isolation of definition drift, metadata instructions, cross-server references
+- Call-argument schema, data classification, secret, destination, token-binding, declared-side-effect policy
+- Approvals bound to hashes and destinations; hash-bound connector execution
+- `OBSERVE`, `SHADOW`, `ENFORCE` modes
+- Tool-result secret sanitization, `UNTRUSTED_TOOL_RESULT` taint, schema isolation
 
-**MCP transport·신원**
+**MCP transport / identity**
 
-- MCP `tools/list`/`tools/call`/`notifications/tools/list_changed` JSON-RPC 집행과 Architecture digest binding
-- MCP 2025-11-25 Streamable HTTP JSON/SSE client, session binding, inbound Origin·auth·lifecycle carrier
-- inbound resumable GET SSE와 교체 가능한 `SessionStore` 계약
+- MCP `tools/list`/`tools/call`/`notifications/tools/list_changed` JSON-RPC enforcement with architecture digest binding
+- MCP 2025-11-25 Streamable HTTP JSON/SSE client, session binding, inbound Origin/auth/lifecycle carrier
+- Inbound resumable GET SSE with a pluggable `SessionStore` contract
 - MCP OAuth discovery, PKCE S256, exact callback, resource-bound token exchange, RFC 7662 introspection
-- optional JWKS/JWT verifier와 loopback OAuth consent·one-time transaction store
-- MCP stdio JSONL client, artifact pin, 서명 sandbox attestation, Bubblewrap launch plan, timeout·process-group kill
+- Optional JWKS/JWT verifier plus loopback OAuth consent and one-time transaction store
+- MCP stdio JSONL client, artifact pinning, signed sandbox attestation, Bubblewrap launch plan, timeout/process-group kill
 
-**공급망·샌드박스·egress**
+**Supply chain / sandbox / egress**
 
-- publisher·repository·revision·build·artifact digest를 결합한 서명 provenance admission
-- Architecture REL-07/External allowed domain을 compile하는 목적지별 egress guard와 SIMULATION receipt backend
-- contextual Connector와 외부 전송 없는 fake receipt·compensation reconciliation
-- 사후 downstream receipt reconciliation과 `REVOKE` 증거
+- Signed provenance admission binding publisher, repository, revision, build, artifact digests
+- Per-destination egress guard compiled from Architecture REL-07/External allowed domains, plus a SIMULATION receipt backend
+- Contextual connectors with fake receipt/compensation reconciliation and no external transmission
+- After-the-fact downstream receipt reconciliation with `REVOKE` evidence
 
-**Ledger·증거**
+**Ledger / evidence**
 
-- 판정·집행·결과가 분리된 append-only Ledger와 정적/trace graph 데이터
-- PostgreSQL partition, `session_user` 기반 FORCE RLS, append-only migration·adapter
-- tenant·scope·idempotency가 결합된 `POST /v1/events`, OTLP/HTTP JSON `POST /v1/traces`, cursor 기반 `GET /v1/traces/{trace_id}`
-- canonical keyed 서명 helper와 detached `SignedAuditSink` 증거
+- Append-only Ledger separating verdict, enforcement, and outcome, plus static/trace graph data
+- PostgreSQL partitioning, `session_user`-based FORCE RLS, append-only migrations/adapter
+- `POST /v1/events` with tenant/scope/idempotency, OTLP/HTTP JSON `POST /v1/traces`, cursor-based `GET /v1/traces/{trace_id}`
+- Canonical keyed signing helper and detached `SignedAuditSink` evidence
 
-**아키텍처 계약·drift**
+**Architecture contract / drift**
 
-- 박스/연결선 기반 `ArchitectureGraph`와 실행 가능한 JSON Schema
-- PREVENT·DETECT·RESPOND·EVIDENCE 및 DECLARED·OBSERVED·ENFORCED·RECONCILED 보장 수준
-- Multi-Agent Dynamic Edge Contract와 설계/런타임 drift 비교
-- 방향성 INTERNAL/EXTERNAL Trust Boundary와 cross-zone Edge compile·fail-closed lint
+- Box-and-edge `ArchitectureGraph` with an executable JSON Schema
+- PREVENT·DETECT·RESPOND·EVIDENCE and DECLARED·OBSERVED·ENFORCED·RECONCILED assurance levels
+- Multi-agent Dynamic Edge Contract with design/runtime drift comparison
+- Directional INTERNAL/EXTERNAL Trust Boundaries with cross-zone edge compilation and fail-closed lint
 
-**A2A·오케스트레이션**
+**A2A / orchestration**
 
-- A2A 1.0 Agent Card·Message·Part·Task·Artifact, `SendMessage`/`GetTask`/`CancelTask` JSON-RPC core
-- 실제 HTTP socket A2A carrier의 Origin·auth·body size·`A2A-Version` 집행과 0.3 명시 호환 profile
-- REL-06 actor/audience/resource/token/delegation/data/schema와 Trust Boundary를 함께 집행하는 A2A Broker
-- coordinator·dependency·A2A/MCP/LOCAL/HUMAN transport·retry·timeout·approval·budget 기반 Task workflow engine
-- active ENFORCE bundle에 결합된 tenant-scoped Run Control API와 Studio Runs 운영 화면
+- A2A 1.0 Agent Card/Message/Part/Task/Artifact with `SendMessage`/`GetTask`/`CancelTask` JSON-RPC core
+- Real HTTP-socket A2A carrier enforcing Origin, auth, body size, `A2A-Version`, with an explicit 0.3 compatibility profile
+- A2A Broker enforcing REL-06 actor/audience/resource/token/delegation/data/schema together with Trust Boundaries
+- Task workflow engine with coordinator, dependencies, A2A/MCP/LOCAL/HUMAN transports, retry, timeout, approval, budget
+- Tenant-scoped Run Control API bound to the active ENFORCE bundle, plus the Studio Runs operations screen
 
-**운영 루프**
+**Operations loop**
 
-- Ledger·OTLP JSON runtime import와 미선언 관계·통제 우회 분석
-- M7 Agent config read·2인 승인 deploy·runtime drift guard
-- Studio manifest를 검토 가능한 SHADOW 배포 번들로 compile하는 CLI
+- Ledger/OTLP JSON runtime import with undeclared-relationship and control-bypass analysis
+- M7 agent-config read guard, two-person-approved deploy, runtime drift guard
+- CLI compiling Studio manifests into reviewable SHADOW deployment bundles
 
-주요 경로는 다음과 같다.
+Key paths:
 
-| 경로 | 내용 |
+| Path | Contents |
 |---|---|
-| `src/agent_interlock/` | SDK, Registry, 정책, Gateway, Ledger |
-| `schemas/` | Actor와 Event Envelope JSON Schema |
-| `schemas/architecture.schema.json` | Canvas와 compiler가 공유하는 Architecture 계약 |
-| `schemas/ledger-api.openapi.yaml` | Event ingest·trace query OpenAPI 계약 |
-| `migrations/postgresql/` | PostgreSQL 초기 schema와 partition helper |
-| `tests/test_core.py` | L1 핵심 공격·정상 회귀 시험 |
-| `tests/test_mcp_http.py` | 실제 HTTP socket 기반 MCP lifecycle·JSON/SSE·보안 carrier 시험 |
-| `tests/test_mcp_oauth.py` | 실제 OAuth fixture 기반 discovery·PKCE·SSRF·token binding 시험 |
-| `tests/test_mcp_stdio.py` | 실제 subprocess 기반 stdio lifecycle·sandbox·timeout 시험 |
-| `tests/test_supply_chain.py` | publisher 서명·provenance·MCP profile admission binding 시험 |
-| `tests/test_egress.py` | Architecture-bound 목적지별 egress·socket/종료 receipt 시험 |
-| `tests/test_l1_matrix.py` | L1-SIM M1–M9의 34개 추적 ID와 canary·receipt 불변식 시험 |
-| `tests/test_config_guard.py` | M7 config 최소 권한·2인 승인·CAS·runtime drift 시험 |
-| `tests/test_otlp_receiver.py` | 인증된 OTLP/HTTP JSON receiver 시험 |
-| `tests/test_audit_sink.py` | signed audit record seal·tamper 검증 시험 |
-| `tests/test_receipts.py` | fake external transaction·receipt 0/1·reconciliation 시험 |
-| `tests/test_ledger_http.py` | 실제 socket 기반 tenant·scope·idempotency·pagination 시험 |
-| `tests/test_postgres_ledger.py` | DB role binding과 선택적 PostgreSQL 16 live 시험 |
-| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, 실제 HTTP socket, orchestration 시험 |
-| `tests/test_platform_e2e.py` | fake data로 compile·2인 승격·실제 localhost A2A·승인·MCP·Runtime/Statistics/Drift 전체 시험 |
-| `tests/fixtures/platform_e2e/` | `.invalid` 주소와 결정적 fake 고객·지식·receipt fixture |
-| `examples/secure_email.py` | 최소 실행 예제 |
-| `examples/secure_multi_agent_architecture.json` | Multi-Agent 보안 아키텍처 예제 |
-| `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |
-| `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
-| `examples/a2a_orchestration_vertical_slice.py` | Boundary→A2A→workflow→Ledger 전체 실행 예제 |
-| `studio/` | Actor topology·Task workflow·Trust Boundary 편집 및 manifest export UI |
+| `src/agent_interlock/` | SDK, registry, policy, gateway, Ledger |
+| `schemas/` | Actor and Event Envelope JSON Schemas |
+| `schemas/architecture.schema.json` | Architecture contract shared by the canvas and compiler |
+| `schemas/ledger-api.openapi.yaml` | Event ingest / trace query OpenAPI contract |
+| `migrations/postgresql/` | Initial PostgreSQL schema and partition helpers |
+| `tests/test_core.py` | L1 core attack and benign regression tests |
+| `tests/test_mcp_http.py` | Real HTTP-socket MCP lifecycle, JSON/SSE, security carrier tests |
+| `tests/test_mcp_oauth.py` | Real OAuth-fixture discovery, PKCE, SSRF, token-binding tests |
+| `tests/test_mcp_stdio.py` | Real-subprocess stdio lifecycle, sandbox, timeout tests |
+| `tests/test_supply_chain.py` | Publisher signature, provenance, MCP profile admission binding tests |
+| `tests/test_egress.py` | Architecture-bound per-destination egress and socket/termination receipt tests |
+| `tests/test_l1_matrix.py` | 34 tracked L1-SIM M1–M9 IDs with canary/receipt invariant tests |
+| `tests/test_config_guard.py` | M7 config least-privilege, two-person approval, CAS, runtime drift tests |
+| `tests/test_otlp_receiver.py` | Authenticated OTLP/HTTP JSON receiver tests |
+| `tests/test_audit_sink.py` | Signed audit record seal/tamper verification tests |
+| `tests/test_receipts.py` | Fake external transaction, receipt 0/1, reconciliation tests |
+| `tests/test_ledger_http.py` | Real-socket tenant/scope/idempotency/pagination tests |
+| `tests/test_postgres_ledger.py` | DB role binding and optional PostgreSQL 16 live tests |
+| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, real HTTP socket, orchestration tests |
+| `tests/test_platform_e2e.py` | Full fake-data compile, two-person promotion, real localhost A2A, approval, MCP, runtime/statistics/drift tests |
+| `tests/fixtures/platform_e2e/` | Deterministic fake customer/knowledge/receipt fixtures with `.invalid` addresses |
+| `examples/secure_email.py` | Minimal runnable example |
+| `examples/secure_multi_agent_architecture.json` | Multi-agent security architecture example |
+| `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift example |
+| `examples/mcp_transport_vertical_slice.py` | Runnable example binding an architecture manifest to MCP call enforcement |
+| `examples/a2a_orchestration_vertical_slice.py` | Full Boundary→A2A→workflow→Ledger runnable example |
+| `studio/` | Actor topology, Task workflow, Trust Boundary editing and manifest export UI |
 
-현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.md)의 JSON-RPC·resumable Streamable HTTP carrier와 publisher admission, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md)의 discovery·PKCE·introspection/JWKS·loopback consent, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.md)의 서명 attestation·Bubblewrap·Seatbelt·목적지 egress reference 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md)의 tenant별 저장·조회와 signed audit reference, [13 A2A Orchestration](docs/13-a2a-orchestration-platform.md)의 방향성 Trust Boundary·A2A Broker·Task workflow engine을 포함한다.
+The current implementation covers the policy core of the [04 MCP Tool Gateway spec](docs/04-mcp-tool-gateway-spec.md); the JSON-RPC and resumable Streamable HTTP carriers plus publisher admission of [09 MCP Transport Enforcement](docs/09-mcp-transport-enforcement.md); discovery, PKCE, introspection/JWKS, and loopback consent from [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md); signed attestation, Bubblewrap, Seatbelt, and per-destination egress reference boundaries from [11 stdio Sandbox & Receipts](docs/11-mcp-stdio-sandbox-receipts.md); per-tenant storage/query and signed audit reference from [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md); and the directional Trust Boundary, A2A Broker, and Task workflow engine of [13 A2A Orchestration](docs/13-a2a-orchestration-platform.md).
 
-프로덕션 통합으로 추가된 것: persistent PostgreSQL DefinitionRegistry와 분산 Session/OAuth/Config store(RLS·migration 0002/0003), macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행 시험), 실 소켓 egress backend의 DNS·IP pinning, Ed25519 publisher·Studio 승인 서명, Langfuse/LangSmith trace 어댑터, append-only WORM audit store, PostgreSQL live CI와 GitHub Actions. 제품 폐쇄 루프에는 tenant+interaction 전체 lifecycle 기반 보안 통계(Python·Studio Unicode golden 파리티), `GET /v1/statistics`, manifest→SDK skeleton·보안테스트, 공개키 검증 기반 2인 승격·rollback Control Plane, Studio 통계·배포 뷰와 read-only Live Attach가 포함된다. 남은 것은 외부 연동 작업(Sigstore/Rekor·KMS/HSM·IdP·Secret Store, 실 egress sidecar와 S3 Object-Lock, OTLP gRPC·Collector·Incident 서비스, PostgreSQL HA·분산 rate limit·TLS, 원격 Git host PR 리뷰·배포, DPoP/mTLS·JWKS rotation·운영 consent/refresh-token)이다. 자세한 계약 추적과 분류는 [06 구현 상태](docs/06-implementation-status.md)를 따른다.
+Production-integration additions: a persistent PostgreSQL DefinitionRegistry and distributed Session/OAuth/Config stores (RLS, migrations 0002/0003), macOS Seatbelt and Linux bwrap+seccomp sandboxes (live-enforced in tests), a real-socket egress backend with DNS/IP pinning, Ed25519 publisher and Studio approval signatures, Langfuse/LangSmith trace adapters, an append-only WORM audit store, and PostgreSQL live CI on GitHub Actions. The product closed loop includes tenant+interaction full-lifecycle security statistics (Python/Studio Unicode golden parity), `GET /v1/statistics`, manifest→SDK skeleton and security-test generation, a public-key-verified two-person promotion/rollback Control Plane, and Studio statistics/deploy views with read-only Live Attach. What remains is external-integration work (Sigstore/Rekor, KMS/HSM, IdP/Secret Store, a real egress sidecar and S3 Object-Lock, OTLP gRPC/Collector/Incident services, PostgreSQL HA, distributed rate limiting, TLS, remote Git-host PR review/deploy, DPoP/mTLS, JWKS rotation, operational consent/refresh tokens). Detailed contract tracing and classification follow [06 Implementation Status](docs/06-implementation-status.md).

@@ -1,143 +1,145 @@
 ---
-title: Agent Interlock 구현 상태
+title: Agent Interlock Implementation Status
 date: 2026-07-21
 version: 0.10.0
 status: active
 ---
 
-# Agent Interlock 구현 상태
+# Agent Interlock Implementation Status
 
-이 문서는 설계 계약과 현재 코드 사이의 추적표다. 구현되지 않은 항목을 완료된 것처럼 간주하지 않도록 release마다 갱신한다.
+> 한국어 원문: [06-implementation-status.ko.md](06-implementation-status.ko.md)
 
-## 구현 기준
+This document is the traceability map between the design contract and the current code. It is updated with every release so that unimplemented items are never treated as done.
 
-- 언어: Python 3.11
-- 배포 형태: 외부 의존성이 없는 reference core + optional psycopg PostgreSQL adapter
-- 기준 명세: `03`–`05` version 1.1
-- 구현 모드: 메모리 Registry, 메모리/PostgreSQL Session·OAuth·Config Store, 메모리/PostgreSQL Ledger, A2A Broker와 bounded task orchestration
+## Implementation Baseline
 
-## 계약 추적
+- Language: Python 3.11
+- Deployment form: dependency-free reference core + optional psycopg PostgreSQL adapter
+- Baseline specification: `03`–`05` version 1.1
+- Implementation modes: in-memory Registry, in-memory/PostgreSQL Session·OAuth·Config Store, in-memory/PostgreSQL Ledger, A2A Broker with bounded task orchestration
 
-| 계약 | 구현 | 검증 |
+## Contract Traceability
+
+| Contract | Implementation | Verification |
 |---|---|---|
 | Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests` |
-| 정적 설계·단일 trace graph 데이터 | `Interlock.design_graph`, `runtime_graph` | `test_define_connect_wrap_and_graph` |
+| Static design · single trace graph data | `Interlock.design_graph`, `runtime_graph` | `test_define_connect_wrap_and_graph` |
 | Canonical/raw definition digest | `canonical.py`, `registry.py` | `CanonicalizationTests`, `RegistryTests` |
-| Definition 상태와 digest pin | `DefinitionRegistry` | M2 drift 회귀 시험 |
-| D1 metadata instruction·cross-server reference | `DefinitionRegistry._inspect` | M1·M3 회귀 시험 |
-| D3 schema·secret·목적지·부작용 판정 | `policy.py`, `security.py` | M8·M9 회귀 시험 |
-| Token audience/resource/actor binding·passthrough 금지 | `policy.py` | M5 회귀 시험 |
-| Hash·destination-bound 승인 | `MCPToolGateway.grant_approval` | 승인 변경 회귀 시험 |
-| Hash-bound·멱등 Connector 실행 | `execute_approved_call` | mutation·중복 실행 회귀 시험 |
-| Result secret 정제·taint·schema 검사 | `inspect_result` | result D5 회귀 시험 |
-| 사후 receipt reconciliation | `reconcile_transaction` | 미선언 egress 회귀 시험 |
-| 판정·집행·결과 분리 이벤트 | `InMemoryLedger`, `gateway.py` | 이벤트 순서·무결성 시험 |
-| PostgreSQL partition·RLS·append-only | `migrations/postgresql` | PostgreSQL 16 임시 DB 적용 검증 |
-| PostgreSQL Ledger adapter·hash 재검증 | `PostgreSQLLedger` | 실제 psycopg append·replay·query live 시험 |
-| Event ingest·trace query HTTP API | `LedgerHTTPAPI`, `ledger-api.openapi.yaml` | 실제 socket tenant·scope·idempotency·pagination 시험 |
+| Definition state and digest pin | `DefinitionRegistry` | M2 drift regression test |
+| D1 metadata instruction · cross-server reference | `DefinitionRegistry._inspect` | M1·M3 regression tests |
+| D3 schema · secret · destination · side-effect verdict | `policy.py`, `security.py` | M8·M9 regression tests |
+| Token audience/resource/actor binding · passthrough prohibition | `policy.py` | M5 regression test |
+| Hash- and destination-bound approval | `MCPToolGateway.grant_approval` | approval-change regression test |
+| Hash-bound, idempotent Connector execution | `execute_approved_call` | mutation · duplicate-execution regression test |
+| Result secret redaction · taint · schema check | `inspect_result` | result D5 regression test |
+| Post-hoc receipt reconciliation | `reconcile_transaction` | undeclared egress regression test |
+| Verdict/enforcement/result separated events | `InMemoryLedger`, `gateway.py` | event ordering · integrity test |
+| PostgreSQL partitioning · RLS · append-only | `migrations/postgresql` | verified applied against ephemeral PostgreSQL 16 DB |
+| PostgreSQL Ledger adapter · hash re-verification | `PostgreSQLLedger` | live tests with real psycopg append · replay · query |
+| Event ingest · trace query HTTP API | `LedgerHTTPAPI`, `ledger-api.openapi.yaml` | real-socket tenant · scope · idempotency · pagination tests |
 | Architecture-as-Code manifest | `architecture.py`, `architecture.schema.json` | `ArchitectureModelTests` |
-| 보안 보장 수준과 Architecture lint | `ArchitectureLinter` | `ArchitectureSecurityLintTests` |
-| 방향성 Trust Boundary와 cross-zone compile | `ArchitectureBoundary`, `CompiledArchitecture.boundary_for` | `ArchitectureBoundaryTests`, Studio manifest compile |
-| A2A 1.0 protocol core·Agent Card·Task | `a2a.py` `A2ABroker`·`A2AJSONRPCRouter` | v1 `SendMessage/GetTask/CancelTask`, v0.3 명시 호환, policy/idempotency 시험 |
-| 인증된 A2A HTTP carrier | `a2a_http.py` | 실제 socket Origin·auth·version·body limit·well-known Agent Card 시험 |
-| Multi-Agent Task workflow engine | `orchestration.py` `OrchestrationEngine` | A2A dependency, approval pause/resume, missing adapter fail-closed 시험 |
-| Deployment-bound Run Control API | `run_control.py`, `control_plane.py` `/v1/runs` | actual ENFORCE bundle binding, scope·tenant 격리, approval·cancel, adapter 누락 fail-closed HTTP 시험 |
-| Dynamic Sub-Agent Edge 계약 | `DynamicTargetSelector` | dynamic instance 회귀 시험 |
-| Design/Runtime drift·bypass 비교 | `compare_runtime` | `RuntimeGraphDiffTests` |
-| 박스 기반 보안 설계 편집기 | `studio/app/page.tsx` | Studio build·rendered HTML 계약 시험 |
-| Ledger·OTLP JSON runtime import | `telemetry.py`, `studio/app/runtime.ts` | `RuntimeTelemetryImportTests`, Studio parser 시험 |
-| Runtime Graph·Drift reconciliation 화면 | `studio/app/page.tsx` | OTLP fixture import·render 시험; 제품 내장 demo 경로 없음 |
-| Studio Runs 운영 화면 | `studio/app/panels.tsx` | Run Control create/list/get/approve/resume/cancel/events route 계약과 Studio build 시험 |
-| MCP JSON-RPC Tool transport 집행 | `mcp_transport.py` | `MCPTransportVerticalSliceTests` |
-| Architecture exact digest runtime binding | `bind_compiled_architecture` | mismatch·drift·삭제 회귀 시험 |
-| Streamable HTTP JSON/SSE downstream client | `mcp_http.py` | lifecycle·session·SSE·redirect·size 시험 |
-| Inbound MCP HTTP 보안 carrier | `MCPStreamableHTTPGatewayCarrier` | 실제 socket Origin·auth·token 분리 시험 |
-| OAuth Protected Resource·AS discovery | `mcp_oauth.py` | well-known 순서·resource/issuer mismatch 시험 |
-| PKCE·redirect·token resource binding | `MCPAuthorizationCodeFlow`, `MCPAuthorizationCodeTokenClient` | 실제 OAuth fixture·SSRF·replay·audience 시험 |
-| stdio JSONL·process lifecycle carrier | `MCPStdioClient` | 실제 subprocess lifecycle·noise·size·timeout·group kill 시험 |
-| stdio artifact·sandbox attestation binding | `StdioSandboxProfile`, `MCPStdioServerCaller` | digest mismatch·backend 누락·Architecture binding 시험 |
-| Fake external receipt·reconciliation | `FakeExternalReceiptStore`, contextual Connector | receipt 0/1·hidden egress·idempotency·compensation 시험 |
-| L1-SIM M1–M9 matrix·canary corpus·불변식 runner | `tests/test_l1_matrix.py`, `tests/l1_harness.py` | 34 test ID 전부 실행, TEST_EXECUTED SIMULATION |
-| M9 volume/DLP 사전 차단 | `policy.py` `max_export_records`/`max_export_bytes` | `L1-SIM-M9-003` 사전 BLOCK 시험 |
-| Canonical keyed 서명 helper | `signing.py` `sign_canonical`/`verify_canonical` | round-trip·tamper·wrong-key 시험 |
-| Signed Audit Sink evidence | `audit_sink.py` `SignedAuditSink` | seal·verify·integrity·swap 거부 시험 |
-| OTLP/HTTP JSON receiver | `ledger_http.py` `POST /v1/traces` | 실제 socket OTLP decode·context 누락·scope 시험 |
-| 서명 sandbox attestation verifier | `mcp_stdio.py` `sign_attestation`·`AttestationVerifier` | 서명·wrong-key·미서명·tamper·client 강제 시험 |
-| Inbound resumable SSE·SessionStore | `mcp_http.py` `SessionStore`·`InMemorySessionStore` | 세션 발급·READY·Last-Event-ID replay·multi-instance·DELETE 시험 |
-| RFC7662 introspection verifier·OAuth TransactionStore | `mcp_oauth.py` `MCPTokenIntrospectionVerifier`·`InMemoryOAuthTransactionStore` | active/claim 매핑·client-auth·SSRF·one-time consume 시험 |
-| Studio compile → SHADOW 배포 번들 | `__main__.py` `architecture compile --shadow` | golden 라운드트립·SHADOW 강제·digest·CRITICAL 리뷰 게이트 시험 |
-| M7 agent-config guard (read·deploy·drift) | `config_guard.py` `ConfigGuard`·`InMemoryConfigStore`·`RuntimeConfigProbe` | role 최소화·2인 서명 배포·CAS·drift·M7-001..004 매트릭스 시험 |
-| JWKS/JWT 서명 verifier (optional `jwt` extra) | `mcp_jwt.py` `MCPJWKSVerifier` | RS256/ES256/EdDSA 검증·alg 혼동 거부·kid·exp/nbf/iss 시험 |
-| Loopback OAuth consent | `oauth_consent.py` `LoopbackCallbackReceiver`·`run_consent` | 콜백 캡처·one-time·timeout·loopback-only 시험 |
-| Bubblewrap OS sandbox backend | `mcp_stdio.py` `BubblewrapSandboxBackend` | argv 구성·정직한 attestation 비트(fs/net True, child False)·child-거부 fail-closed·unsafe mount 거부·서명 시험 |
-| Publisher provenance admission | `supply_chain.py` `ArtifactAdmissionPolicy`·`MCPServerProfile` binding | untrusted/unsigned·repository·tamper 격리, server call 0, signed control 시험 |
-| 목적지별 egress broker | `egress.py` `DestinationEgressGuard`·`compile_destination_egress_policy` | tenant/workload/artifact/provenance/sandbox exact binding, deny socket 0·kill, allow receipt 1 시험 |
-| 분산 PostgreSQL Session/OAuth/Config store | `postgres_stores.py` `PostgreSQLSessionStore`·`PostgreSQLOAuthTransactionStore`·`PostgreSQLConfigStore`, `migrations/postgresql/0002` | RLS·revision 불변 trigger 계약, 직렬화 round-trip·tamper 거부, CAS stale, DSN 게이트 multi-instance live 시험 |
-| Gateway config-guard preflight (opt-in) | `gateway.py` `_config_preflight` | 기본 비활성, drift → QUARANTINE 합성, guard 자체 CONTROL_EVALUATED trace 시험 |
-| Seatbelt OS sandbox backend (macOS) | `mcp_stdio.py` `SeatbeltSandboxBackend` | policy 구성·정직 비트(fs/net/child 전부 집행 시 True)·unsafe path·SBPL 주입 거부·서명 + **macOS live 집행 시험**(홈/쓰기/fork/네트워크 차단) |
-| 실 소켓 egress backend (DNS·IP pinning) | `egress.py` `PinnedSocketEgressBackend` | DNS 1회 해석·연결 IP 고정·peer 검증·비전역 주소 fail-closed·one-time 소켓 handoff, 실 127.0.0.1 fixture 시험 |
-| 비대칭 publisher 서명 검증 (KMS 어댑터 지점) | `supply_chain.py` `PublisherVerifier`·`Ed25519PublisherVerifier`·`HMACPublisherVerifier`, `signing.py` `sign/verify_canonical_ed25519` | Ed25519 승인·교차키 거부·tamper·KMS 스타일 커스텀 verifier·HMAC 하위호환 시험 |
-| bwrap seccomp child-process 강제 (Linux) | `mcp_stdio.py` `build_no_subprocess_seccomp`·`BubblewrapSandboxBackend(seccomp_child_denial=True)` | fork/vfork·비스레드 clone→EPERM, clone3→ENOSYS(glibc가 flag 검사 가능한 clone으로 폴백 — pthread 생존), 스레드 clone·execve→ALLOW BPF 시뮬 검증, child=True 정직 attest, **bwrap live CI 집행 통과** (fork/subprocess 거부·스레드 허용 실커널 검증) |
-| 분산 PostgreSQL DefinitionRegistry | `registry.py` `RevisionStore`·`InMemoryRevisionStore`, `postgres_stores.py` `PostgreSQLRevisionStore`, `migrations/postgresql/0003` | store 추출로 상태머신 단일화, RLS·identity 불변 trigger·digest 재검증·multi-node live 시험 |
-| Langfuse/LangSmith trace 어댑터 | `vendor_telemetry.py` `langfuse_traces_to_otlp`·`langsmith_runs_to_otlp`·`import_*` | vendor metadata→OTLP 속성 매핑 후 import_runtime_telemetry 재사용, edge 재구성·불완전 컨텍스트 issue 시험 |
-| WORM audit 보존 store | `audit_sink.py` `WORMAuditStore`·`InMemoryWORMAuditStore`·`FileWORMAuditStore` | append-only·해시체인, write-once 중복 거부·삭제/치환/재정렬 chain 파손 탐지, 파일 백엔드 JSONL append·fsync·재시작 후 체인 재검증·dedupe 지속·변조/삭제 open-time 탐지 시험 |
-| Studio git 배포 워크플로 | `studio_deploy.py` `GitBundleStore`·`sign_deployment_approval` | Ed25519 개인키 승인/공개키 검증, 실 git propose→2인 SHADOW→ENFORCE, 과거 active bundle만 새 2인 승인으로 rollback, 동일 공개키의 2개 identity·위조·digest tamper 거부 시험 |
-| PostgreSQL live 프로비저닝 | `ci/docker-compose.postgres.yml`·`ci/postgres_provision.sql`·`ci/run_postgres_live.sh`, `.github/workflows/ci.yml` | postgres:16 + 0001-0003 migration + 2 tenant role 매핑, live store/ledger 6개 시험 실행 |
-| artifact 검사–실행 TOCTOU 제거 (fd 실행) | `mcp_stdio.py` `_open_verified_artifact`·`SandboxLaunchPlan.executable_digest`, client `/proc/self/fd` exec | fd 위 digest 검증·변조/swap 거부·비정규 파일 거부, backend별 argv[0] pin, Linux CI에서 fd-exec 실행 |
-| sandbox process supervisor·health telemetry | `sandbox_supervisor.py` `SandboxSupervisor`·`SandboxHealth`·`SupervisedProcess` | liveness/health probe, bounded-backoff 재시작, 재시작 시 attestation 재검증(swap fail-closed), 전이마다 `CONTROL_HEALTH_CHANGED`(REL-11) 방출 시험 |
-| OTLP semantic convention 어댑터·telemetry health | `otlp_semconv.py` `normalize_otlp_semconv`·`SEMCONV_ALIASES`, `control_health.py` `ControlHealthReporter` | legacy(`llm.*`·snake_case) 별칭→canonical 정규화·canonical 우선, import issue·sampling gap·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`(REL-12) 연결 시험 |
-| server-initiated request·async task·cancellation/replay | `mcp_async.py` `ServerRequestRouter`·`AsyncTaskRegistry`·`TaskState`, `mcp_http.py` `set_server_request_router` | allowlist fail-closed 라우팅·unknown 거부·handler 격리, task lifecycle·one-time consume(replay 거부)·idempotent cancel·principal binding·capacity, HTTP 클라이언트 배선 시험 |
-| PostgreSQL migration runner·partition/retention·pool | `postgres_ops.py` `PostgreSQLMigrationRunner`·`PartitionMaintenance`·`PostgreSQLConnectionPool` | 멱등 적용·checksum drift 거부·legacy 파일 무시, 월별 partition ensure·DETACH+ingest-key prune 후 drop, bounded pool 재사용/capacity, admin DSN 게이트 live 왕복 시험 |
-| 보안 통계 계약·interaction reducer | `analytics.py`, `schemas/security-statistics.schema.json`, `schemas/fixtures/analytics-*.json` | tenant_id+interaction_id 상태 결합(REQUESTED→CONTROL→ACTION→OUTCOME), 집행 action 완료+최종 BLOCKED 증거, mode별 집계, golden fixture·실 gateway reduction 시험 |
-| Studio TS reducer 파리티 (교차언어 golden) | `studio/app/analytics.mjs`(+`.d.ts`) | 같은 fixture에서 Python과 정렬키 직렬화 **바이트 일치**, Unicode code-point 정렬·bare array/`{events}` wrapper 파리티 (`studio/tests/analytics-contract.test.mjs`) |
-| SDK 이벤트 shape 정합 (gateway와 동일) | `sdk.py` (`payload.control` 중첩·connector `connectorExecutionId`) | SDK 래핑 액터가 통계에 잡히는 것을 scaffold 생성 테스트 경유로 검증 |
-| 원장 interaction 범위 조회·통계 API | `ledger.py`/`postgres_ledger.py` `interaction_lifecycles_started_between`, `ledger_http.py` `GET /v1/statistics`, `ledger-api.openapi.yaml` | 범위 안 REQUESTED를 선택한 뒤 전체 lifecycle 결합, `statistics:read` scope, dataSource, 한도 초과 422, PG tenant-scoped SQL 시험 |
-| manifest skeleton·보안테스트 생성기 | `scaffold.py`, `interlock architecture skeleton` | 예제 manifest 생성물이 import·`build()` 배선·**자체 생성 보안테스트 통과**(판정은 statistics reducer로 단언) |
-| Studio 승격 CLI | `__main__.py` `interlock studio propose/approve/promote/rollback/status` | compile→propose→Ed25519 2인 승인→promote→fresh-approved rollback E2E, 개인키는 env·검증키는 public-only 파일 |
-| Run Control Plane (특권 배포 명령 API) | `control_plane.py` `ControlPlaneAPI` | 서버는 approver-bound 공개키만 보유, 제출 시 서명 검증, promote/rollback 2인 게이트, 미승격 bundle rollback 거부, `deploy:*` scope 시험 |
-| API CORS (Studio read-only Live Attach) | `ledger_http.py`·`control_plane.py` | 인증 전 origin 거부, preflight OPTIONS, 허용 origin echo, loopback http 개발 origin 허용 시험 |
-| Studio 통계·배포 뷰 | `studio/app/panels.tsx` (`StatsPanel`·`DeployPanel`), `page.tsx` stats/deploy 뷰 | 오프라인 ledger import 집계 + Live `/v1/statistics` fetch, control plane 승격 패널(서명 키는 브라우저 밖), build·lint·계약 시험 |
-| fake-data 플랫폼 전체 E2E | `tests/test_platform_e2e.py`, `tests/fixtures/platform_e2e/` | 전체 manifest digest→git propose→Ed25519 2인 ENFORCE→실제 localhost A2A→approval pause/resume→fake MCP 1회→Ledger Runtime/Statistics/Drift + D5 차단·미선언 bypass 시험 |
+| Security assurance levels and Architecture lint | `ArchitectureLinter` | `ArchitectureSecurityLintTests` |
+| Directional Trust Boundary and cross-zone compile | `ArchitectureBoundary`, `CompiledArchitecture.boundary_for` | `ArchitectureBoundaryTests`, Studio manifest compile |
+| A2A 1.0 protocol core · Agent Card · Task | `a2a.py` `A2ABroker`·`A2AJSONRPCRouter` | v1 `SendMessage/GetTask/CancelTask`, explicit v0.3 compatibility, policy/idempotency tests |
+| Authenticated A2A HTTP carrier | `a2a_http.py` | real-socket Origin · auth · version · body-limit · well-known Agent Card tests |
+| Multi-Agent Task workflow engine | `orchestration.py` `OrchestrationEngine` | A2A dependency, approval pause/resume, missing-adapter fail-closed tests |
+| Deployment-bound Run Control API | `run_control.py`, `control_plane.py` `/v1/runs` | actual ENFORCE bundle binding, scope/tenant isolation, approval/cancel, missing-adapter fail-closed HTTP tests |
+| Dynamic Sub-Agent Edge contract | `DynamicTargetSelector` | dynamic-instance regression test |
+| Design/Runtime drift · bypass comparison | `compare_runtime` | `RuntimeGraphDiffTests` |
+| Box-based security design editor | `studio/app/page.tsx` | Studio build · rendered-HTML contract test |
+| Ledger · OTLP JSON runtime import | `telemetry.py`, `studio/app/runtime.ts` | `RuntimeTelemetryImportTests`, Studio parser test |
+| Runtime Graph · Drift reconciliation view | `studio/app/page.tsx` | OTLP fixture import · render test; no built-in product demo path |
+| Studio Runs operations view | `studio/app/panels.tsx` | Run Control create/list/get/approve/resume/cancel/events route contract and Studio build test |
+| MCP JSON-RPC Tool transport enforcement | `mcp_transport.py` | `MCPTransportVerticalSliceTests` |
+| Architecture exact digest runtime binding | `bind_compiled_architecture` | mismatch · drift · deletion regression test |
+| Streamable HTTP JSON/SSE downstream client | `mcp_http.py` | lifecycle · session · SSE · redirect · size tests |
+| Inbound MCP HTTP security carrier | `MCPStreamableHTTPGatewayCarrier` | real-socket Origin · auth · token separation test |
+| OAuth Protected Resource · AS discovery | `mcp_oauth.py` | well-known ordering · resource/issuer mismatch test |
+| PKCE · redirect · token resource binding | `MCPAuthorizationCodeFlow`, `MCPAuthorizationCodeTokenClient` | real OAuth fixture · SSRF · replay · audience tests |
+| stdio JSONL · process lifecycle carrier | `MCPStdioClient` | real-subprocess lifecycle · noise · size · timeout · group-kill test |
+| stdio artifact · sandbox attestation binding | `StdioSandboxProfile`, `MCPStdioServerCaller` | digest mismatch · missing-backend · Architecture binding test |
+| Fake external receipt · reconciliation | `FakeExternalReceiptStore`, contextual Connector | receipt 0/1 · hidden-egress · idempotency · compensation test |
+| L1-SIM M1–M9 matrix · canary corpus · invariant runner | `tests/test_l1_matrix.py`, `tests/l1_harness.py` | all 34 test IDs executed, TEST_EXECUTED SIMULATION |
+| M9 volume/DLP pre-emptive block | `policy.py` `max_export_records`/`max_export_bytes` | `L1-SIM-M9-003` pre-emptive BLOCK test |
+| Canonical keyed signing helper | `signing.py` `sign_canonical`/`verify_canonical` | round-trip · tamper · wrong-key test |
+| Signed Audit Sink evidence | `audit_sink.py` `SignedAuditSink` | seal · verify · integrity · swap-rejection test |
+| OTLP/HTTP JSON receiver | `ledger_http.py` `POST /v1/traces` | real-socket OTLP decode · missing-context · scope test |
+| Signed sandbox attestation verifier | `mcp_stdio.py` `sign_attestation`·`AttestationVerifier` | signed · wrong-key · unsigned · tamper · client-enforcement test |
+| Inbound resumable SSE · SessionStore | `mcp_http.py` `SessionStore`·`InMemorySessionStore` | session issuance · READY · Last-Event-ID replay · multi-instance · DELETE test |
+| RFC7662 introspection verifier · OAuth TransactionStore | `mcp_oauth.py` `MCPTokenIntrospectionVerifier`·`InMemoryOAuthTransactionStore` | active/claim mapping · client-auth · SSRF · one-time-consume test |
+| Studio compile → SHADOW deployment bundle | `__main__.py` `architecture compile --shadow` | golden round-trip · SHADOW enforcement · digest · CRITICAL review-gate test |
+| M7 agent-config guard (read · deploy · drift) | `config_guard.py` `ConfigGuard`·`InMemoryConfigStore`·`RuntimeConfigProbe` | role minimization · two-person signed deployment · CAS · drift · M7-001..004 matrix test |
+| JWKS/JWT signature verifier (optional `jwt` extra) | `mcp_jwt.py` `MCPJWKSVerifier` | RS256/ES256/EdDSA verification · alg-confusion rejection · kid · exp/nbf/iss test |
+| Loopback OAuth consent | `oauth_consent.py` `LoopbackCallbackReceiver`·`run_consent` | callback capture · one-time · timeout · loopback-only test |
+| Bubblewrap OS sandbox backend | `mcp_stdio.py` `BubblewrapSandboxBackend` | argv construction · honest attestation bits (fs/net True, child False) · child-rejection fail-closed · unsafe-mount rejection · signature test |
+| Publisher provenance admission | `supply_chain.py` `ArtifactAdmissionPolicy`·`MCPServerProfile` binding | untrusted/unsigned · repository · tamper isolation, server call 0, signed control test |
+| Per-destination egress broker | `egress.py` `DestinationEgressGuard`·`compile_destination_egress_policy` | tenant/workload/artifact/provenance/sandbox exact binding, deny socket 0 · kill, allow receipt 1 test |
+| Distributed PostgreSQL Session/OAuth/Config store | `postgres_stores.py` `PostgreSQLSessionStore`·`PostgreSQLOAuthTransactionStore`·`PostgreSQLConfigStore`, `migrations/postgresql/0002` | RLS · revision-immutability trigger contract, serialization round-trip · tamper rejection, CAS stale, DSN-gated multi-instance live test |
+| Gateway config-guard preflight (opt-in) | `gateway.py` `_config_preflight` | disabled by default, drift → synthesized QUARANTINE, guard's own CONTROL_EVALUATED trace test |
+| Seatbelt OS sandbox backend (macOS) | `mcp_stdio.py` `SeatbeltSandboxBackend` | policy construction · honest bits (fs/net/child all True when enforced) · unsafe-path · SBPL-injection rejection · signature + **macOS live enforcement test** (home/write/fork/network blocked) |
+| Real-socket egress backend (DNS · IP pinning) | `egress.py` `PinnedSocketEgressBackend` | single DNS resolution · pinned connect IP · peer verification · non-global-address fail-closed · one-time socket handoff, real 127.0.0.1 fixture test |
+| Asymmetric publisher signature verification (KMS adapter point) | `supply_chain.py` `PublisherVerifier`·`Ed25519PublisherVerifier`·`HMACPublisherVerifier`, `signing.py` `sign/verify_canonical_ed25519` | Ed25519 approval · cross-key rejection · tamper · KMS-style custom verifier · HMAC backward-compatibility test |
+| bwrap seccomp child-process enforcement (Linux) | `mcp_stdio.py` `build_no_subprocess_seccomp`·`BubblewrapSandboxBackend(seccomp_child_denial=True)` | fork/vfork · non-thread clone → EPERM, clone3 → ENOSYS (glibc falls back to a clone it can flag-check — pthreads survive), thread clone · execve → ALLOW BPF simulation verification, honest child=True attestation, **bwrap live CI enforcement passing** (real-kernel verification of fork/subprocess rejection · thread allowance) |
+| Distributed PostgreSQL DefinitionRegistry | `registry.py` `RevisionStore`·`InMemoryRevisionStore`, `postgres_stores.py` `PostgreSQLRevisionStore`, `migrations/postgresql/0003` | state machine unified via store extraction, RLS · identity-immutability trigger · digest re-verification · multi-node live test |
+| Langfuse/LangSmith trace adapters | `vendor_telemetry.py` `langfuse_traces_to_otlp`·`langsmith_runs_to_otlp`·`import_*` | maps vendor metadata → OTLP attributes then reuses import_runtime_telemetry, edge reconstruction · incomplete-context issue test |
+| WORM audit retention store | `audit_sink.py` `WORMAuditStore`·`InMemoryWORMAuditStore`·`FileWORMAuditStore` | append-only · hash chain, write-once duplicate rejection · deletion/substitution/reordering chain-break detection, file backend JSONL append · fsync · post-restart chain re-verification · persistent dedupe · tamper/deletion open-time detection test |
+| Studio git deployment workflow | `studio_deploy.py` `GitBundleStore`·`sign_deployment_approval` | Ed25519 private-key approval / public-key verification, real git propose→two-person SHADOW→ENFORCE, rollback to a past active bundle only with fresh two-person approval, rejection test for two identities sharing one public key · forgery · digest tamper |
+| PostgreSQL live provisioning | `ci/docker-compose.postgres.yml`·`ci/postgres_provision.sql`·`ci/run_postgres_live.sh`, `.github/workflows/ci.yml` | postgres:16 + migrations 0001–0003 + mapping of 2 tenant roles, runs 6 live store/ledger tests |
+| Eliminating artifact verify-then-exec TOCTOU (fd exec) | `mcp_stdio.py` `_open_verified_artifact`·`SandboxLaunchPlan.executable_digest`, client `/proc/self/fd` exec | digest verification on the fd · tamper/swap rejection · non-regular-file rejection, per-backend argv[0] pinning, fd-exec execution on Linux CI |
+| Sandbox process supervisor · health telemetry | `sandbox_supervisor.py` `SandboxSupervisor`·`SandboxHealth`·`SupervisedProcess` | liveness/health probe, bounded-backoff restart, attestation re-verification on restart (swap fail-closed), test emitting `CONTROL_HEALTH_CHANGED` (REL-11) on every transition |
+| OTLP semantic convention adapter · telemetry health | `otlp_semconv.py` `normalize_otlp_semconv`·`SEMCONV_ALIASES`, `control_health.py` `ControlHealthReporter` | normalizes legacy (`llm.*` · snake_case) aliases → canonical form, canonical takes priority; test wiring import issues · sampling gaps · Audit Sink failure to `CONTROL_HEALTH_CHANGED` (REL-12) |
+| server-initiated request · async task · cancellation/replay | `mcp_async.py` `ServerRequestRouter`·`AsyncTaskRegistry`·`TaskState`, `mcp_http.py` `set_server_request_router` | allowlist fail-closed routing · unknown-method rejection · handler isolation, task lifecycle · one-time consume (replay rejection) · idempotent cancel · principal binding · capacity, HTTP client wiring test |
+| PostgreSQL migration runner · partition/retention · pool | `postgres_ops.py` `PostgreSQLMigrationRunner`·`PartitionMaintenance`·`PostgreSQLConnectionPool` | idempotent apply · checksum-drift rejection · legacy-file skip, monthly partition ensure · DETACH + ingest-key prune then drop, bounded pool reuse/capacity, admin-DSN-gated live round-trip test |
+| Security statistics contract · interaction reducer | `analytics.py`, `schemas/security-statistics.schema.json`, `schemas/fixtures/analytics-*.json` | joins tenant_id+interaction_id state (REQUESTED→CONTROL→ACTION→OUTCOME), requires both completed enforcement action and final BLOCKED evidence, per-mode aggregation, golden fixture · real gateway reduction test |
+| Studio TS reducer parity (cross-language golden) | `studio/app/analytics.mjs`(+`.d.ts`) | **byte-identical** sort-key serialization against Python on the same fixture, Unicode code-point ordering · bare-array/`{events}`-wrapper parity (`studio/tests/analytics-contract.test.mjs`) |
+| SDK event shape conformance (identical to gateway) | `sdk.py` (`payload.control` nesting · connector `connectorExecutionId`) | verified via scaffold-generated tests that SDK-wrapped actors are captured in statistics |
+| Ledger interaction range query · statistics API | `ledger.py`/`postgres_ledger.py` `interaction_lifecycles_started_between`, `ledger_http.py` `GET /v1/statistics`, `ledger-api.openapi.yaml` | selects in-range REQUESTED then joins the full lifecycle, `statistics:read` scope, dataSource, 422 on limit exceeded, PG tenant-scoped SQL test |
+| Manifest skeleton · security-test generator | `scaffold.py`, `interlock architecture skeleton` | example manifest output verified for import · `build()` wiring · **passing its own generated security tests** (verdicts asserted via the statistics reducer) |
+| Studio promotion CLI | `__main__.py` `interlock studio propose/approve/promote/rollback/status` | compile→propose→Ed25519 two-person approval→promote→fresh-approved rollback E2E, private key from env · verification key from a public-only file |
+| Run Control Plane (privileged deployment command API) | `control_plane.py` `ControlPlaneAPI` | server holds only approver-bound public keys, signature verified on submission, promote/rollback two-person gate, rejects rollback of a never-promoted bundle, `deploy:*` scope test |
+| API CORS (Studio read-only Live Attach) | `ledger_http.py`·`control_plane.py` | pre-auth origin rejection, preflight OPTIONS, allowed-origin echo, loopback-http development-origin allowance test |
+| Studio statistics · deployment views | `studio/app/panels.tsx` (`StatsPanel`·`DeployPanel`), `page.tsx` stats/deploy views | offline ledger-import aggregation + live `/v1/statistics` fetch, control-plane promotion panel (signing keys stay outside the browser), build · lint · contract test |
+| Full fake-data platform E2E | `tests/test_platform_e2e.py`, `tests/fixtures/platform_e2e/` | full manifest digest→git propose→Ed25519 two-person ENFORCE→real localhost A2A→approval pause/resume→one fake MCP call→Ledger Runtime/Statistics/Drift + D5 block · undeclared-bypass test |
 
-## 현재 자동화된 L1 범위
+## Currently Automated L1 Scope
 
-`tests/test_core.py`는 M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 인수·결과 secret, M9 Unicode 목적지·미선언 부작용·사후 egress를 검증한다. 정상 호출, SHADOW 비집행, 승인 binding, idempotency도 함께 검증한다. `tests/test_architecture.py`는 Architecture compile, 보안 lint, Dynamic Edge와 runtime drift를 검증한다. `tests/test_mcp_transport.py`는 실제 MCP JSON-RPC D1/D3/D4 경계, exact digest binding, drift·삭제, trusted context와 dispatch 0을 검증한다. `tests/test_mcp_http.py`는 로컬 실제 HTTP socket으로 lifecycle, JSON/SSE, session, Origin, 인증, timeout, redirect와 token 분리를 검증한다. `tests/test_mcp_oauth.py`는 실제 OAuth HTTP fixture로 protected resource/AS discovery, PKCE, SSRF, redirect, callback replay와 token claim binding을 검증한다. `tests/test_mcp_stdio.py`와 `tests/test_receipts.py`는 실제 subprocess stdio 경계와 외부 전송 없는 transaction reconciliation을 검증한다. `tests/test_ledger_http.py`와 `tests/test_postgres_ledger.py`는 event/trace API와 DB role tenant binding을 검증하며, PostgreSQL 16 live 시험은 DSN이 있는 CI에서 실행된다.
+`tests/test_core.py` verifies M1 metadata instruction, M2 definition drift, M3 cross-server reference, M5 token mismatch/passthrough, M6 authorization URL, M8 argument/result secrets, and M9 Unicode destination · undeclared side effect · post-hoc egress. It also verifies normal calls, SHADOW non-enforcement, approval binding, and idempotency. `tests/test_architecture.py` verifies Architecture compile, security lint, Dynamic Edge, and runtime drift. `tests/test_mcp_transport.py` verifies real MCP JSON-RPC D1/D3/D4 boundaries, exact digest binding, drift/deletion, trusted context, and zero dispatch. `tests/test_mcp_http.py` verifies lifecycle, JSON/SSE, session, Origin, authentication, timeout, redirect, and token separation over a local real HTTP socket. `tests/test_mcp_oauth.py` verifies protected resource/AS discovery, PKCE, SSRF, redirect, callback replay, and token claim binding using real OAuth HTTP fixtures. `tests/test_mcp_stdio.py` and `tests/test_receipts.py` verify real subprocess stdio boundaries and transaction reconciliation without external transport. `tests/test_ledger_http.py` and `tests/test_postgres_ledger.py` verify the event/trace API and DB role tenant binding, and the PostgreSQL 16 live tests run in CI when a DSN is present.
 
-`tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
+`tests/test_l1_matrix.py` automates all 34 L1-SIM-M1..M9 test IDs from [05 Validation Plan](05-l1-security-validation-plan.md) as SIMULATION. M4 publisher admission · destination egress deny/allow, M5 scope broadening · callback replay, and M6 private-IP redirect · response size · safe consent paths also leave independent matrix-test and `TEST_EXECUTED` evidence. The following items are the production-integration boundary beyond reference verification.
 
-2026-07-20 전체 회귀는 Python 454개 test 통과·12개 skip·15개 subtest 통과 + Studio 8개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+The 2026-07-20 full regression: 454 Python tests passing · 12 skipped · 15 subtests passing, plus 8 Studio tests (`npm test`, including build · golden · Unicode · boundary/orchestration contracts). Current skips are the Linux+bwrap live and DSN-less PostgreSQL live families; the seccomp BPF logic is verified in-test with a classic-BPF interpreter, while real-kernel enforcement is verified by the CI `sandbox-live` job.
 
-- Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
-- OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
-- PostgreSQL 자동 partition/retention 운영과 connection pool·HA(live CI·프로비저닝은 구현됨)
-- WORM 보존의 S3 Object-Lock 내구 backend(Protocol·append-only 해시체인 impl은 구현됨), 원격 Git host PR 리뷰 배선(로컬 git propose/promote/rollback은 구현됨)
-- 고급 MCP 비동기 task·cancellation, IdP key rotation·DPoP/mTLS sender-constrained token
-- A2A durable task/run store, signed Agent Card registry, SSE/subscription/push, 분산 scheduler/worker lease
+- Sigstore/Rekor network verification (asymmetric signing · KMS adapter point are implemented) and real egress proxy/sidecar socket · kill-telemetry operational wiring (DNS · connect-IP pinning is implemented via `PinnedSocketEgressBackend`)
+- OTLP gRPC (:4317) streaming receiver (the HTTP JSON receiver and Langfuse/LangSmith adapters are implemented), Incident/response service
+- PostgreSQL automated partition/retention operations and connection pool · HA (live CI · provisioning are implemented)
+- S3 Object-Lock durable backend for WORM retention (the Protocol · append-only hash-chain implementation is implemented), remote Git host PR review wiring (local git propose/promote/rollback is implemented)
+- Advanced MCP async task · cancellation, IdP key rotation · DPoP/mTLS sender-constrained tokens
+- A2A durable task/run store, signed Agent Card registry, SSE/subscription/push, distributed scheduler/worker lease
 
-## 다음 구현 순서
+## Next Implementation Order
 
-doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M9 test ID 자동화와 canary corpus, (b) canonical 서명 helper, (c) OTLP/HTTP JSON receiver와 signed Audit Sink, (d) 서명 sandbox attestation verifier, (e) inbound resumable SSE와 SessionStore, (f) RFC7662 introspection verifier와 OAuth TransactionStore, (g) Studio `compile --shadow`, (h) M7 agent-config guard, (i) JWKS/JWT verifier(optional `jwt` extra)와 loopback consent, (j) Bubblewrap OS sandbox backend.
+All 10 integration items from doc-06 §Next Order have been implemented: (a) M1–M9 test ID automation and canary corpus, (b) canonical signing helper, (c) OTLP/HTTP JSON receiver and signed Audit Sink, (d) signed sandbox attestation verifier, (e) inbound resumable SSE and SessionStore, (f) RFC7662 introspection verifier and OAuth TransactionStore, (g) Studio `compile --shadow`, (h) M7 agent-config guard, (i) JWKS/JWT verifier (optional `jwt` extra) and loopback consent, (j) Bubblewrap OS sandbox backend.
 
-이후 다음 프로덕션 통합 항목을 추가로 구현했다: 분산 PostgreSQL store(Session/OAuth/Config `0002`, DefinitionRegistry `0003`), opt-in gateway config-guard preflight, macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행), 실 소켓 egress backend(DNS·IP pinning), 비대칭 publisher 서명(Ed25519·KMS 지점), Langfuse/LangSmith trace 어댑터, WORM audit store, Studio git 배포(propose→2인 승격→rollback), PostgreSQL live CI 프로비저닝과 GitHub Actions.
+The following additional production-integration items have since been implemented: distributed PostgreSQL stores (Session/OAuth/Config `0002`, DefinitionRegistry `0003`), opt-in gateway config-guard preflight, macOS Seatbelt · Linux bwrap seccomp sandboxes (live enforcement), real-socket egress backend (DNS · IP pinning), asymmetric publisher signing (Ed25519 · KMS point), Langfuse/LangSmith trace adapters, WORM audit store, Studio git deployment (propose→two-person promotion→rollback), PostgreSQL live CI provisioning and GitHub Actions.
 
-남은 것은 두 갈래다. 하나는 외부 서비스·인프라 없이 이 저장소 안에서 구현 가능한 **내부 구현 작업**, 다른 하나는 외부 SaaS·서비스·플랫폼과의 **연동 작업**이다.
+What remains falls into two categories: one is **internal implementation work** that can be built inside this repository without external services or infrastructure, and the other is **integration work** with external SaaS, services, and platforms.
 
-**내부 구현 작업: 모두 완료됨.** artifact digest 검사와 exec 사이 TOCTOU 제거(fd 실행), 장기 process supervisor와 sandbox health telemetry, OTLP semantic convention 어댑터와 sampling 누락·Audit Sink 장애의 `CONTROL_HEALTH_CHANGED` 연결, MCP server-initiated request·비동기 task·cancellation/replay, PostgreSQL migration runner·자동 partition/retention·connection pool, WORM store의 파일 기반 append-only 영속화까지 이 저장소 안에서 구현·검증했다.
+**Internal implementation work: all complete.** This repository has implemented and verified: eliminating the TOCTOU window between artifact digest verification and exec (fd exec), a long-running process supervisor and sandbox health telemetry, the OTLP semantic convention adapter and wiring sampling gaps/Audit Sink failures to `CONTROL_HEALTH_CHANGED`, MCP server-initiated requests · async tasks · cancellation/replay, the PostgreSQL migration runner · automated partition/retention · connection pool, and file-based append-only persistence for the WORM store.
 
-**2026-07-19 제품 폐쇄 루프(설계→계약→개발→SHADOW 실행→증거→통계·drift→승격) 연결 계층도 완료됐다.** 통계는 이벤트 카운트가 아니라 tenant+interaction 상태 결합이며, REQUESTED 범위에 속한 interaction의 전체 lifecycle을 읽는다. 집행 성공은 완료된 enforcement action과 최종 BLOCKED 증거를 모두 요구하고, 교차언어 golden 계약은 Python API와 Studio 오프라인 import의 Unicode 정렬까지 동일하게 고정한다. 승격·rollback 승인은 approver identity를 포함한 Ed25519 statement이며 Control Plane에는 공개키만 둔다. 알려진 v1 한계: 통계 시계열은 표 렌더, control plane 대기 승인은 in-memory(재시작 시 재제출), 대용량 범위는 사전집계 없이 422로 방어, OTLP import는 통계 집계 불가(원본 ledger 이벤트 필요).
+**The 2026-07-19 product closed-loop (design→contract→development→SHADOW execution→evidence→statistics/drift→promotion) connective layer is also complete.** Statistics are not event counts but a join over tenant+interaction state, reading the full lifecycle of interactions whose REQUESTED event falls in range. A successful enforcement requires both a completed enforcement action and final BLOCKED evidence, and the cross-language golden contract pins even the Unicode ordering identically between the Python API and Studio's offline import. Promotion/rollback approval is an Ed25519 statement that includes the approver identity, and the Control Plane holds only the public key. Known v1 limits: statistics time series render as a table, control-plane pending approvals are in-memory (resubmission required after restart), large ranges are defended with a 422 rather than pre-aggregation, and OTLP import cannot be aggregated into statistics (raw ledger events are required).
 
-**2026-07-20 Trust Boundary→A2A→오케스트레이션 vertical slice도 완료됐다.** Studio의 Actor topology와 Task workflow가 한 manifest에 저장되고 compiler가 cross-zone boundary와 task transport를 함께 검증한다. A2A 1.0 JSON-RPC core는 REL-06과 boundary를 handler 실행 전에 집행하며 workflow engine은 dependency·retry·timeout·approval·budget을 적용한다. 운영 한계는 in-memory task/run store, 단일 프로세스 scheduler, 비스트리밍 A2A core다.
+**The 2026-07-20 Trust Boundary→A2A→orchestration vertical slice is also complete.** Studio's Actor topology and Task workflow are stored in a single manifest, and the compiler validates cross-zone boundaries and task transport together. The A2A 1.0 JSON-RPC core enforces REL-06 and boundaries before handler execution, and the workflow engine applies dependency · retry · timeout · approval · budget. Operational limits: an in-memory task/run store, a single-process scheduler, and a non-streaming A2A core.
 
-남은 것은 외부 서비스·플랫폼 연동뿐이다(아래).
+What remains is only external service/platform integration (below).
 
-**외부 연동 작업 (외부 서비스·플랫폼 필요):**
+**External integration work (requires external services/platforms):**
 
-1. Sigstore/Rekor 네트워크 검증, 외부 KMS/HSM key 발급·회전·폐기, 프로덕션 IdP·Secret Store 연동
-2. 실 egress sidecar의 socket 전달·차단·kill telemetry, S3 Object-Lock 기반 내구 WORM export
-3. OTLP gRPC(:4317) streaming receiver·Collector queue/backpressure, Incident/response service
-4. PostgreSQL HA·failover·distributed rate limit·TLS termination
-5. 원격 GitHub/GitLab PR 리뷰·배포 연결
-6. IdP JWKS cache·key rotation·장애 정책, DPoP/mTLS sender-constrained token, 운영 consent UI·HTTPS callback·refresh-token 수명주기
-7. A2A signed Agent Card registry, durable task/run store, SSE·push, distributed queue·worker HA
+1. Sigstore/Rekor network verification, external KMS/HSM key issuance · rotation · revocation, production IdP · Secret Store integration
+2. Real egress sidecar socket forwarding · blocking · kill telemetry, S3 Object-Lock–based durable WORM export
+3. OTLP gRPC (:4317) streaming receiver · Collector queue/backpressure, Incident/response service
+4. PostgreSQL HA · failover · distributed rate limiting · TLS termination
+5. Remote GitHub/GitLab PR review · deployment connection
+6. IdP JWKS cache · key rotation · failure policy, DPoP/mTLS sender-constrained tokens, production consent UI · HTTPS callback · refresh-token lifecycle
+7. A2A signed Agent Card registry, durable task/run store, SSE · push, distributed queue · worker HA
 
-gVisor·Kata·Kubernetes sandbox backend는 Bubblewrap/Seatbelt를 대체해야 하는 배포 환경에서만 필요한 선택 항목이다.
+gVisor · Kata · Kubernetes sandbox backends are optional items needed only in deployment environments that must replace Bubblewrap/Seatbelt.

@@ -7,16 +7,18 @@ status: active
 
 # MCP OAuth Identity Guard
 
-이 문서는 MCP 2025-11-25 Streamable HTTP client가 OAuth protected resource를 발견하고, 사용자 승인을 거쳐, 대상 MCP Server에만 쓸 수 있는 토큰을 교환하는 보안 계약을 정의한다. 구현은 `src/agent_interlock/mcp_oauth.py`, 공격 fixture와 회귀 시험은 `tests/mcp_oauth_fixture.py`, `tests/test_mcp_oauth.py`에 있다.
+> 한국어 원문: [10-mcp-oauth-identity-guard.ko.md](10-mcp-oauth-identity-guard.ko.md)
 
-## 1. 적용 결과
+This document defines the security contract by which an MCP 2025-11-25 Streamable HTTP client discovers an OAuth protected resource, obtains user consent, and exchanges for a token usable only against the target MCP Server. The implementation is in `src/agent_interlock/mcp_oauth.py`; attack fixtures and regression tests are in `tests/mcp_oauth_fixture.py` and `tests/test_mcp_oauth.py`.
+
+## 1. Applied Result
 
 ```text
 ┌──────────────────┐   401/403 challenge   ┌──────────────────────┐
 │ MCP HTTP Client  │ ─────────────────────> │ OAuth Identity Guard │
 └────────┬─────────┘                        └──────────┬───────────┘
          │                                             │
-         │                               allowlist + DNS/IP + hop 검증
+         │                               allowlist + DNS/IP + hop verification
          │                                             │
          │                         ┌───────────────────┴──────────────────┐
          │                         │                                      │
@@ -45,47 +47,47 @@ status: active
                                              └───────────────────┘
 ```
 
-인바운드 Host Bearer token은 이 흐름의 입력이 아니다. `MCPAccessToken`은 authorization code 교환과 신뢰할 수 있는 claims verifier를 모두 통과한 다운스트림 token만 `MCPStreamableHTTPClient.authorization_provider`에 공급한다. MCP 요청을 401 뒤에 자동 재실행하지 않으므로 쓰기 Tool의 중복 실행도 만들지 않는다.
+The inbound Host Bearer token is not an input to this flow. `MCPAccessToken` supplies `MCPStreamableHTTPClient.authorization_provider` only with a downstream token that has passed both the authorization code exchange and a trusted claims verifier. MCP requests are never automatically retried behind a 401, so write-Tool calls are never duplicated either.
 
-## 2. 구현된 통제
+## 2. Implemented Controls
 
-| 경계 | 통제 | 실패 시 동작 |
+| Boundary | Control | Failure Behavior |
 |---|---|---|
-| `WWW-Authenticate` | Bearer challenge, quoted value, 중복 parameter, CR/LF 검사 | challenge 거부 |
-| Protected Resource discovery | challenge의 `resource_metadata`, endpoint path well-known, root well-known 순서 | 404만 다음 후보로 이동 |
-| Resource Metadata | `resource`가 canonical MCP endpoint와 정확히 일치, AS host 및 선택적 exact issuer allowlist | 불일치 차단 |
-| AS Metadata | issuer path discovery 순서, issuer 정확 일치, authorization/token endpoint 재검증 | 불일치 차단 |
-| PKCE | metadata에 `S256` 명시 필수, 43–128자 verifier, SHA-256 base64url challenge | authorization 시작 차단 |
-| Authorization request | 등록 redirect URI 정확 일치, `state`, `resource`, challenge scope 결합 | transaction 발급 차단 |
-| Callback | scheme/authority/path, state, code/error 배타성, 만료, one-time consume | transaction 폐기 |
-| Consent adapter | loopback-only callback listener, exact one-time callback와 명시적 browser opener | timeout·두 번째 callback 거부 |
-| Token request | `resource`, 동일 redirect URI, code verifier 필수, redirect 금지, one-time consume | 재교환·redirect 차단 |
-| Opaque token verification | RFC 7662 introspection, client auth, redirect/SSRF/size 제한, `active`와 claim shape 검사 | token 공급 차단 |
-| JWT verification | optional `jwt` extra의 JWKS 기반 RS256/ES256/EdDSA, alg·kid·iss·exp/nbf 검사 | token 공급 차단 |
-| Transaction state | 교체 가능한 one-time `OAuthTransactionStore`, 단일 노드 메모리 reference | replay 시 transaction 없음 |
-| Token handling | access token과 PKCE/state의 `repr` 정제, token fingerprint만 `CredentialClaims`에 저장 | 원장에 raw token 미저장 |
-| SSRF | HTTPS 기본, host allowlist, userinfo/fragment 차단, DNS 결과의 non-public IP 차단 | fetch 전 차단 |
-| 개발 profile | 명시적 port의 loopback HTTP만 별도 opt-in | 기본 profile에서는 차단 |
+| `WWW-Authenticate` | Bearer challenge, quoted value, duplicate-parameter, CR/LF check | challenge rejected |
+| Protected Resource discovery | challenge's `resource_metadata`, endpoint-path well-known, root well-known order | only 404 advances to the next candidate |
+| Resource Metadata | `resource` matches the canonical MCP endpoint exactly, AS host and optional exact-issuer allowlist | mismatch blocked |
+| AS Metadata | issuer path discovery order, exact issuer match, authorization/token endpoint re-verification | mismatch blocked |
+| PKCE | metadata must explicitly state `S256`, 43–128 character verifier, SHA-256 base64url challenge | authorization start blocked |
+| Authorization request | exact match to the registered redirect URI, binds `state`, `resource`, and challenge scope | transaction issuance blocked |
+| Callback | scheme/authority/path, state, code/error exclusivity, expiry, one-time consume | transaction discarded |
+| Consent adapter | loopback-only callback listener, exact one-time callback with an explicit browser opener | timeout · second-callback rejected |
+| Token request | `resource`, identical redirect URI, code verifier required, redirect prohibited, one-time consume | re-exchange · redirect blocked |
+| Opaque token verification | RFC 7662 introspection, client auth, redirect/SSRF/size limits, `active` and claim-shape check | token supply blocked |
+| JWT verification | JWKS-based RS256/ES256/EdDSA via the optional `jwt` extra, alg · kid · iss · exp/nbf check | token supply blocked |
+| Transaction state | a replaceable one-time `OAuthTransactionStore`, single-node in-memory reference | no transaction on replay |
+| Token handling | redacted `repr` for the access token and PKCE/state, only the token fingerprint stored in `CredentialClaims` | raw token never stored in the ledger |
+| SSRF | HTTPS by default, host allowlist, userinfo/fragment blocked, non-public IPs blocked in DNS results | blocked before fetch |
+| Development profile | only loopback HTTP on an explicit port, as a separate opt-in | blocked in the default profile |
 
-challenge가 `scope`를 제공하면 현재 요청의 권한으로 취급한다. authorization request가 이를 줄이거나 늘리면 `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH`로 차단한다. Token 검증 후에는 기존 `LinkPolicy`가 `CredentialClaims.exchanged`, audience, resource, actor, delegation depth를 한 번 더 판정한다.
+When the challenge provides a `scope`, it is treated as the authority of the current request. If the authorization request narrows or widens it, the request is blocked with `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH`. After token verification, the existing `LinkPolicy` makes one more pass judging `CredentialClaims.exchanged`, audience, resource, actor, and delegation depth.
 
-## 3. Discovery 순서
+## 3. Discovery Order
 
-MCP endpoint가 `https://mcp.example/tenant/mcp`라면 Protected Resource Metadata 후보는 다음과 같다.
+If the MCP endpoint is `https://mcp.example/tenant/mcp`, the Protected Resource Metadata candidates are as follows.
 
-1. Bearer challenge가 지정한 `resource_metadata`
+1. The `resource_metadata` specified by the Bearer challenge
 2. `https://mcp.example/.well-known/oauth-protected-resource/tenant/mcp`
 3. `https://mcp.example/.well-known/oauth-protected-resource`
 
-issuer가 `https://auth.example/tenant`라면 Authorization Server Metadata 후보는 다음과 같다.
+If the issuer is `https://auth.example/tenant`, the Authorization Server Metadata candidates are as follows.
 
 1. `https://auth.example/.well-known/oauth-authorization-server/tenant`
 2. `https://auth.example/.well-known/openid-configuration/tenant`
 3. `https://auth.example/tenant/.well-known/openid-configuration`
 
-후보 이동은 `404 Not Found`에만 허용한다. 잘못된 JSON, resource/issuer 불일치, 안전하지 않은 URL, 401/403/5xx는 discovery 실패로 처리해 공격자가 fallback을 이용해 신뢰 경계를 낮출 수 없게 한다.
+Advancing to the next candidate is allowed only on `404 Not Found`. Malformed JSON, resource/issuer mismatch, unsafe URLs, and 401/403/5xx are all treated as discovery failure, so an attacker cannot use fallback to lower the trust boundary.
 
-## 4. 사용 계약
+## 4. Usage Contract
 
 ```python
 profile = OAuthSecurityProfile(
@@ -105,7 +107,7 @@ flow = MCPAuthorizationCodeFlow(
 )
 transaction = flow.begin(redirect_uri="https://console.example/oauth/callback")
 
-# transaction.authorization_uri를 사용자 browser에서 연 뒤 callback을 전달한다.
+# Open transaction.authorization_uri in the user's browser, then pass in the callback.
 code = flow.validate_callback(transaction, callback_uri)
 
 token_provider = MCPAuthorizationCodeTokenClient(
@@ -123,43 +125,43 @@ client = MCPStreamableHTTPClient(
 trusted_credential_claims = token_provider.credential
 ```
 
-`verify_signature_or_introspect`는 `MCPJWKSVerifier`, `MCPTokenIntrospectionVerifier` 또는 같은 계약의 IdP adapter로 구성하고 `VerifiedAccessTokenClaims`를 반환해야 한다. 단순 JWT payload decode 결과는 이 인터페이스에 넣으면 안 된다. loopback installed-app 흐름은 `LoopbackCallbackReceiver`와 `run_consent`로 authorization URI를 열고 정확한 callback URI를 받을 수 있다. `trusted_credential_claims`는 `MCPInvocationContext.credential`에 전달해 Gateway 정책과 동일한 actor/resource binding을 집행한다.
+`verify_signature_or_introspect` must be built from `MCPJWKSVerifier`, `MCPTokenIntrospectionVerifier`, or an IdP adapter under the same contract, and it must return `VerifiedAccessTokenClaims`. A plain decoded JWT payload must never be passed into this interface. The loopback installed-app flow can open the authorization URI with `LoopbackCallbackReceiver` and `run_consent` and receive the exact callback URI. Pass `trusted_credential_claims` into `MCPInvocationContext.credential` to enforce the same actor/resource binding as the Gateway policy.
 
-## 5. Redirect와 SSRF 운영 기준
+## 5. Redirect and SSRF Operational Standards
 
-- Metadata redirect는 기본 `max_redirect_hops=0`이다. 조직 정책상 필요할 때만 작은 값으로 열며 모든 hop에 scheme, host allowlist, DNS/IP 검사를 다시 수행한다.
-- Multi-tenant Authorization Server에서는 host allowlist만 쓰지 말고 `allowed_authorization_server_issuers`로 tenant path까지 정확히 고정한다.
-- Token endpoint redirect는 항상 거부한다. Authorization code와 PKCE verifier가 다른 endpoint로 전달될 가능성을 없앤다.
-- `resolve_dns=True`가 기본이며 private, loopback, link-local, multicast, reserved, unspecified 주소를 차단한다. loopback HTTP는 시험 profile에서만 허용한다.
-- Python reference client의 검사와 실제 연결 사이에는 DNS TOCTOU 가능성이 남는다. 운영 배포에서는 고정 egress proxy, DNS pinning 또는 service mesh 정책으로 같은 allowlist를 집행해야 한다.
+- Metadata redirects default to `max_redirect_hops=0`. Open it to a small value only when organizational policy requires it, and re-run the scheme, host allowlist, and DNS/IP checks on every hop.
+- For a multi-tenant Authorization Server, do not rely on the host allowlist alone; pin the tenant path exactly with `allowed_authorization_server_issuers`.
+- Token endpoint redirects are always rejected, eliminating any possibility of the authorization code or PKCE verifier being delivered to a different endpoint.
+- `resolve_dns=True` is the default and blocks private, loopback, link-local, multicast, reserved, and unspecified addresses. loopback HTTP is allowed only in the test profile.
+- A DNS TOCTOU window remains between the Python reference client's checks and the actual connection. Production deployments must enforce the same allowlist with a fixed egress proxy, DNS pinning, or a service-mesh policy.
 
-## 6. Reference 범위와 남은 운영 구성요소
+## 6. Reference Scope and Remaining Operational Components
 
-reference core는 loopback callback receiver, browser opener 계약, RFC 7662 introspection verifier, optional JWKS/JWT verifier와 one-time transaction store를 제공한다. 다중 instance 원자적 replay 방지가 필요한 배포는 `InMemoryOAuthTransactionStore` 대신 `PostgreSQLOAuthTransactionStore`(`postgres_stores.py`, migration 0002)를 주입하며, 이는 DELETE-consume으로 cross-instance callback replay를 차단한다. DNS pinning과 실제 연결 IP 강제는 `egress.py` `PinnedSocketEgressBackend`(DNS 1회 해석→연결 IP 고정→peer 검증→비전역 주소 fail-closed)로 제공한다. 다음 운영 구성요소는 아직 포함하지 않는다.
+The reference core provides a loopback callback receiver, a browser-opener contract, an RFC 7662 introspection verifier, an optional JWKS/JWT verifier, and a one-time transaction store. Deployments that need atomic multi-instance replay prevention inject `PostgreSQLOAuthTransactionStore` (`postgres_stores.py`, migration 0002) instead of `InMemoryOAuthTransactionStore`, which blocks cross-instance callback replay via DELETE-consume. DNS pinning and enforcement of the actual connect IP are provided by `egress.py` `PinnedSocketEgressBackend` (single DNS resolution → pinned connect IP → peer verification → non-global-address fail-closed). The following operational components are not yet included.
 
-- 조직별 로그인·동의 UI, public HTTPS callback service와 consent audit workflow
-- IdP별 JWKS cache·rotation·장애 정책과 introspection credential 수명주기
-- client 등록·secret 저장소와 Dynamic Client Registration/Client ID Metadata Document
-- refresh token 암호화 저장·회전·폐기
+- Organization-specific login/consent UI, a public HTTPS callback service, and a consent audit workflow
+- Per-IdP JWKS cache · rotation · failure policy and the introspection credential lifecycle
+- Client registration/secret storage and Dynamic Client Registration/Client ID Metadata Document
+- Encrypted storage · rotation · revocation of refresh tokens
 - DPoP, mTLS sender-constrained token
-- 외부 KMS/HSM key 발급·회전·폐기와 프로덕션 IdP·Secret Store 연동
+- External KMS/HSM key issuance · rotation · revocation and production IdP/Secret Store integration
 
-따라서 현재 상태는 OAuth protocol guard와 token binding reference 구현 완료이며, 특정 IdP와 연결하는 production identity adapter 완료를 뜻하지 않는다.
+The current state, therefore, is a complete OAuth protocol guard and token-binding reference implementation — it does not mean a production identity adapter wired to a specific IdP is complete.
 
-## 7. 검증
+## 7. Verification
 
-`tests/test_mcp_oauth.py`는 실제 loopback HTTP Authorization Server fixture를 사용해 다음을 자동 검증한다.
+`tests/test_mcp_oauth.py` uses a real loopback HTTP Authorization Server fixture to automatically verify the following.
 
-- challenge와 scope parsing
-- protected resource/issuer path discovery 순서
-- resource·issuer mismatch와 S256 누락 차단
-- credential URL, link-local SSRF, untrusted redirect 차단
-- redirect hop 기본 차단과 opt-in hop 재검증
+- challenge and scope parsing
+- protected resource/issuer path discovery order
+- resource/issuer mismatch and missing-S256 rejection
+- credential URL, link-local SSRF, and untrusted-redirect rejection
+- default redirect-hop rejection and opt-in hop re-verification
 - redirect URI, state, PKCE, callback/code one-time binding
-- token request의 resource·verifier·redirect 결합
-- token endpoint redirect와 audience/actor/scope mismatch 차단
-- access token 비노출과 `CredentialClaims.exchanged=True`
+- token request's resource · verifier · redirect binding
+- token endpoint redirect and audience/actor/scope mismatch rejection
+- access token non-exposure and `CredentialClaims.exchanged=True`
 
-`tests/test_oauth_introspection.py`, `tests/test_mcp_jwt.py`, `tests/test_oauth_consent.py`는 introspection client-auth·claim mapping·one-time store, JWKS 서명과 알고리즘 혼동 거부, loopback callback one-time·timeout을 추가 검증한다. `tests/test_l1_matrix.py`는 M5 scope broadening/state replay와 M6 private redirect/safe consent 경로를 L1 추적 ID로 실행한다.
+`tests/test_oauth_introspection.py`, `tests/test_mcp_jwt.py`, and `tests/test_oauth_consent.py` additionally verify introspection client-auth · claim mapping · one-time store, JWKS signature and algorithm-confusion rejection, and loopback callback one-time · timeout. `tests/test_l1_matrix.py` runs the M5 scope broadening/state replay and M6 private redirect/safe consent paths under L1 tracking IDs.
 
-기준 명세는 [MCP Authorization 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices), [RFC 9728 OAuth Protected Resource Metadata](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8707 Resource Indicators](https://www.rfc-editor.org/rfc/rfc8707), [RFC 7636 PKCE](https://www.rfc-editor.org/rfc/rfc7636)다.
+The baseline specifications are [MCP Authorization 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices), [RFC 9728 OAuth Protected Resource Metadata](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8707 Resource Indicators](https://www.rfc-editor.org/rfc/rfc8707), and [RFC 7636 PKCE](https://www.rfc-editor.org/rfc/rfc7636).
