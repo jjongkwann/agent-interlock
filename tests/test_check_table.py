@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from dataclasses import replace
+from types import CodeType
 from unittest.mock import patch
 
 from test_policy_characterization import clean_case
 
 from agent_interlock import policy as policy_module
+from agent_interlock.architecture import ArchitectureBoundary, EnforcementPoint
 from agent_interlock.models import ActorType, ControlDecision
 from agent_interlock.policy import (
     A2A_PROFILE,
@@ -20,6 +23,136 @@ from agent_interlock.policy import (
     Profile,
     evaluate,
     run_checks,
+)
+
+# Every reason key in the table is an upper-case, hyphenated string in one of three namespaces.
+# Narrow enough that a check's docstring or a data-class literal like "D7" cannot match it, wide
+# enough that a key added to any namespace is picked up without editing this pattern.
+_REASON_KEY = re.compile(r"^(?:INTERLOCK|L1|A2A)-[A-Z0-9-]+$")
+
+
+def reason_keys(run) -> set[str]:
+    """The reason keys a check's `run` can emit, read out of its compiled constants.
+
+    Static rather than behavioural on purpose: a key only reachable down a branch no fixture
+    happens to take is exactly the one that slips past a profile's rename map. Nested tuples and
+    nested code objects (comprehensions, lambdas) are walked, so a key inside one is still seen.
+    A key assembled at runtime by concatenation would evade this -- no check does that today, and
+    test_every_condition_the_a2a_profile_can_trip_emits_an_a2a_reason_code covers the other side.
+    """
+    found: set[str] = set()
+    stack: list[object] = [run.__code__]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if _REASON_KEY.match(item):
+                found.add(item)
+        elif isinstance(item, tuple):
+            stack.extend(item)
+        elif isinstance(item, CodeType):
+            stack.extend(item.co_consts)
+    return found
+
+
+def a2a_case():
+    """clean_case() dressed the way A2ABroker.send_message dresses a CheckContext -- a compiled
+    boundary, a payload size, the edge relationship, and the audience/resource expectations the
+    broker derives from its target -- while still tripping nothing. Every recipe below perturbs
+    exactly one field of it."""
+    policy, context = clean_case()
+    policy = replace(policy, allowed_purposes=frozenset({context.intent.purpose}))
+    boundary = ArchitectureBoundary(
+        id="boundary.control-worker",
+        label="Control to worker",
+        source_zone_id="zone.control",
+        target_zone_id="zone.worker",
+        enforcement_point=EnforcementPoint.A2A_BROKER,
+        allowed_relationships=frozenset({"DELEGATES"}),
+    )
+    context = replace(
+        context,
+        target=replace(context.target, input_schema={"type": "object", "required": ["question"]}),
+        intent=replace(
+            context.intent,
+            expected_audience=context.target.identity,
+            expected_resource=f"a2a://{context.target.id}",
+        ),
+        arguments={"parts": [{"data": {"question": "how do I reset the device?"}}]},
+        credential=replace(
+            context.credential,
+            audience=context.target.identity,
+            resource=f"a2a://{context.target.id}",
+            tenant_id="tenant-a",
+            authenticated=True,
+        ),
+        boundary=boundary,
+        payload_bytes=64,
+        relationship="DELEGATES",
+    )
+    return policy, context
+
+
+def _credential(**changes):
+    return lambda policy, context: (policy, replace(context, credential=replace(context.credential, **changes)))
+
+
+def _context(**changes):
+    return lambda policy, context: (policy, replace(context, **changes))
+
+
+def _intent(**changes):
+    return lambda policy, context: (policy, replace(context, intent=replace(context.intent, **changes)))
+
+
+# One recipe per reason key the A2A profile can emit, not one per check: INTERLOCK-DATA-CLASS-DENIED
+# and L1-M5-TOKEN-AUDIENCE-MISMATCH each have a second branch with a second key, and a second branch
+# is precisely where an unmapped gateway-namespace string hides.
+A2A_RECIPES = (
+    ("A2A-IDENTITY-BINDING-MISMATCH", "the credential is not authenticated", _credential(authenticated=False)),
+    (
+        "INTERLOCK-ACTOR-TYPE-DENIED",
+        "the source actor type is outside the policy",
+        lambda policy, context: (policy, replace(context, source=replace(context.source, type=ActorType.USER))),
+    ),
+    ("INTERLOCK-PURPOSE-DENIED", "the purpose is not allowed", _intent(purpose="EXFILTRATE")),
+    ("INTERLOCK-DATA-CLASS-DENIED", "a denied data class", _intent(data_classes=frozenset({"D8"}))),
+    (
+        "INTERLOCK-DATA-CLASS-DENIED",
+        "a denied D7 takes the second branch and emits L1-M9-SENSITIVE-EGRESS",
+        lambda policy, context: (
+            replace(policy, denied_data_classes=policy.denied_data_classes | {"D7"}),
+            replace(context, intent=replace(context.intent, data_classes=frozenset({"D7"}))),
+        ),
+    ),
+    (
+        "L1-M8-CREDENTIAL-DETECTED",
+        "a secret in the message envelope",
+        _context(arguments={"parts": [{"data": {"key": "AKIAIOSFODNN7EXAMPLE"}}]}),
+    ),
+    ("L1-M5-TOKEN-ACTOR-MISMATCH", "the credential names another actor", _credential(actor="agent.impersonator")),
+    ("L1-M5-TOKEN-AUDIENCE-MISMATCH", "the audience does not match", _credential(audience="spiffe://wrong")),
+    (
+        "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "the resource takes the second branch and emits L1-M5-TOKEN-RESOURCE-MISMATCH",
+        _credential(resource="a2a://wrong"),
+    ),
+    ("L1-M5-TOKEN-PASSTHROUGH", "the token was not exchanged", _credential(exchanged=False)),
+    ("L1-M5-DELEGATION-DEPTH", "the delegation chain is too deep", _credential(delegation_depth=9)),
+    (
+        "A2A-INPUT-SCHEMA-INVALID",
+        "a data Part that fails the target's input schema",
+        _context(arguments={"parts": [{"data": {"wrong": 1}}]}),
+    ),
+    ("A2A-PAYLOAD-INVALID", "an empty payload", _context(payload_bytes=0)),
+    ("A2A-BOUNDARY-RELATIONSHIP-DENIED", "a relationship the boundary denies", _context(relationship="OBSERVES")),
+    ("A2A-BOUNDARY-DATA-CLASS-DENIED", "a data class the boundary denies", _intent(data_classes=frozenset({"D5"}))),
+    ("A2A-BOUNDARY-IDENTITY-REQUIRED", "an unauthenticated credential", _credential(authenticated=False)),
+    ("A2A-BOUNDARY-TENANT-REQUIRED", "a credential with no tenant binding", _credential(tenant_id="")),
+    (
+        "A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
+        "a payload over the boundary ceiling",
+        lambda policy, context: (policy, replace(context, payload_bytes=context.boundary.max_payload_bytes + 1)),
+    ),
 )
 
 
@@ -172,12 +305,50 @@ class CheckTableTests(unittest.TestCase):
         """reason_codes is keyed on the emitted key, and two of the broker's checks emit two keys
         each: INTERLOCK-DATA-CLASS-DENIED also emits L1-M9-SENSITIVE-EGRESS on a denied D7, and
         L1-M5-TOKEN-AUDIENCE-MISMATCH also emits the resource key. One entry per check id would
-        put a gateway-namespace string on the A2A wire."""
+        put a gateway-namespace string on the A2A wire.
+
+        The audit has to run over the *emitted-key domain*, which is why it reads the keys back out
+        of the check bodies. This assertion previously filtered A2A_PROFILE.checks on
+        startswith("A2A-") and then asserted the survivors start with "A2A-" -- a tautology -- and
+        inspected the map's values, which are hand-written A2A strings, rather than its key domain.
+        Both an unmapped id added to the profile and an unmapped key added to a check body passed it.
+        """
         self.assertEqual(A2A_PROFILE.reason_codes["L1-M9-SENSITIVE-EGRESS"], "A2A-DATA-CLASS-DENIED")
         self.assertEqual(A2A_PROFILE.reason_codes["L1-M5-TOKEN-RESOURCE-MISMATCH"], "A2A-RESOURCE-MISMATCH")
-        renamed = set(A2A_PROFILE.reason_codes.values())
-        kept = {item for item in A2A_PROFILE.checks if item.startswith("A2A-")}
-        self.assertTrue(all(code.startswith("A2A-") for code in renamed | kept))
+        unmapped = {}
+        for check_id in A2A_PROFILE.checks:
+            keys = reason_keys(CHECKS[check_id].run)
+            # A check body yielding no key at all means the scan stopped working, not that the check
+            # emits nothing: fail rather than silently audit an empty set.
+            self.assertNotEqual(keys, set(), f"no reason key found in the body of {check_id}")
+            for key in keys:
+                code = A2A_PROFILE.reason_codes.get(key, key)
+                if not code.startswith("A2A-"):
+                    unmapped[key] = code
+        self.assertEqual(unmapped, {})
+
+    def test_every_condition_the_a2a_profile_can_trip_emits_an_a2a_reason_code(self):
+        """The behavioural half of the same invariant: trip each condition in turn and read what
+        comes back out. The static audit above cannot see a key built at runtime; this cannot see a
+        branch no recipe reaches. Together they cover both.
+
+        A check in the profile with no recipe fails the first assertion rather than being skipped --
+        a condition nobody can trip is a finding of its own, not a gap to paper over. The base case
+        is asserted clean and fully engaged first, so a finding below can only come from its own
+        recipe and not from fixture noise.
+        """
+        policy, context = a2a_case()
+        reasons, _, ran = run_checks(policy, context, A2A_PROFILE)
+        self.assertEqual(reasons, [])
+        self.assertEqual(ran, set(A2A_PROFILE.checks))
+        self.assertEqual(set(A2A_PROFILE.checks) - {check_id for check_id, _, _ in A2A_RECIPES}, set())
+        for check_id, condition, perturb in A2A_RECIPES:
+            with self.subTest(check=check_id, condition=condition):
+                policy, context = perturb(*a2a_case())
+                reasons, _, ran = run_checks(policy, context, replace(A2A_PROFILE, checks=(check_id,)))
+                self.assertEqual(ran, {check_id})  # armed and applicable ...
+                self.assertNotEqual(reasons, [])  # ... and the recipe still trips it
+                self.assertEqual([code for code in reasons if not code.startswith("A2A-")], [])
 
     def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
         """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates
