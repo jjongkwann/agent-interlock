@@ -491,10 +491,43 @@ settle them without shipping an undocumented decision.
   falls straight out of the previous question.
 - **Six `!= ALLOW` predicates, two answers.** See §6. Reconcile; do not add a
   seventh.
-- **`ActorSpec.data_access` has no enforcement reader.** The merge moved the
-  data-class judgement onto the link policy's `allowed`/`denied_data_classes`;
-  before it, `sdk.py` judged against the *actor's* grant. Different subjects, so
-  this is a control loss rather than a rename.
+- **`ActorSpec.data_access` has no enforcement reader — partly mitigated, and the
+  residual is measured.** The merge moved the data-class judgement onto the link
+  policy's `allowed`/`denied_data_classes`; before it, `sdk.py` judged against the
+  *actor's* grant. Different subjects, so a control change rather than a rename,
+  and **bidirectional**: over 4,096 `(grant, allowed, intent)` combinations run
+  through the real SDK at both revisions, 671 cells went denied→allowed (control
+  loss) and 671 allowed→denied (new strictness on *declared* traffic).
+
+  The remedy shipped is the design-time lint `ARCH-DATA-CLASS-EXCEEDS-ACTOR`
+  (`edge.policy.allowed_data_classes ⊆ target.data_access`), chosen over a runtime
+  change so nothing in the enforcement path moves.
+
+  **What it closes, measured — and note this is the opposite of what the proposal
+  claimed.** Restricted to lint-clean cells: **control loss 0, unreachable**;
+  **new strictness 369 of 1,296, still fully reachable**. Lint-clean
+  counterexample: `grant={D1,D2,D3,D7}`, `allowed={D2,D3,D7}`, `intent={D1}` →
+  `main` ALLOW, HEAD BLOCK. The commit message of `ef19f88` carries the inverted
+  claim; this paragraph supersedes it. The outcome is nonetheless the better one —
+  the security-relevant half is the half that closes, and the surviving strictness
+  is the SDK converging on the gateway's own semantics.
+
+  **What it cannot reach.** The rule skips actors with an empty `data_access`,
+  because the schema makes the field optional and `_parse_node` defaults it to
+  `frozenset()` while edge `allowedDataClasses` defaults *non-empty* — so treating
+  empty as a grant fires on every actor that omits it. That population is **61% of
+  the measured control-loss cases**, including 102 of the 278 ENFORCE-mode
+  fail-open flips. Worse, `studio/app/page.tsx:1106` hardcodes `dataAccess: []`
+  and is the **only occurrence of the field in the entire `studio/` tree**, so the
+  UI cannot express the input the rule reads and every Studio-authored graph is
+  unprotected. Plan 2 should treat this as an authoring-surface gap, not a lint
+  gap: there is currently no way for an author to say "holds nothing," while
+  `docs/02-developer-framework-design.md` §3.1 lists `dataAccess` as a required
+  field.
+- **`LinkPolicy` validates nothing at construction.** It has no `__post_init__`,
+  so `allowed_data_classes` and `denied_data_classes` may overlap; only
+  `ArchitectureBoundary` checks that disjointness. Found via a generated security
+  test that a lint-clean graph could still fail.
 - **The action fields accept members the schema forbids.**
   `schemas/architecture.schema.json:159` already declares
   `{"enum": ["ALLOW", "BLOCK", "HOLD", "QUARANTINE"]}` for `newDestinationAction`,
@@ -611,7 +644,37 @@ later task was never measured against the starting point.
   moving `ERROR`. No reason code moves in content or order at any point.
 
 Reason codes themselves held: zero movement at the gateway across 32,610 cases,
-zero divergence at the broker across 18,402.
+and zero divergence at the broker across the 12,871 reachable cases of an 18,402
+grid (the remaining 5,531 require an empty `ActorSpec.identity`, which
+`__post_init__` forbids).
+
+Two changes the branch made **accidentally** and has since reverted. Both were
+found only by differencing against `main`, and both are recorded because the way
+they escaped matters more than the fixes.
+
+- **The SDK began emitting `L1-M9-SENSITIVE-EGRESS`** where it had always emitted
+  `INTERLOCK-DATA-CLASS-DENIED` — a pre-existing control changing its emitted
+  string, the one thing this work forbids. It escaped because
+  `SDK_PROFILE.reason_codes` **was** `GATEWAY_PROFILE.reason_codes`, the same
+  object, so the divergence could not even be expressed; and because the static
+  key audit covered `A2A_PROFILE` alone, having been written for a hazard that was
+  routed and caught on that engine while the identical one on the SDK went
+  unwatched. The SDK now owns its map, and the audit covers every profile and all
+  26 checks.
+- **A malformed `allowed_domains` entry raised `UnicodeError` out of `wrap()`**
+  after two ledger events and before `CONTROL_EVALUATED`, leaving 1,349
+  interactions with no control record at all — this document's own defect class,
+  newly created in production, filed at the time as a minor because nobody
+  measured which way it failed. `_canonical_domains` now drops what does not
+  encode, mirroring `_canonical_destinations`. The result is better than either
+  revision: `main` denied *by crashing* (2,459 cases, firing even where no egress
+  was declared, which is not a control), and the fix denies by decision with zero
+  new silent permits on either surface.
+
+A residual is accepted: a malformed allowlist entry has **no runtime signal** until
+a destination is declared. Returning `()` there would manufacture the
+empty-subject `RAN_CLEAN` this document exists to eliminate. It belongs in the
+linter as an `allowedDomains` well-formedness rule.
 
 **Plan 2 — coverage telemetry and statistics**
 
