@@ -110,10 +110,24 @@ class Check:
 
 @dataclass(frozen=True, slots=True)
 class Profile:
-    enforcement_point: EnforcementPoint
+    enforcement_point: str                           # EnforcementPoint value; a str, see below
     checks: tuple[str, ...]                          # check ids this point runs
-    reason_codes: Mapping[str, str]                  # check id -> emitted reason code
+    reason_codes: Mapping[str, str]                  # reason key -> emitted reason code
 ```
+
+Two details that look cosmetic and are not:
+
+`reason_codes` is keyed on the **reason key a check emits**, not on the check id.
+The two coincide for most checks and diverge for the ones that emit more than one
+code: the data-class check emits `L1-M9-SENSITIVE-EGRESS` or
+`INTERLOCK-DATA-CLASS-DENIED` depending on the class, and the definition-state
+check forwards whatever `revision.reason_codes` carries. Keying on check id
+cannot express those, and a profile that renames must map **every** key its
+checks can produce — a missed key passes through unrenamed and puts a
+gateway-namespace string on the broker's wire.
+
+`enforcement_point` is a `str`, not the `EnforcementPoint` enum, because the enum
+lives in `architecture.py` and importing it would close the cycle described in §3.
 
 **Scale up** — a point gains a control by adding its id to that profile's tuple.
 **Scale out** — a new enforcement point is a new `Profile`. Neither touches the
