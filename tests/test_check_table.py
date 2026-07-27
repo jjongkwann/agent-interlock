@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 import re
+import sys
 import unittest
 from dataclasses import replace
 from types import CodeType, FunctionType
@@ -10,6 +13,7 @@ from unittest.mock import patch
 
 from test_policy_characterization import clean_case
 
+import agent_interlock
 from agent_interlock import policy as policy_module
 from agent_interlock.architecture import ArchitectureBoundary, EnforcementPoint
 from agent_interlock.models import ActorType, ControlDecision
@@ -64,8 +68,10 @@ def reason_keys(run) -> set[str]:
     concatenation or by f-string is *not* invisible: constant folding leaves a literal
     concatenation whole, and an f-string with a runtime piece still leaves its `"L1-M9-"` prefix
     behind, which matches `_REASON_KEY` and is reported as an unmapped key. That residue is what
-    the pinned A2A_EMITTED_KEYS snapshot backstops: it cannot see a key that was never visible, but
-    it does make one *disappearing* from this scan a failure.
+    the pinned EMITTED_KEYS snapshot backstops -- and only in one direction: because the pin is a
+    hand-written literal, it makes a pinned key *disappearing* from this scan a failure, but it
+    cannot make a brand-new key *arriving* invisibly one. A key that is added and built by `%`, or
+    held in a module-level dict, is absent from both the scan and the pin, and the two agree.
     """
     found: set[str] = set()
     seen: set[int] = set()
@@ -185,115 +191,129 @@ EMITTED_KEYS = {
     "A2A-BOUNDARY-PAYLOAD-TOO-LARGE": frozenset({"A2A-BOUNDARY-PAYLOAD-TOO-LARGE"}),
 }
 
-# The reason codes each profile can put on its wire: EMITTED_KEYS restricted to the profile's checks
-# and then pushed through its rename map. Pinned literally rather than derived, because the map is
-# the thing under test -- deriving it would make the assertion agree with whatever the map does.
+# What each profile puts on its wire, pinned as the WHOLE MAP from emitted key to wire code --
+# EMITTED_KEYS restricted to the profile's checks, each key pushed through the profile's rename map.
+# Pinned literally rather than derived, because the rename map is the thing under test: deriving it
+# would make the assertion agree with whatever the map happens to do.
+#
+# Pinned as a mapping and not as a set of codes, because several keys legitimately collapse onto one
+# code -- L1-M9-SENSITIVE-EGRESS and INTERLOCK-DATA-CLASS-DENIED both reach A2A-DATA-CLASS-DENIED,
+# and the resource key reaches the audience code at two points. Under a set comparison, re-pointing
+# one member of a collapsed group at any other code already in the set is invisible: the set is
+# unchanged. Measured -- re-pointing A2A's L1-M9-SENSITIVE-EGRESS to A2A-CREDENTIAL-DETECTED left a
+# set-based audit fully green. Comparing the map makes every key's destination load-bearing.
 #
 # These are the strings main emitted at each enforcement point, and the plan's one standing
 # constraint is that they do not move. SDK_PROFILE is the load-bearing entry: main's SDK reported
 # every data-class denial as INTERLOCK-DATA-CLASS-DENIED and never once emitted
 # L1-M9-SENSITIVE-EGRESS, so that key must be renamed away here while the gateway keeps it.
+_SELF = (
+    "INTERLOCK-ACTOR-TYPE-DENIED",
+    "INTERLOCK-PURPOSE-DENIED",
+    "INTERLOCK-INPUT-SCHEMA-INVALID",
+    "INTERLOCK-DATA-CLASS-DENIED",
+    "L1-M9-SENSITIVE-EGRESS",
+    "L1-M8-CREDENTIAL-DETECTED",
+    "L1-M9-NEW-DESTINATION",
+    "L1-M9-VOLUME-EXCEEDED",
+    "L1-UNDECLARED-SIDE-EFFECT",
+    "INTERLOCK-DESTRUCTIVE-WRITE",
+    "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+    "INTERLOCK-APPROVAL-REQUIRED",
+    "L1-M5-CREDENTIAL-MISSING",
+    "L1-M5-TOKEN-PASSTHROUGH",
+    "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+    "L1-M5-TOKEN-ACTOR-MISMATCH",
+    "L1-M5-DELEGATION-DEPTH",
+)
+
 PROFILE_EMITTED_CODES = {
-    "GATEWAY_PROFILE": frozenset(
-        {
-            "INTERLOCK-ACTOR-TYPE-DENIED",
-            "INTERLOCK-PURPOSE-DENIED",
-            "L1-M2-DEFINITION-NOT-ACTIVE",
-            "L1-M2-DEFINITION-DRIFT",
-            "INTERLOCK-INPUT-SCHEMA-INVALID",
-            "INTERLOCK-DATA-CLASS-DENIED",
-            "L1-M9-SENSITIVE-EGRESS",
-            "L1-M8-CREDENTIAL-DETECTED",
-            "L1-M9-NEW-DESTINATION",
-            "L1-M9-VOLUME-EXCEEDED",
-            "L1-UNDECLARED-SIDE-EFFECT",
-            "INTERLOCK-DESTRUCTIVE-WRITE",
-            "INTERLOCK-TAINTED-EXTERNAL-WRITE",
-            "INTERLOCK-APPROVAL-REQUIRED",
-            "L1-M5-CREDENTIAL-MISSING",
-            "L1-M5-TOKEN-PASSTHROUGH",
-            "L1-M5-TOKEN-AUDIENCE-MISMATCH",
-            "L1-M5-TOKEN-ACTOR-MISMATCH",
-            "L1-M5-DELEGATION-DEPTH",
-        }
-    ),
-    "SDK_PROFILE": frozenset(
-        {
-            "INTERLOCK-ACTOR-TYPE-DENIED",
-            "INTERLOCK-PURPOSE-DENIED",
-            "INTERLOCK-INPUT-SCHEMA-INVALID",
-            "INTERLOCK-DATA-CLASS-DENIED",
-            "L1-M8-CREDENTIAL-DETECTED",
-            "L1-M9-NEW-DESTINATION",
-            "L1-M9-VOLUME-EXCEEDED",
-            "L1-UNDECLARED-SIDE-EFFECT",
-            "INTERLOCK-DESTRUCTIVE-WRITE",
-            "INTERLOCK-TAINTED-EXTERNAL-WRITE",
-            "INTERLOCK-APPROVAL-REQUIRED",
-            "L1-M5-CREDENTIAL-MISSING",
-            "L1-M5-TOKEN-PASSTHROUGH",
-            "L1-M5-TOKEN-AUDIENCE-MISMATCH",
-            "L1-M5-TOKEN-ACTOR-MISMATCH",
-            "L1-M5-DELEGATION-DEPTH",
-        }
-    ),
-    "A2A_PROFILE": frozenset(
-        {
-            "A2A-IDENTITY-BINDING-MISMATCH",
-            "A2A-ACTOR-TYPE-DENIED",
-            "A2A-PURPOSE-DENIED",
-            "A2A-DATA-CLASS-DENIED",
-            "A2A-CREDENTIAL-DETECTED",
-            "A2A-ACTOR-BINDING-MISMATCH",
-            "A2A-AUDIENCE-MISMATCH",
-            "A2A-RESOURCE-MISMATCH",
-            "A2A-TOKEN-PASSTHROUGH",
-            "A2A-DELEGATION-DEPTH",
-            "A2A-INPUT-SCHEMA-INVALID",
-            "A2A-PAYLOAD-INVALID",
-            "A2A-BOUNDARY-RELATIONSHIP-DENIED",
-            "A2A-BOUNDARY-DATA-CLASS-DENIED",
-            "A2A-BOUNDARY-IDENTITY-REQUIRED",
-            "A2A-BOUNDARY-TENANT-REQUIRED",
-            "A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
-        }
-    ),
-    "A2A_LINK_PROFILE": frozenset(
-        {
-            "A2A-IDENTITY-BINDING-MISMATCH",
-            "A2A-ACTOR-TYPE-DENIED",
-            "A2A-PURPOSE-DENIED",
-            "A2A-DATA-CLASS-DENIED",
-            "A2A-CREDENTIAL-DETECTED",
-            "A2A-ACTOR-BINDING-MISMATCH",
-            "A2A-AUDIENCE-MISMATCH",
-            "A2A-RESOURCE-MISMATCH",
-            "A2A-TOKEN-PASSTHROUGH",
-            "A2A-DELEGATION-DEPTH",
-            "A2A-INPUT-SCHEMA-INVALID",
-            "A2A-PAYLOAD-INVALID",
-        }
-    ),
-    "A2A_BOUNDARY_PROFILE": frozenset(
-        {
-            "A2A-BOUNDARY-RELATIONSHIP-DENIED",
-            "A2A-BOUNDARY-DATA-CLASS-DENIED",
-            "A2A-BOUNDARY-IDENTITY-REQUIRED",
-            "A2A-BOUNDARY-TENANT-REQUIRED",
-            "A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
-        }
-    ),
+    "GATEWAY_PROFILE": {
+        **{key: key for key in _SELF},
+        "L1-M2-DEFINITION-NOT-ACTIVE": "L1-M2-DEFINITION-NOT-ACTIVE",
+        "L1-M2-DEFINITION-DRIFT": "L1-M2-DEFINITION-DRIFT",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+    },
+    "SDK_PROFILE": {
+        **{key: key for key in _SELF},
+        # the one divergence from the gateway, and the reason this profile needs its own map
+        "L1-M9-SENSITIVE-EGRESS": "INTERLOCK-DATA-CLASS-DENIED",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+    },
+    "A2A_PROFILE": {
+        "A2A-IDENTITY-BINDING-MISMATCH": "A2A-IDENTITY-BINDING-MISMATCH",
+        "INTERLOCK-ACTOR-TYPE-DENIED": "A2A-ACTOR-TYPE-DENIED",
+        "INTERLOCK-PURPOSE-DENIED": "A2A-PURPOSE-DENIED",
+        "INTERLOCK-DATA-CLASS-DENIED": "A2A-DATA-CLASS-DENIED",
+        "L1-M9-SENSITIVE-EGRESS": "A2A-DATA-CLASS-DENIED",
+        "L1-M8-CREDENTIAL-DETECTED": "A2A-CREDENTIAL-DETECTED",
+        "L1-M5-TOKEN-ACTOR-MISMATCH": "A2A-ACTOR-BINDING-MISMATCH",
+        "L1-M5-TOKEN-AUDIENCE-MISMATCH": "A2A-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH": "A2A-RESOURCE-MISMATCH",
+        "L1-M5-TOKEN-PASSTHROUGH": "A2A-TOKEN-PASSTHROUGH",
+        "L1-M5-DELEGATION-DEPTH": "A2A-DELEGATION-DEPTH",
+        "A2A-INPUT-SCHEMA-INVALID": "A2A-INPUT-SCHEMA-INVALID",
+        "A2A-PAYLOAD-INVALID": "A2A-PAYLOAD-INVALID",
+        "A2A-BOUNDARY-RELATIONSHIP-DENIED": "A2A-BOUNDARY-RELATIONSHIP-DENIED",
+        "A2A-BOUNDARY-DATA-CLASS-DENIED": "A2A-BOUNDARY-DATA-CLASS-DENIED",
+        "A2A-BOUNDARY-IDENTITY-REQUIRED": "A2A-BOUNDARY-IDENTITY-REQUIRED",
+        "A2A-BOUNDARY-TENANT-REQUIRED": "A2A-BOUNDARY-TENANT-REQUIRED",
+        "A2A-BOUNDARY-PAYLOAD-TOO-LARGE": "A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
+    },
+    "A2A_LINK_PROFILE": {
+        "A2A-IDENTITY-BINDING-MISMATCH": "A2A-IDENTITY-BINDING-MISMATCH",
+        "INTERLOCK-ACTOR-TYPE-DENIED": "A2A-ACTOR-TYPE-DENIED",
+        "INTERLOCK-PURPOSE-DENIED": "A2A-PURPOSE-DENIED",
+        "INTERLOCK-DATA-CLASS-DENIED": "A2A-DATA-CLASS-DENIED",
+        "L1-M9-SENSITIVE-EGRESS": "A2A-DATA-CLASS-DENIED",
+        "L1-M8-CREDENTIAL-DETECTED": "A2A-CREDENTIAL-DETECTED",
+        "L1-M5-TOKEN-ACTOR-MISMATCH": "A2A-ACTOR-BINDING-MISMATCH",
+        "L1-M5-TOKEN-AUDIENCE-MISMATCH": "A2A-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH": "A2A-RESOURCE-MISMATCH",
+        "L1-M5-TOKEN-PASSTHROUGH": "A2A-TOKEN-PASSTHROUGH",
+        "L1-M5-DELEGATION-DEPTH": "A2A-DELEGATION-DEPTH",
+        "A2A-INPUT-SCHEMA-INVALID": "A2A-INPUT-SCHEMA-INVALID",
+        "A2A-PAYLOAD-INVALID": "A2A-PAYLOAD-INVALID",
+    },
+    "A2A_BOUNDARY_PROFILE": {
+        "A2A-BOUNDARY-RELATIONSHIP-DENIED": "A2A-BOUNDARY-RELATIONSHIP-DENIED",
+        "A2A-BOUNDARY-DATA-CLASS-DENIED": "A2A-BOUNDARY-DATA-CLASS-DENIED",
+        "A2A-BOUNDARY-IDENTITY-REQUIRED": "A2A-BOUNDARY-IDENTITY-REQUIRED",
+        "A2A-BOUNDARY-TENANT-REQUIRED": "A2A-BOUNDARY-TENANT-REQUIRED",
+        "A2A-BOUNDARY-PAYLOAD-TOO-LARGE": "A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
+    },
 }
 
 
 def module_profiles() -> dict[str, Profile]:
-    """Every Profile policy.py exposes, found by walking the module rather than by listing them.
+    """Every distinct Profile object anywhere in the agent_interlock package.
 
-    This is what makes the audit below cover the *next* profile by construction: a profile added to
-    policy.py with no PROFILE_EMITTED_CODES entry fails the first assertion instead of quietly going
+    Discovery rather than a hand-written list is what makes the audit below cover the *next* profile:
+    a profile with no PROFILE_EMITTED_CODES entry fails the first assertion instead of quietly going
     unaudited, which is exactly how SDK_PROFILE escaped when the audit named A2A_PROFILE by hand.
+
+    Every module in the package is imported and walked, not just policy.py. Scoping discovery to
+    policy.py would have re-created the original defect one level up: all five profiles live there
+    *today*, so a profile defined in sdk.py or a2a.py would have gone unaudited while the docstring
+    claimed the next one was covered. Keyed by object identity, because sdk.py and a2a.py re-export
+    policy.py's profiles -- those are the same objects under a second name, not new profiles, and
+    only a genuinely new object is an unaudited one.
+
+    The residue, stated rather than assumed: this finds profiles bound to a module attribute. One
+    built at call time and never bound -- passed straight into run_checks, say -- is not reachable
+    this way, and neither is a subpackage, since the package is flat and the walk does not recurse.
     """
-    return {name: value for name, value in vars(policy_module).items() if isinstance(value, Profile)}
+    for info in pkgutil.iter_modules(agent_interlock.__path__):
+        importlib.import_module(f"{agent_interlock.__name__}.{info.name}")
+    canonical = {id(value): name for name, value in vars(policy_module).items() if isinstance(value, Profile)}
+    found: dict[str, Profile] = {}
+    for module_name, module in sorted(sys.modules.items()):
+        if not module_name.startswith(f"{agent_interlock.__name__}."):
+            continue
+        for attribute, value in sorted(vars(module).items()):
+            if isinstance(value, Profile):
+                found[canonical.get(id(value), f"{module_name.split('.')[-1]}.{attribute}")] = value
+    return found
 
 # One recipe per reason key the A2A profile can emit, not one per check: INTERLOCK-DATA-CLASS-DENIED
 # and L1-M5-TOKEN-AUDIENCE-MISMATCH each have a second branch with a second key, and a second branch
@@ -588,20 +608,25 @@ class CheckTableTests(unittest.TestCase):
         a denied D7 -- which main's SDK reported as INTERLOCK-DATA-CLASS-DENIED -- started reaching
         the ledger as L1-M9-SENSITIVE-EGRESS, splitting one byReasonCode bucket into two.
 
-        So the profiles are discovered from the module, not listed here: the next profile added is
+        So the profiles are discovered from the package, not listed here: the next profile added is
         covered by construction rather than by someone remembering this file exists. A profile with
         no pinned entry fails the first assertion.
+
+        The comparison is over the whole key-to-code map, not the set of codes it produces. Several
+        keys legitimately collapse onto one code, and under a set comparison re-pointing one member
+        of a collapsed group at another code already in the set is invisible -- which is how a
+        set-based version of this audit lost the only guard on A2A's L1-M9-SENSITIVE-EGRESS entry.
         """
         profiles = module_profiles()
         self.assertEqual(sorted(profiles), sorted(PROFILE_EMITTED_CODES))
         for name, profile in sorted(profiles.items()):
             with self.subTest(profile=name):
                 emitted = {
-                    profile.reason_codes.get(key, key)
+                    key: profile.reason_codes.get(key, key)
                     for check_id in profile.checks
                     for key in EMITTED_KEYS[check_id]
                 }
-                self.assertEqual(emitted, set(PROFILE_EMITTED_CODES[name]))
+                self.assertEqual(emitted, PROFILE_EMITTED_CODES[name])
 
     def test_every_condition_the_a2a_profile_can_trip_emits_an_a2a_reason_code(self):
         """The behavioural half of the same invariant: trip each condition in turn and read what
@@ -612,19 +637,27 @@ class CheckTableTests(unittest.TestCase):
         a condition nobody can trip is a finding of its own, not a gap to paper over. The base case
         is asserted clean and fully engaged first, so a finding below can only come from its own
         recipe and not from fixture noise.
+
+        What comes back is compared against the pinned map rather than against the prefix "A2A-".
+        A prefix test accepts any code in the namespace, so re-pointing a key at a *different* A2A
+        code passes it; that left the whole A2A wire mapping resting on one static assertion. The
+        pin is hand-written, so this stays an independent check on the profile's map and not a
+        restatement of it.
         """
         policy, context = a2a_case()
         reasons, _, ran = run_checks(policy, context, A2A_PROFILE)
         self.assertEqual(reasons, [])
         self.assertEqual(ran, set(A2A_PROFILE.checks))
         self.assertEqual(set(A2A_PROFILE.checks) - {check_id for check_id, _, _ in A2A_RECIPES}, set())
+        pinned = PROFILE_EMITTED_CODES["A2A_PROFILE"]
         for check_id, condition, perturb in A2A_RECIPES:
             with self.subTest(check=check_id, condition=condition):
                 policy, context = perturb(*a2a_case())
                 reasons, _, ran = run_checks(policy, context, replace(A2A_PROFILE, checks=(check_id,)))
                 self.assertEqual(ran, {check_id})  # armed and applicable ...
                 self.assertNotEqual(reasons, [])  # ... and the recipe still trips it
-                self.assertEqual([code for code in reasons if not code.startswith("A2A-")], [])
+                # every code this check is pinned to be able to emit, and nothing else
+                self.assertEqual(set(reasons) - {pinned[key] for key in EMITTED_KEYS[check_id]}, set())
 
     def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
         """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates

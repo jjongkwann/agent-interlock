@@ -231,11 +231,16 @@ class SDKProfileTests(unittest.TestCase):
     def test_a_malformed_allowlist_entry_is_not_a_silent_permit(self):
         """The fail-closed direction, stated on the surface that decides whether the call runs. A
         malformed allowlist entry must never let the wrapped function execute: the entry allows
-        nothing, so the destination it named is simply not allowed."""
+        nothing, so the destination it named is simply not allowed.
+
+        The raised exception is asserted on its reason code, not merely on its type. This intent is
+        an EXTERNAL_WRITE, so L1-UNDECLARED-SIDE-EFFECT and INTERLOCK-APPROVAL-REQUIRED also fire and
+        a bare assertRaises(GatewayError) passes even when the destination control has been made to
+        fail open -- the test would have been satisfied by controls it is not about."""
         _, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE), allowed_domains=frozenset({"x" * 70}))
         calls = []
         guarded = target.wrap(lambda arguments: calls.append(arguments) or {"ok": True})
-        with self.assertRaises(GatewayError):
+        with self.assertRaises(GatewayError) as raised:
             guarded(
                 {},
                 source=source,
@@ -246,6 +251,7 @@ class SDKProfileTests(unittest.TestCase):
                     estimated_side_effect=SideEffect.EXTERNAL_WRITE,
                 ),
             )
+        self.assertIn("L1-M9-NEW-DESTINATION", str(raised.exception))
         self.assertEqual(calls, [])
 
     def test_credential_keyword_reaches_the_m5_checks(self):
