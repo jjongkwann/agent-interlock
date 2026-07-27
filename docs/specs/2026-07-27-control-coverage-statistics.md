@@ -275,17 +275,46 @@ fixtures in `schemas/fixtures/`. The existing byte-identical parity test
 configuration: `CHALLENGE` and `DEGRADE` rank equal to `BLOCK`, and `BYPASSED` —
 which should be weakest — also ranks equal to `BLOCK`.
 
-Rank all eleven explicitly (`BYPASSED` lowest; `ERROR` highest, since an
-evaluation error means the verdict is unknown and the default failure mode is
-FAIL_CLOSED), drop the fallback, and assert at import time that the map covers
-`ControlDecision` exactly. A twelfth value then fails on load rather than being
-silently ranked mid-table.
+Rank all eleven explicitly, drop the fallback, and assert at import time that the
+map covers `ControlDecision` exactly. A twelfth value then fails on load rather
+than being silently ranked mid-table.
 
-**`PolicyDecisionRecord.would_block`** — a two-line property returning
-`self.decision != ControlDecision.ALLOW`. `permits_execution` keeps its name and
-semantics; its sole consumer is `gateway.py:286` and its behaviour in SHADOW is
-correct by definition. What is missing is a mode-independent reading for callers
-that need one, and a first-class source for `shadowWouldBlockCount`.
+`BYPASSED` ranks lowest — below `ALLOW`. `ERROR` ranks above `BLOCK` but **below**
+`QUARANTINE`, not highest. FAIL_CLOSED only requires `ERROR > ALLOW`: at any rank
+above `ALLOW`, every `!= ALLOW` predicate in `src/` denies. Ranking it above
+`KILL` would buy nothing further and would cost `strongest_decision([KILL, ERROR])
+== ERROR` — one check erroring erasing a definite `KILL` from the emitted
+decision, so a consumer routing on it takes the "unknown, retry, page ops" path
+instead of "terminate this agent." That is this document's own thesis inverted:
+*we could not determine* made indistinguishable from, and stronger than, *we
+determined the worst possible thing*. This is a deliberate severity judgement,
+not a neutral consequence of making the map total.
+
+Two members are ranked here without being defined anywhere. `BYPASSED` and
+`ERROR` have no producer in `src/`, no docstring and no definition in this
+document; they are reachable only through operator configuration of the five
+`LinkPolicy` action fields. Plan 2 must define both before wiring any statistic
+to them — see the open question in §11.
+
+**`PolicyDecisionRecord.would_block`** — a mode-independent reading of whether the
+policy objected, and the first-class source for `shadowWouldBlockCount`.
+`permits_execution` keeps its name and semantics; its sole consumer is
+`gateway.py:286` and its behaviour in SHADOW is correct by definition.
+
+Derive the predicate **from the rank map** — `_DECISION_RANK[decision] >
+_DECISION_RANK[ALLOW]` — not from a restatement of the rule. The obvious body,
+`self.decision != ControlDecision.ALLOW`, is wrong: `BYPASSED` ranks below
+`ALLOW`, so a bypassed control would report as "the policy found grounds to
+block." Wiring `shadowWouldBlockCount` to that would put this document's own
+pathology into the statistic it exists to make trustworthy. Deriving from the map
+means a future member ranked below `ALLOW` inherits the right answer with no edit.
+
+Note that `would_block` is the *only* one of six such predicates that gets this
+right. `analytics.py:69` (`block_decision`, feeding `shadow_would_block` and
+`shadowWouldBlockCount`), `sdk.py:189`, `gateway.py:259/315/530` and
+`config_guard.py:412` all test `!= ALLOW` and therefore all disagree with
+`would_block` on `BYPASSED`. Plan 2 inherits six predicates of the same shape
+with two different answers, and must reconcile them rather than add a seventh.
 
 ### 7. Mode composition
 
@@ -372,6 +401,45 @@ Baseline before any change: 459 passed, 12 skipped, 15 subtests passed.
   entries and by digesting coverage rather than listing it per event.
 - **A coverage number read as a safety number.** Mitigated only by the limits
   section being carried into the Studio surface, not just this document.
+
+## Open questions for Plan 2
+
+These surfaced during Plan 1 and are recorded here because Plan 1 could not
+settle them without shipping an undocumented decision.
+
+- **What does `BYPASSED` mean?** It has no producer in `src/`, no docstring and
+  no definition here, yet Plan 1 ranks it lowest. Everywhere else this codebase
+  treats a bypass as an alarm: `RuntimeGraphDiff.control_bypass_interactions`
+  makes a graph *not clean* (`architecture.py:1045`) and
+  `analytics.partial_or_bypass` counts it as an anomaly. At rank 0 it is
+  annihilated by every other member, so a ledger of "one control bypassed, the
+  rest allowed" reduces to plain `ALLOW` — *the control was bypassed* becomes
+  indistinguishable from *the control ran and allowed*, which is verbatim the
+  defect class this document exists to eliminate. The underlying problem is that
+  "skipped" and "ran clean" are not weaker and stronger versions of one thing;
+  they are different axes, and forcing them into one total order is lossy in the
+  under-reporting direction. Coverage is already modelled as its own channel
+  here — `BYPASSED` probably belongs there rather than as a decision value.
+  Settle this before wiring `shadowWouldBlockCount`, or that statistic silently
+  under-counts exactly the interactions where a control was skipped.
+- **`would_block` and `permits_execution` disagree on `BYPASSED`** — the former
+  says "no grounds to block", the latter denies execution under ENFORCE. Both are
+  defensible in isolation and the pair is fail-closed, but it is undocumented and
+  falls straight out of the previous question.
+- **Six `!= ALLOW` predicates, two answers.** See §6. Reconcile; do not add a
+  seventh.
+- **`ActorSpec.data_access` has no enforcement reader.** The merge moved the
+  data-class judgement onto the link policy's `allowed`/`denied_data_classes`;
+  before it, `sdk.py` judged against the *actor's* grant. Different subjects, so
+  this is a control loss rather than a rename.
+- **The action fields accept members the schema forbids.**
+  `schemas/architecture.schema.json:159` already declares
+  `{"enum": ["ALLOW", "BLOCK", "HOLD", "QUARANTINE"]}` for `newDestinationAction`,
+  but that schema is referenced only from `tests/test_studio_compile.py` and the
+  Studio canvas — nothing in `src/` enforces it, and `architecture.py:1238` does
+  an unvalidated `ControlDecision(str(...))`. Constraining the five `LinkPolicy`
+  action fields to that four-member subset would have made Plan 1's tie-break
+  unreachable in the first place, and is the general fix for this bug class.
 
 ## Sequence
 
