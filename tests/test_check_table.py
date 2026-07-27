@@ -10,7 +10,17 @@ from test_policy_characterization import clean_case
 
 from agent_interlock import policy as policy_module
 from agent_interlock.models import ActorType, ControlDecision
-from agent_interlock.policy import CHECKS, GATEWAY_PROFILE, Check, CheckScope, Profile, evaluate, run_checks
+from agent_interlock.policy import (
+    A2A_PROFILE,
+    CHECKS,
+    GATEWAY_PROFILE,
+    SDK_PROFILE,
+    Check,
+    CheckScope,
+    Profile,
+    evaluate,
+    run_checks,
+)
 
 
 class CheckTableTests(unittest.TestCase):
@@ -122,6 +132,37 @@ class CheckTableTests(unittest.TestCase):
         reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", reasons)
+
+    def test_the_resource_comparison_renames_apart_at_each_enforcement_point(self):
+        """_token_audience emits one key for the audience comparison and another for the resource
+        comparison, because the A2A broker has always reported them as two codes and reason_codes
+        is keyed on the emitted key. The gateway and the SDK have always reported one code for
+        both, so their profiles have to map the resource key back -- unmapped, an internal key no
+        enforcement point has ever emitted would reach the gateway's wire."""
+        policy, context = clean_case()
+        context = replace(
+            context,
+            intent=replace(context.intent, expected_audience="aud", expected_resource="res"),
+            credential=replace(context.credential, audience="aud", resource="wrong"),
+        )
+        for profile in (GATEWAY_PROFILE, SDK_PROFILE):
+            with self.subTest(enforcement_point=profile.enforcement_point):
+                reasons, _, _ = run_checks(policy, context, profile)
+                self.assertEqual(reasons, ["L1-M5-TOKEN-AUDIENCE-MISMATCH"])
+        a2a_only = replace(A2A_PROFILE, checks=("L1-M5-TOKEN-AUDIENCE-MISMATCH",))
+        reasons, _, _ = run_checks(policy, context, a2a_only)
+        self.assertEqual(reasons, ["A2A-RESOURCE-MISMATCH"])
+
+    def test_the_a2a_profile_maps_every_key_its_checks_can_emit(self):
+        """reason_codes is keyed on the emitted key, and two of the broker's checks emit two keys
+        each: INTERLOCK-DATA-CLASS-DENIED also emits L1-M9-SENSITIVE-EGRESS on a denied D7, and
+        L1-M5-TOKEN-AUDIENCE-MISMATCH also emits the resource key. One entry per check id would
+        put a gateway-namespace string on the A2A wire."""
+        self.assertEqual(A2A_PROFILE.reason_codes["L1-M9-SENSITIVE-EGRESS"], "A2A-DATA-CLASS-DENIED")
+        self.assertEqual(A2A_PROFILE.reason_codes["L1-M5-TOKEN-RESOURCE-MISMATCH"], "A2A-RESOURCE-MISMATCH")
+        renamed = set(A2A_PROFILE.reason_codes.values())
+        kept = {item for item in A2A_PROFILE.checks if item.startswith("A2A-")}
+        self.assertTrue(all(code.startswith("A2A-") for code in renamed | kept))
 
     def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
         """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates

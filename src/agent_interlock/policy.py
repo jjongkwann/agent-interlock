@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -238,9 +238,11 @@ def _token_passthrough(policy: LinkPolicy, context: CheckContext) -> Findings | 
 
 
 def _token_audience(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    """The audience comparison and the resource comparison emit the same reason key (inherited,
-    not introduced here) and check ids are unique, so they are one check. They stay two
-    conditions inside it because each carries its own policy flag."""
+    """One check, two reason keys. The audience comparison and the resource comparison stay two
+    conditions inside one check because each carries its own policy flag, and they emit distinct
+    keys because the A2A broker has always reported them as two separate codes. GATEWAY_PROFILE
+    and SDK_PROFILE map the resource key back onto the audience one, which is the single code
+    those two points have always emitted for both."""
     credential = context.credential
     if credential is None:  # nothing presented, _credential_missing owns that verdict
         return None
@@ -252,7 +254,7 @@ def _token_audience(policy: LinkPolicy, context: CheckContext) -> Findings | Non
     if audience and credential.audience != audience:
         findings.append(("L1-M5-TOKEN-AUDIENCE-MISMATCH", ControlDecision.BLOCK))
     if resource and credential.resource != resource:
-        findings.append(("L1-M5-TOKEN-AUDIENCE-MISMATCH", ControlDecision.BLOCK))
+        findings.append(("L1-M5-TOKEN-RESOURCE-MISMATCH", ControlDecision.BLOCK))
     return tuple(findings)
 
 
@@ -270,6 +272,86 @@ def _delegation_depth(policy: LinkPolicy, context: CheckContext) -> Findings | N
     if context.credential.delegation_depth <= policy.max_delegation_depth:
         return ()
     return (("L1-M5-DELEGATION-DEPTH", ControlDecision.BLOCK),)
+
+
+def _identity_binding(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """The A2A broker's own binding check: the presented credential must belong to the source
+    actor and must be authenticated. Distinct from L1-M5-TOKEN-ACTOR-MISMATCH, which compares the
+    same two ids but only when the edge policy asks for actor binding."""
+    credential = context.credential
+    if credential is None:  # nothing presented, _credential_missing owns that verdict
+        return None
+    if credential.actor == context.source.id and credential.authenticated:
+        return ()
+    return (("A2A-IDENTITY-BINDING-MISMATCH", ControlDecision.BLOCK),)
+
+
+def _message_parts_schema(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """A2A validates the message's data Parts against the target's input schema, not the whole
+    envelope the way the gateway validates tool arguments, so it cannot reuse _input_schema. The
+    Parts are read back out of the canonical message dict; `arguments` stays the envelope because
+    that is what the secret scan has always been given."""
+    parts = context.arguments.get("parts") or ()
+    data_parts = [part["data"] for part in parts if isinstance(part, Mapping) and "data" in part]
+    # No data Parts, or a target that ships no schema: INAPPLICABLE, see _definition_state.
+    if not data_parts or not context.target.input_schema:
+        return None
+    value: Any = data_parts[0] if len(data_parts) == 1 else {"parts": data_parts}
+    if not validate_schema(value, context.target.input_schema):
+        return ()
+    return (("A2A-INPUT-SCHEMA-INVALID", ControlDecision.BLOCK),)
+
+
+def _payload_present(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.payload_bytes >= 1:
+        return ()
+    return (("A2A-PAYLOAD-INVALID", ControlDecision.BLOCK),)
+
+
+def _boundary_relationship(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.boundary is None:  # no boundary on this link, so no boundary contract to answer to
+        return None
+    if context.relationship in context.boundary.allowed_relationships:
+        return ()
+    return (("A2A-BOUNDARY-RELATIONSHIP-DENIED", ControlDecision.BLOCK),)
+
+
+def _boundary_data_classes(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.boundary is None:
+        return None
+    classes = context.intent.data_classes
+    denied = classes & context.boundary.denied_data_classes
+    unexpected = classes - context.boundary.allowed_data_classes
+    if not denied and not unexpected:
+        return ()
+    return (("A2A-BOUNDARY-DATA-CLASS-DENIED", ControlDecision.BLOCK),)
+
+
+def _boundary_identity(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    # The boundary arms these two, not the LinkPolicy, and `armed` is only handed the policy. A
+    # boundary with the requirement switched off therefore reports INAPPLICABLE here rather than a
+    # clean run of a control nobody asked for.
+    if context.boundary is None or not context.boundary.require_identity:
+        return None
+    if context.credential is not None and context.credential.authenticated:
+        return ()
+    return (("A2A-BOUNDARY-IDENTITY-REQUIRED", ControlDecision.BLOCK),)
+
+
+def _boundary_tenant(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.boundary is None or not context.boundary.require_tenant_binding:
+        return None
+    if context.credential is not None and context.credential.tenant_id:
+        return ()
+    return (("A2A-BOUNDARY-TENANT-REQUIRED", ControlDecision.BLOCK),)
+
+
+def _boundary_payload_size(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.boundary is None:
+        return None
+    if context.payload_bytes <= context.boundary.max_payload_bytes:
+        return ()
+    return (("A2A-BOUNDARY-PAYLOAD-TOO-LARGE", ControlDecision.BLOCK),)
 
 
 def _build_check_table(checks: tuple[Check, ...]) -> dict[str, Check]:
@@ -393,6 +475,54 @@ CHECKS: dict[str, Check] = _build_check_table(
             armed=lambda policy: True,
             run=_delegation_depth,
         ),
+        Check(
+            id="A2A-IDENTITY-BINDING-MISMATCH",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: True,
+            run=_identity_binding,
+        ),
+        Check(
+            id="A2A-INPUT-SCHEMA-INVALID",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_message_parts_schema,
+        ),
+        Check(
+            id="A2A-PAYLOAD-INVALID",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_payload_present,
+        ),
+        Check(
+            id="A2A-BOUNDARY-RELATIONSHIP-DENIED",
+            scope=CheckScope.BOUNDARY,
+            armed=lambda policy: True,
+            run=_boundary_relationship,
+        ),
+        Check(
+            id="A2A-BOUNDARY-DATA-CLASS-DENIED",
+            scope=CheckScope.BOUNDARY,
+            armed=lambda policy: True,
+            run=_boundary_data_classes,
+        ),
+        Check(
+            id="A2A-BOUNDARY-IDENTITY-REQUIRED",
+            scope=CheckScope.BOUNDARY,
+            armed=lambda policy: True,
+            run=_boundary_identity,
+        ),
+        Check(
+            id="A2A-BOUNDARY-TENANT-REQUIRED",
+            scope=CheckScope.BOUNDARY,
+            armed=lambda policy: True,
+            run=_boundary_tenant,
+        ),
+        Check(
+            id="A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
+            scope=CheckScope.BOUNDARY,
+            armed=lambda policy: True,
+            run=_boundary_payload_size,
+        ),
     )
 )
 
@@ -451,6 +581,9 @@ GATEWAY_PROFILE = Profile(
         "L1-M5-TOKEN-ACTOR-MISMATCH",
         "L1-M5-DELEGATION-DEPTH",
     ),
+    # _token_audience emits a separate key for the resource comparison so the A2A broker can keep
+    # reporting the two as two codes. This point has always emitted one code for both.
+    reason_codes={"L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH"},
 )
 
 
@@ -465,6 +598,61 @@ SDK_PROFILE = Profile(
         for check_id in GATEWAY_PROFILE.checks
         if check_id not in {"L1-M2-DEFINITION-NOT-ACTIVE", "L1-M2-DEFINITION-DRIFT"}
     ),
+    reason_codes=GATEWAY_PROFILE.reason_codes,
+)
+
+
+A2A_PROFILE = Profile(
+    enforcement_point="A2A_BROKER",
+    # Ordered exactly as A2ABroker emitted these findings inline: the broker reports the whole list
+    # and raises on its first entry, so the order is on the wire.
+    checks=(
+        "A2A-IDENTITY-BINDING-MISMATCH",
+        "INTERLOCK-ACTOR-TYPE-DENIED",
+        "INTERLOCK-PURPOSE-DENIED",
+        "INTERLOCK-DATA-CLASS-DENIED",
+        "L1-M8-CREDENTIAL-DETECTED",
+        "L1-M5-TOKEN-ACTOR-MISMATCH",
+        "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-PASSTHROUGH",
+        "L1-M5-DELEGATION-DEPTH",
+        "A2A-INPUT-SCHEMA-INVALID",
+        "A2A-PAYLOAD-INVALID",
+        "A2A-BOUNDARY-RELATIONSHIP-DENIED",
+        "A2A-BOUNDARY-DATA-CLASS-DENIED",
+        "A2A-BOUNDARY-IDENTITY-REQUIRED",
+        "A2A-BOUNDARY-TENANT-REQUIRED",
+        "A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
+    ),
+    # Keyed on the reason key a check emits, so a check with two keys needs two entries:
+    # INTERLOCK-DATA-CLASS-DENIED also emits L1-M9-SENSITIVE-EGRESS on a denied D7, and
+    # L1-M5-TOKEN-AUDIENCE-MISMATCH also emits L1-M5-TOKEN-RESOURCE-MISMATCH. Miss one and a
+    # gateway-namespace string reaches the A2A wire.
+    reason_codes={
+        "INTERLOCK-ACTOR-TYPE-DENIED": "A2A-ACTOR-TYPE-DENIED",
+        "INTERLOCK-PURPOSE-DENIED": "A2A-PURPOSE-DENIED",
+        "INTERLOCK-DATA-CLASS-DENIED": "A2A-DATA-CLASS-DENIED",
+        "L1-M9-SENSITIVE-EGRESS": "A2A-DATA-CLASS-DENIED",
+        "L1-M8-CREDENTIAL-DETECTED": "A2A-CREDENTIAL-DETECTED",
+        "L1-M5-TOKEN-ACTOR-MISMATCH": "A2A-ACTOR-BINDING-MISMATCH",
+        "L1-M5-TOKEN-AUDIENCE-MISMATCH": "A2A-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH": "A2A-RESOURCE-MISMATCH",
+        "L1-M5-TOKEN-PASSTHROUGH": "A2A-TOKEN-PASSTHROUGH",
+        "L1-M5-DELEGATION-DEPTH": "A2A-DELEGATION-DEPTH",
+    },
+)
+
+
+# Split by scope, not collapsed into one run: the broker answers link findings to the edge policy's
+# mode and boundary findings to the boundary's own mode, independently, and neither wins over the
+# other. Derived once here rather than rebuilt per message.
+A2A_LINK_PROFILE = replace(
+    A2A_PROFILE,
+    checks=tuple(item for item in A2A_PROFILE.checks if CHECKS[item].scope is not CheckScope.BOUNDARY),
+)
+A2A_BOUNDARY_PROFILE = replace(
+    A2A_PROFILE,
+    checks=tuple(item for item in A2A_PROFILE.checks if CHECKS[item].scope is CheckScope.BOUNDARY),
 )
 
 

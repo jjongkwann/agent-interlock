@@ -17,11 +17,20 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any, Protocol
 
-from .architecture import ArchitectureBoundary, ArchitectureEdge, CompiledArchitecture
+from .architecture import ArchitectureEdge, CompiledArchitecture
 from .canonical import canonical_digest, canonical_json
 from .ledger import InMemoryLedger, Ledger
-from .models import ActorType, ControlDecision, DataSource, Environment, PolicyMode
-from .security import contains_secret, validate_schema
+from .models import (
+    ActorType,
+    ControlDecision,
+    CredentialClaims,
+    DataSource,
+    Environment,
+    InvocationIntent,
+    PolicyMode,
+)
+from .policy import A2A_BOUNDARY_PROFILE, A2A_LINK_PROFILE, CheckContext, run_checks
+from .security import validate_schema
 
 
 class A2AError(RuntimeError):
@@ -562,6 +571,22 @@ class InMemoryA2ATaskStore:
             return canceled
 
 
+def _credential_from(principal: A2APrincipal) -> CredentialClaims:
+    """The A2A principal is a credential; the shared checks read it as one."""
+    return CredentialClaims(
+        reference="",
+        issuer="",
+        subject=principal.subject,
+        actor=principal.actor_id,
+        audience=principal.audience,
+        resource=principal.resource,
+        delegation_depth=principal.delegation_depth,
+        exchanged=principal.exchanged,
+        tenant_id=principal.tenant_id,
+        authenticated=principal.authenticated,
+    )
+
+
 class A2ABroker:
     """Executes A2A messages through compiled edge and boundary contracts."""
 
@@ -610,16 +635,42 @@ class A2ABroker:
             raise A2AError("A2A-TARGET-UNAVAILABLE", "target agent is not registered")
         boundary = self.architecture.boundary_for(edge)
         payload_bytes = len(canonical_json(message.to_dict()))
-        link_reasons = self._link_reasons(edge, message, context, payload_bytes)
-        boundary_reasons = self._boundary_reasons(edge, boundary, context, payload_bytes)
+        trace_id = context.trace_id or f"a2a-{uuid.uuid4()}"
+        span_id = f"span-{uuid.uuid4()}"
+        interaction_id = str(uuid.uuid4())
+        check_context = CheckContext(
+            source=self.architecture.actors[context.source_actor_id],
+            target=target,
+            # The broker's audience and resource expectations are derived from the target, not
+            # declared by the caller; naming them here keeps the shared check comparing intent
+            # against credential the way it does at every other point.
+            intent=InvocationIntent(
+                purpose=context.purpose,
+                data_classes=context.data_classes,
+                expected_audience=target.identity,
+                expected_resource=f"a2a://{target.id}",
+            ),
+            arguments=message.to_dict(),
+            interaction_id=interaction_id,
+            trace_id=trace_id,
+            span_id=span_id,
+            credential=_credential_from(context.principal),
+            boundary=boundary,
+            payload_bytes=payload_bytes,
+            relationship=edge.relationship,
+        )
+        link_reasons, _, _ = run_checks(edge.policy, check_context, A2A_LINK_PROFILE)
+        # A bound boundary that did not compile is a wiring error, not a policy finding: no check
+        # can express it, because the profile is handed the boundary that is missing.
+        if edge.boundary_id is not None and boundary is None:
+            boundary_reasons = ["A2A-BOUNDARY-NOT-COMPILED"]
+        else:
+            boundary_reasons, _, _ = run_checks(edge.policy, check_context, A2A_BOUNDARY_PROFILE)
         reasons = tuple(dict.fromkeys((*link_reasons, *boundary_reasons)))
         enforced = bool(
             (link_reasons and edge.policy.mode == PolicyMode.ENFORCE)
             or (boundary_reasons and boundary is not None and boundary.mode == PolicyMode.ENFORCE)
         )
-        trace_id = context.trace_id or f"a2a-{uuid.uuid4()}"
-        span_id = f"span-{uuid.uuid4()}"
-        interaction_id = str(uuid.uuid4())
         prior_task: A2ATask | None = None
         if message.task_id:
             prior_task = self.task_store.get(
@@ -802,72 +853,6 @@ class A2ABroker:
             task_id=task_id,
         )
         return task
-
-    def _link_reasons(
-        self,
-        edge: ArchitectureEdge,
-        message: A2AMessage,
-        context: A2ASendContext,
-        payload_bytes: int,
-    ) -> tuple[str, ...]:
-        policy = edge.policy
-        principal = context.principal
-        source = self.architecture.actors[context.source_actor_id]
-        target = self.architecture.actors[context.target_actor_id]
-        reasons: list[str] = []
-        if principal.actor_id != context.source_actor_id or not principal.authenticated:
-            reasons.append("A2A-IDENTITY-BINDING-MISMATCH")
-        if source.type not in policy.source_types or target.type not in policy.target_types:
-            reasons.append("A2A-ACTOR-TYPE-DENIED")
-        if policy.allowed_purposes and context.purpose not in policy.allowed_purposes:
-            reasons.append("A2A-PURPOSE-DENIED")
-        if context.data_classes & policy.denied_data_classes or context.data_classes - policy.allowed_data_classes:
-            reasons.append("A2A-DATA-CLASS-DENIED")
-        if contains_secret(message.to_dict()):
-            reasons.append("A2A-CREDENTIAL-DETECTED")
-        if policy.require_actor_binding and principal.actor_id != source.id:
-            reasons.append("A2A-ACTOR-BINDING-MISMATCH")
-        if policy.require_audience and principal.audience != target.identity:
-            reasons.append("A2A-AUDIENCE-MISMATCH")
-        if policy.require_resource and principal.resource != f"a2a://{target.id}":
-            reasons.append("A2A-RESOURCE-MISMATCH")
-        if not policy.token_passthrough and not principal.exchanged:
-            reasons.append("A2A-TOKEN-PASSTHROUGH")
-        if principal.delegation_depth > policy.max_delegation_depth:
-            reasons.append("A2A-DELEGATION-DEPTH")
-        data_parts = [dict(part.data or {}) for part in message.parts if part.kind == A2APartKind.DATA]
-        schema_value: Any = data_parts[0] if len(data_parts) == 1 else {"parts": data_parts}
-        if data_parts and validate_schema(schema_value, target.input_schema):
-            reasons.append("A2A-INPUT-SCHEMA-INVALID")
-        if payload_bytes < 1:
-            reasons.append("A2A-PAYLOAD-INVALID")
-        return tuple(dict.fromkeys(reasons))
-
-    @staticmethod
-    def _boundary_reasons(
-        edge: ArchitectureEdge,
-        boundary: ArchitectureBoundary | None,
-        context: A2ASendContext,
-        payload_bytes: int,
-    ) -> tuple[str, ...]:
-        if edge.boundary_id is None:
-            return ()
-        if boundary is None:
-            return ("A2A-BOUNDARY-NOT-COMPILED",)
-        reasons: list[str] = []
-        if edge.relationship not in boundary.allowed_relationships:
-            reasons.append("A2A-BOUNDARY-RELATIONSHIP-DENIED")
-        if context.data_classes & boundary.denied_data_classes or (
-            context.data_classes - boundary.allowed_data_classes
-        ):
-            reasons.append("A2A-BOUNDARY-DATA-CLASS-DENIED")
-        if boundary.require_identity and not context.principal.authenticated:
-            reasons.append("A2A-BOUNDARY-IDENTITY-REQUIRED")
-        if boundary.require_tenant_binding and context.principal.tenant_id == "":
-            reasons.append("A2A-BOUNDARY-TENANT-REQUIRED")
-        if payload_bytes > boundary.max_payload_bytes:
-            reasons.append("A2A-BOUNDARY-PAYLOAD-TOO-LARGE")
-        return tuple(reasons)
 
     @staticmethod
     def _apply_handler_result(task: A2ATask, result: A2AHandlerResult, output_schema: Mapping[str, Any]) -> A2ATask:

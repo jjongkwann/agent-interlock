@@ -202,6 +202,10 @@ class CredentialClaims:
     delegation_depth: int = 0
     exchanged: bool = True
     fingerprint: str = ""
+    # The A2A broker's identity-binding and boundary-tenant checks read these two off the
+    # credential; every other producer leaves the defaults, which those checks read as bound.
+    tenant_id: str = ""
+    authenticated: bool = True
 
 
 @dataclass(frozen=True, slots=True)
