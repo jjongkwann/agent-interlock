@@ -124,13 +124,16 @@ def _definition_drift(policy: LinkPolicy, context: CheckContext) -> Findings | N
 
 
 def _input_schema(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    # No revision, or a tool that ships no input schema: INAPPLICABLE, see _definition_state.
-    # validate_schema short-circuits on an empty schema, so () here would report a clean pass over
-    # a validation that never happened -- on a fleet of schema-less tools, near-total coverage of
-    # nothing.
-    if context.revision is None or not context.revision.definition.input_schema:
+    # Falls back to the actor's own schema when no revision is resolved: unlike the M2 checks, a
+    # missing revision does not make this control inapplicable -- the SDK never builds one, and
+    # skipping here silently dropped schema validation from every wrap() call.
+    schema = context.revision.definition.input_schema if context.revision is not None else context.target.input_schema
+    # A tool that ships no input schema: INAPPLICABLE, see _definition_state. validate_schema
+    # short-circuits on an empty schema, so () here would report a clean pass over a validation that
+    # never happened -- on a fleet of schema-less tools, near-total coverage of nothing.
+    if not schema:
         return None
-    if not validate_schema(context.arguments, context.revision.definition.input_schema):
+    if not validate_schema(context.arguments, schema):
         return ()
     return (("INTERLOCK-INPUT-SCHEMA-INVALID", ControlDecision.BLOCK),)
 

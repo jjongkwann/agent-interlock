@@ -6,11 +6,11 @@ import unittest
 
 from agent_interlock import ActorSpec, ActorType, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
 from agent_interlock.gateway import GatewayError
-from agent_interlock.policy import GATEWAY_PROFILE, SDK_PROFILE
+from agent_interlock.policy import GATEWAY_PROFILE, SDK_PROFILE, CheckContext, run_checks
 from agent_interlock.sdk import Interlock
 
 
-def wired(policy: LinkPolicy):
+def wired(policy: LinkPolicy, input_schema: dict | None = None):
     interlock = Interlock()
     source = interlock.define_actor(
         ActorSpec(id="agent-1", type=ActorType.AGENT, owner="team", identity="spiffe://agent-1")
@@ -22,6 +22,7 @@ def wired(policy: LinkPolicy):
             owner="team",
             identity="spiffe://tool-1",
             allowed_domains=frozenset({"good.example"}),
+            input_schema=input_schema or {},
         )
     )
     source.connect(target, policy)
@@ -67,6 +68,44 @@ class SDKProfileTests(unittest.TestCase):
             intent=InvocationIntent(purpose="SUPPORT_LOOKUP"),
         )
         self.assertEqual(result, {"ok": True})
+
+    def test_actor_input_schema_is_validated_without_a_revision(self):
+        """The SDK never builds a ToolRevision, so _input_schema has to fall back to
+        ActorSpec.input_schema -- reading only the revision made wrap() stop validating
+        arguments entirely."""
+        _, source, target = wired(
+            LinkPolicy(mode=PolicyMode.ENFORCE),
+            input_schema={"type": "object", "required": ["ticket"]},
+        )
+        guarded = target.wrap(lambda arguments: {"ok": True})
+        with self.assertRaises(GatewayError) as raised:
+            guarded(
+                {"wrong": 1},
+                source=source,
+                tenant_id="tenant-a",
+                intent=InvocationIntent(purpose="SUPPORT_LOOKUP"),
+            )
+        self.assertIn("INTERLOCK-INPUT-SCHEMA-INVALID", str(raised.exception))
+
+    def test_empty_actor_input_schema_keeps_the_check_out_of_ran(self):
+        """The fallback must not turn a schema-less tool into a clean pass: nothing was
+        validated, so the check is INAPPLICABLE and stays out of `ran`."""
+        policy = LinkPolicy(mode=PolicyMode.ENFORCE)
+        _, source, target = wired(policy)
+        _, _, ran = run_checks(
+            policy,
+            CheckContext(
+                source=source.spec,
+                target=target.spec,
+                intent=InvocationIntent(purpose="SUPPORT_LOOKUP"),
+                arguments={"wrong": 1},
+                interaction_id="i",
+                trace_id="t",
+                span_id="s",
+            ),
+            SDK_PROFILE,
+        )
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
 
     def test_profile_is_the_gateway_order_minus_the_two_m2_checks(self):
         """The M2 pair is ABSENT at this enforcement point, not inapplicable to the call: the SDK

@@ -166,6 +166,9 @@ class Interlock:
             SDK_PROFILE,
         )
         decision = strongest_decision(decisions)
+        # Same de-duplication evaluate() applies, so a reducer counting reason codes sees the same
+        # cardinality from both enforcement points for identical inputs.
+        reasons = list(dict.fromkeys(reasons))
         enforced = policy.mode == PolicyMode.ENFORCE
         self.ledger.append(
             "CONTROL_EVALUATED",
