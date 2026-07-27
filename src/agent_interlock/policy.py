@@ -154,21 +154,28 @@ def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
     if policy.allowed_purposes and value.intent.purpose not in policy.allowed_purposes:
         reasons.append("INTERLOCK-PURPOSE-DENIED")
         decisions.append(ControlDecision.BLOCK)
-    if (
-        policy.require_active_definition
-        and value.revision is not None
-        and value.revision.state != DefinitionState.ACTIVE
-    ):
-        reasons.extend(value.revision.reason_codes or ("L1-M2-DEFINITION-NOT-ACTIVE",))
-        decisions.append(ControlDecision.QUARANTINE)
+    # revision=None means the two M2 controls below (require_active_definition,
+    # require_digest_pin) do not apply to this invocation -- it is a valid CheckContext (Tasks
+    # 5-7 build one before a revision is resolved), not a crash. Within this plan that
+    # "does not apply" is indistinguishable from "ran clean" in the record evaluate() returns
+    # (reasons/decisions stay empty either way, decision collapses to ALLOW): the coverage layer
+    # that makes the two distinguishable arrives in Plan 2. Keep applicability
+    # (require_flag and revision is not None) as its own outer condition, separate from the
+    # "did it find something" check nested inside -- when these move into the check table
+    # (Task 4), that separation is what makes returning `None` (INAPPLICABLE) for a missing
+    # revision the obvious answer instead of `()` (RAN_CLEAN).
+    if policy.require_active_definition and value.revision is not None:
+        if value.revision.state != DefinitionState.ACTIVE:
+            reasons.extend(value.revision.reason_codes or ("L1-M2-DEFINITION-NOT-ACTIVE",))
+            decisions.append(ControlDecision.QUARANTINE)
     if policy.require_digest_pin and value.revision is not None:
         approved = value.target.definition_digest
         if not approved or approved != value.revision.canonical_digest:
             reasons.append("L1-M2-DEFINITION-DRIFT")
             decisions.append(ControlDecision.QUARANTINE)
 
-    # A missing revision means "this check does not apply", not a crash: revision=None is a
-    # valid CheckContext (Tasks 5-7 build one before a revision is resolved).
+    # Same gap, same rationale: a missing revision means "this check does not apply", not a
+    # crash, and is indistinguishable from "ran clean" until Plan 2's coverage layer.
     schema_errors = (
         validate_schema(value.arguments, value.revision.definition.input_schema)
         if value.revision is not None

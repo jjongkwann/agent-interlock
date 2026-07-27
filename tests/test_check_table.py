@@ -9,7 +9,7 @@ from unittest.mock import patch
 from test_policy_characterization import clean_case
 
 from agent_interlock import policy as policy_module
-from agent_interlock.models import ActorType, ControlDecision, PolicyDecisionRecord
+from agent_interlock.models import ActorType, ControlDecision
 from agent_interlock.policy import CHECKS, GATEWAY_PROFILE, Check, CheckScope, Profile, evaluate, run_checks
 
 
@@ -89,14 +89,21 @@ class CheckTableTests(unittest.TestCase):
             record = evaluate(policy, context)
         self.assertEqual(record.reason_codes, ())
 
-    def test_evaluate_with_revision_none_does_not_raise(self):
-        """CheckContext.revision is optional (Tasks 5-7 build one before a revision is
-        resolved); a missing revision must make the revision-dependent checks not apply, not
-        crash the enforcement path."""
+    def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
+        """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates
+        (require_active_definition, require_digest_pin) enabled, and CheckContext.revision is
+        optional (Tasks 5-7 build one before a revision is resolved). With revision=None, both
+        M2 gates are skipped rather than crashing (see policy.py's guarded dereferences) -- but
+        that skip is indistinguishable from "ran and found nothing" in the record returned here:
+        evaluate() emits a clean ALLOW. Plan 2's coverage layer is what will make "did not apply"
+        visible; this test pins the exact silent-allow shape until then, so any drift shows up
+        as a diff instead of silently changing behaviour again.
+        """
         policy, context = clean_case()
         context = replace(context, revision=None)
         record = evaluate(policy, context)
-        self.assertIsInstance(record, PolicyDecisionRecord)
+        self.assertEqual(record.decision, ControlDecision.ALLOW)
+        self.assertEqual(record.reason_codes, ())
 
 
 if __name__ == "__main__":
