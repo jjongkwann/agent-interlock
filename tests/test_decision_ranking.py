@@ -119,6 +119,12 @@ class WouldBlockTests(unittest.TestCase):
         as one. permits_execution is False: BYPASSED is not defined anywhere in src/, and an
         undefined verdict does not earn permission to run. Both answers fail closed. Anyone
         changing either one to "agree" with the other reopens one of the two holes.
+
+        This is the *lone* BYPASSED case, and permits_execution catches it on its severity
+        conjunct alone -- `decided()` leaves execution_permitted at its default. A BYPASSED in
+        company was a different question, and the answer here did not generalise to it: with an
+        ALLOW alongside, the reduction is ALLOW and this conjunct passes. tests/
+        test_execution_permit.py owns that case and the aggregate that answers it.
         """
         record = decided(ControlDecision.BYPASSED, enforced=True)
         self.assertFalse(record.would_block)

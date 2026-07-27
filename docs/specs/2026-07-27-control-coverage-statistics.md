@@ -352,8 +352,10 @@ to them — see the open question in §11.
 
 **`PolicyDecisionRecord.would_block`** — a mode-independent reading of whether the
 policy objected, and the first-class source for `shadowWouldBlockCount`.
-`permits_execution` keeps its name and semantics; its sole consumer is
-`gateway.py:286` and its behaviour in SHADOW is correct by definition.
+`permits_execution` keeps its name; its consumer is `gateway.py:286` and its
+behaviour in SHADOW is correct by definition. Its *body* did not survive Plan 1
+unamended — see §6a, which is what happens when the ranking below is read as an
+execution permit.
 
 Derive the predicate **from the rank map** — `_DECISION_RANK[decision] >
 _DECISION_RANK[ALLOW]` — not from a restatement of the rule. The obvious body,
@@ -369,6 +371,86 @@ right. `analytics.py:69` (`block_decision`, feeding `shadow_would_block` and
 `config_guard.py:412` all test `!= ALLOW` and therefore all disagree with
 `would_block` on `BYPASSED`. Plan 2 inherits six predicates of the same shape
 with two different answers, and must reconcile them rather than add a seventh.
+
+**Amended by §6a — five, not six.** `sdk.py:189` has left the list. It was the
+one of the six that *gated execution*, and an execution gate is not a `!= ALLOW`
+question at all; it now calls `policy.execution_permitted`. The five that remain
+— `analytics.py:69`, `gateway.py:259/315/530`, `config_guard.py:412` — set
+severity, outcome or log level, and none of them decides whether a call runs.
+
+### 6a. Execution permission is aggregated separately from severity
+
+*Added after Plan 1 shipped, closing a High finding from an independent review.*
+
+Ranking `BYPASSED` below `ALLOW` is right for severity and wrong as an execution
+permit, and §6 conflated the two. `max` over `_DECISION_RANK` annihilates rank 0,
+so `strongest_decision([ALLOW, BYPASSED])` is `ALLOW`; reading the permit off that
+reduction meant `LinkPolicy(mode=ENFORCE, secret_action=ALLOW,
+undeclared_side_effect_action=BYPASSED)` **executed** on arguments carrying an AWS
+key and an undeclared side effect. `main` hard-coded `BLOCK` whenever its
+undeclared-side-effect branch fired, so that configuration was strictly less safe
+than the engine this table replaced. `BYPASSED` *alone* was already refused and
+pinned as refused; it became permission only in company, which is why the pin held
+and the hole was still open.
+
+`_DECISION_RANK` does not change — `would_block` and Plan 2's coverage axis are
+built on it. Severity and permission are different aggregations over the same
+findings, and one reduction cannot answer both:
+
+```python
+permitted = all(decision == ControlDecision.ALLOW for decision in decisions)
+```
+
+`policy.execution_permitted` computes it. `sdk.py` gates on it directly.
+`evaluate()` carries it onto `PolicyDecisionRecord.execution_permitted`, because
+the gateway gates from the record and `decision` cannot express it.
+`permits_execution` **ANDs** the new field with the existing `decision == ALLOW`,
+so the field can only ever narrow a permit and a record built without it behaves
+exactly as it did before. `strongest_decision` still supplies the emitted
+`decision`: a denied invocation can therefore record `ALLOW`, which is correct —
+the two answer different questions — and no reason code moves in content or order.
+
+Exactly one class of configuration changes: findings containing at least one
+`BYPASSED` and at least one `ALLOW` and nothing stronger. Every other multiset
+already agreed, because `BYPASSED` is the only member ranked below `ALLOW`.
+
+This does not settle §11's *what does `BYPASSED` mean*. It stops an undefined
+verdict from granting permission while that question stays open.
+
+### 6b. The M5 presence check reads authentication, not object identity
+
+*Added in the same pass, closing the review's other High finding.*
+
+`CredentialClaims.authenticated` was introduced by Plan 1 as a fail-closed
+default (see the changes-vs-`main` list) and then read by the A2A broker only.
+Every other field on the record is caller-supplied, so the gateway's and the SDK's
+M5 checks — presence, then equality between self-asserted fields — passed on a
+credential nobody had verified. Concretely at the SDK: no credential blocked with
+`L1-M5-CREDENTIAL-MISSING`, while a forged one (attacker-chosen issuer, `actor`
+set to the source id, `audience` set to what the intent expects) **executed**, with
+all five M5 checks in `ran` and an empty reason list — *checked and clean*.
+Presenting a forged credential was strictly better for an attacker than presenting
+none.
+
+`_credential_missing` now requires `credential is not None and
+credential.authenticated`. **No new reason code**: `L1-M5-CREDENTIAL-MISSING`
+carries the unverified case, and carrying it is the remedy rather than a
+compromise, because the two cases reaching the same verdict under the same code is
+exactly what removes the asymmetry. To M5, an unverified claims blob is not a
+credential that is present.
+
+The check is shared, so this lands at the gateway as well as the SDK. At the
+gateway it closes a weakness inherited from `main`, which had no `authenticated`
+field at all; at the SDK it closes one Plan 1 created, by giving `wrap()` M5 checks
+that read only self-asserted fields. The three coverage states stay honest and the
+unverified case is `RAN_FLAGGED`, not `INAPPLICABLE` and not an empty-subject
+`RAN_CLEAN`.
+
+The only producer in `src/` that legitimately sets the flag is
+`MCPAuthorizationCodeTokenClient.exchange` (`mcp_oauth.py`), which runs the claims
+verifier first. `A2APrincipal.authenticated` still defaults `True` — see *Known and
+accepted* — but that value reaches `_identity_binding` only, on `A2A_PROFILE`,
+which does not carry `L1-M5-CREDENTIAL-MISSING`.
 
 ### 7. Mode composition
 
@@ -489,8 +571,9 @@ settle them without shipping an undocumented decision.
   says "no grounds to block", the latter denies execution under ENFORCE. Both are
   defensible in isolation and the pair is fail-closed, but it is undocumented and
   falls straight out of the previous question.
-- **Six `!= ALLOW` predicates, two answers.** See §6. Reconcile; do not add a
-  seventh.
+- **Six `!= ALLOW` predicates, two answers — now five.** See §6 and §6a.
+  `sdk.py:189` left the list by becoming an explicit execution-permit aggregate;
+  the remaining five gate nothing. Reconcile; do not add a sixth.
 - **`ActorSpec.data_access` has no enforcement reader — partly mitigated, and the
   residual is measured.** The merge moved the data-class judgement onto the link
   policy's `allowed`/`denied_data_classes`; before it, `sdk.py` judged against the
@@ -578,7 +661,9 @@ under-reports:
 
 **Reconcile before adding consumers.** Six predicates test `!= ALLOW` and so
 disagree with `would_block` on `BYPASSED`: `analytics.py:69`, `sdk.py:189`,
-`gateway.py:259/315/530`, `config_guard.py:412`. Separately, `analytics.py:147`
+`gateway.py:259/315/530`, `config_guard.py:412`. (§6a removed `sdk.py:189` from
+that list; five remain and none of them gates execution.) Separately,
+`analytics.py:147`
 picks `chosen` as the first control matching the strongest decision and takes
 `policyId`, `mode` and `actualEnforced` from it — **Plan 1's re-ranking already
 moves shipped statistics through that path, untested and with no fixture.**
@@ -638,7 +723,12 @@ later task was never measured against the starting point.
   decision, so `secret_action=ALLOW` and friends genuinely disable enforcement.
   Net across the measured grid: 2,075 newly blocked, 498 newly executed.
 - **`CredentialClaims.authenticated` now defaults `False`.** `True` was fail-open:
-  it made "nobody authenticated this" read as "authentication passed."
+  it made "nobody authenticated this" read as "authentication passed." §6b then
+  wired the flag into `_credential_missing`, so the gateway and the SDK reject an
+  unverified credential instead of comparing its self-asserted fields to
+  themselves. Against `main` this is strictly more blocking at the gateway: any
+  caller presenting a credential no verifier produced now gets
+  `L1-M5-CREDENTIAL-MISSING` where `main` had no notion of verification at all.
 - **The `strongest_decision` re-ranking** changes the emitted decision for
   configurations that mix severities — 31 of 110 ordered pairs, plus 3 more from
   moving `ERROR`. No reason code moves in content or order at any point.

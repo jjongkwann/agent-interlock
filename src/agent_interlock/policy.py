@@ -250,9 +250,24 @@ def _approval(policy: LinkPolicy, context: CheckContext) -> Findings | None:
 
 
 def _credential_missing(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """The M5 presence check: does this invocation have a credential it can rely on?
+
+    Reads `authenticated`, not the object's existence. Every other field on CredentialClaims is
+    whatever the caller wrote -- issuer, subject, actor, audience, resource -- so on a credential
+    no producer verified, the sibling M5 checks below compare a forged claim against itself.
+    Only a producer that ran a verifier says so; mcp_oauth.MCPAuthorizationCodeTokenClient.exchange
+    is the one in src/ that does.
+
+    L1-M5-CREDENTIAL-MISSING carries the unverified case rather than a new code, and carrying it
+    here is the point rather than a compromise: presenting a forged credential used to be strictly
+    better for an attacker than presenting none -- none blocked here, forged satisfied every M5
+    check and reported the invocation checked and clean. Both now reach the same verdict under the
+    same code, which is what removes the incentive. To M5, an unverified claims blob is not a
+    credential that is present; it is a credential that is missing.
+    """
     if not (context.intent.expected_audience or context.intent.expected_resource):
         return None  # the intent names no audience or resource, so there is no credential to miss
-    if context.credential is not None:
+    if context.credential is not None and context.credential.authenticated:
         return ()
     return (("L1-M5-CREDENTIAL-MISSING", ControlDecision.BLOCK),)
 
@@ -712,7 +727,28 @@ def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
         interaction_id=value.interaction_id,
         trace_id=value.trace_id,
         span_id=value.span_id,
+        execution_permitted=execution_permitted(decisions),
     )
+
+
+def execution_permitted(decisions: list[ControlDecision]) -> bool:
+    """Whether these contributing decisions, together, permit the invocation to run.
+
+    Aggregated separately from strongest_decision, and that separation is the whole content of this
+    function. strongest_decision reduces by severity through _DECISION_RANK, where ``max``
+    annihilates every member ranked below ALLOW: ``[ALLOW, BYPASSED]`` reduces to ALLOW, so a
+    control the operator deliberately bypassed turned into an execution permit as soon as any
+    unrelated check was configured to ALLOW. BYPASSED alone was already refused; it was only in
+    company that it became permission.
+
+    Severity and permission are different questions and one reduction cannot answer both. A permit
+    requires every contributing decision to be affirmative -- one non-ALLOW anywhere denies. An
+    empty list is permitted: no check found anything to say.
+
+    Deliberately not derived from _DECISION_RANK. The rank map's ordering is what would_block and
+    Plan 2's coverage axis read, and it stays exactly as it is; this predicate does not consult it.
+    """
+    return all(decision == ControlDecision.ALLOW for decision in decisions)
 
 
 def strongest_decision(decisions: list[ControlDecision]) -> ControlDecision:

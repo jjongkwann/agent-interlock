@@ -366,6 +366,12 @@ class M5ConfusedDeputyTests(unittest.TestCase):
             resource="mail",
             scopes=frozenset({"mail.send"}),
             exchanged=True,
+            # This row models the control plane's own exchanged token, i.e. the output of
+            # MCPAuthorizationCodeTokenClient.exchange -- the one producer in src/ that runs a
+            # claims verifier and therefore the one that sets this flag. Without it the credential
+            # is self-asserted and M5's presence check now rejects it, which is the point of the
+            # row above it: an unexchanged token is blocked, a verified one is allowed.
+            authenticated=True,
         )
         result = gateway.invoke(
             tenant_id=TENANT,

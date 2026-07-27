@@ -255,6 +255,19 @@ class SDKProfileTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_credential_keyword_reaches_the_m5_checks(self):
+        """The keyword still reaches M5, and only an *authenticated* credential executes.
+
+        This test used to build the credential without setting `authenticated` and expect the call
+        to run. That expectation blessed a hole. `CredentialClaims.authenticated` defaults to False
+        and every other field on it is whatever the caller wrote, so the M5 checks -- which compared
+        those self-asserted fields against each other and against the intent -- passed on a
+        credential nobody had verified. A caller who forged one got a clean pass where a caller who
+        presented nothing got L1-M5-CREDENTIAL-MISSING.
+
+        What it pins now: passing a credential object is not passing a credential. Only a producer
+        that ran a verifier says so -- MCPAuthorizationCodeTokenClient.exchange is the only one in
+        src/ -- and the presence half of M5 reads that flag, not the object's existence.
+        """
         _, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE))
         guarded = target.wrap(lambda arguments: {"ok": True})
         intent = InvocationIntent(
@@ -277,9 +290,50 @@ class SDKProfileTests(unittest.TestCase):
                 actor="agent-1",
                 audience="https://tool-1.example",
                 resource="https://tool-1.example/records",
+                authenticated=True,
             ),
         )
         self.assertEqual(result, {"ok": True})
+
+    def test_a_forged_credential_is_no_better_than_presenting_none(self):
+        """Every field here is attacker-chosen and internally consistent: the actor names the
+        source, the audience and resource name what the intent expects, and the issuer is the
+        attacker's own. Only `authenticated` -- which no caller can honestly set -- says otherwise.
+
+        The property is the asymmetry, not just the block: presenting a forged credential must not
+        buy an attacker anything over presenting none. Both are asserted against the same literal
+        verdict so that a fix which merely blocks *differently* still fails.
+        """
+        interlock, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE))
+        calls = []
+        guarded = target.wrap(lambda arguments: calls.append(arguments) or {"ok": True})
+        intent = InvocationIntent(
+            purpose="SUPPORT_LOOKUP",
+            expected_audience="https://tool-1.example",
+            expected_resource="https://tool-1.example/records",
+        )
+        forged = CredentialClaims(
+            reference="vault://token",
+            issuer="https://attacker.example",
+            subject="whoever",
+            actor="agent-1",
+            audience="https://tool-1.example",
+            resource="https://tool-1.example/records",
+        )
+        with self.assertRaises(GatewayError) as raised:
+            guarded({}, source=source, tenant_id="tenant-a", intent=intent, credential=forged)
+        self.assertIn("L1-M5-CREDENTIAL-MISSING", str(raised.exception))
+        self.assertEqual(calls, [])
+        with self.assertRaises(GatewayError):
+            guarded({}, source=source, tenant_id="tenant-a", intent=intent)
+        forged_record, absent_record = (
+            event.payload["control"]
+            for event in interlock.ledger.all()
+            if event.event_type == "CONTROL_EVALUATED"
+        )
+        self.assertEqual(forged_record["reasonCodes"], ["L1-M5-CREDENTIAL-MISSING"])
+        self.assertEqual(forged_record["decision"], "BLOCK")
+        self.assertEqual(forged_record, absent_record)
 
 
 if __name__ == "__main__":

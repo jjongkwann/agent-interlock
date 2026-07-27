@@ -278,24 +278,36 @@ class PolicyDecisionRecord:
     interaction_id: str
     trace_id: str
     span_id: str
+    # Whether every control decision that contributed to this record was ALLOW; see
+    # policy.execution_permitted, which computes it. Carried as its own field because `decision`
+    # cannot express it: strongest_decision reduces by severity and annihilates every member ranked
+    # below ALLOW, so a record reduced from [ALLOW, BYPASSED] reads ALLOW. Defaults True so a
+    # hand-built record behaves exactly as it did before this field existed -- permits_execution
+    # ANDs the two, so the field can only ever narrow a permit, never widen one.
+    execution_permitted: bool = True
 
     @property
     def permits_execution(self) -> bool:
-        """Whether this invocation may run now. Tests ``== ALLOW``, not the rank map, on purpose.
+        """Whether this invocation may run now. Two conditions, and neither implies the other.
 
-        This and would_block disagree on exactly one member, BYPASSED, and the disagreement is
-        deliberate rather than an oversight: BYPASSED is not a block, because a skipped control
-        raised no objection, and it is also not a permission, because nothing in src/ defines
-        what a BYPASSED verdict means. Neither answer permits execution. Widening this to
-        "anything not would_block" would let an undefined verdict execute; narrowing would_block
-        to ``!= ALLOW`` would count a bypass as an objection. tests/test_decision_ranking.py
-        pins both.
+        ``decision == ALLOW`` is the severity test, kept rather than derived from the rank map on
+        purpose: BYPASSED ranks *below* ALLOW, so a rank-based reading would let an undefined
+        verdict execute. ``execution_permitted`` is the separate permission aggregate, and it is
+        what catches the case severity cannot see -- ``max`` annihilates BYPASSED, so a record
+        reduced from [ALLOW, BYPASSED] has ``decision == ALLOW`` while a control was bypassed.
+        Before the second condition existed, adding one unrelated ALLOW finding to a bypassed
+        control produced an ENFORCE-mode execution permit.
+
+        This and would_block still disagree on BYPASSED, deliberately: a skipped control raised no
+        objection (so it is not a block) and it is not defined anywhere in src/ (so it is not a
+        permission). Both answers fail closed. tests/test_decision_ranking.py pins both, and
+        tests/test_execution_permit.py pins the aggregate.
 
         Note the two risk directions differ and only this one is fail-closed. would_block gates
         nothing -- it feeds statistics -- so its BYPASSED answer risks under-reporting instead,
         which is the open question the spec raises about shadowWouldBlockCount.
         """
-        return not self.enforced or self.decision == ControlDecision.ALLOW
+        return not self.enforced or (self.execution_permitted and self.decision == ControlDecision.ALLOW)
 
     @property
     def would_block(self) -> bool:

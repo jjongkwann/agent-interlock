@@ -11,8 +11,8 @@ from typing import Any
 from .canonical import canonical_digest, canonical_json
 from .gateway import GatewayError
 from .ledger import InMemoryLedger, Ledger
-from .models import ActorSpec, ControlDecision, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode
-from .policy import SDK_PROFILE, CheckContext, run_checks, strongest_decision
+from .models import ActorSpec, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode
+from .policy import SDK_PROFILE, CheckContext, execution_permitted, run_checks, strongest_decision
 from .security import validate_schema
 
 
@@ -186,7 +186,10 @@ class Interlock:
             severity="HIGH" if reasons else "INFO",
             **common,
         )
-        if decision != ControlDecision.ALLOW and enforced:
+        # The execution gate is the separate permission aggregate, not the severity reduction:
+        # strongest_decision annihilates BYPASSED, so `decision != ALLOW` executed a call whose
+        # findings were [ALLOW, BYPASSED]. `decision` above still supplies what the ledger records.
+        if enforced and not execution_permitted(decisions):
             self.ledger.append(
                 "ACTION_EXECUTED",
                 payload={"result": "COMPLETED", "connectorExecutionId": None},

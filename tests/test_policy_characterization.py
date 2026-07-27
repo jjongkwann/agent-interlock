@@ -60,6 +60,11 @@ def clean_case() -> tuple[LinkPolicy, EvaluationInput]:
         resource="",
         exchanged=True,
         delegation_depth=0,
+        # The clean case is a legitimately obtained credential, so it carries the flag only a
+        # producer that verified the principal sets. Leaving it at the fail-closed default made
+        # every derived fixture a forged credential that the M5 presence check now rejects, which
+        # would have turned this file's characterization rows into a test of that one check.
+        authenticated=True,
     )
     context = EvaluationInput(
         source=source,

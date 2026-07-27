@@ -16,7 +16,7 @@ from test_policy_characterization import clean_case
 import agent_interlock
 from agent_interlock import policy as policy_module
 from agent_interlock.architecture import ArchitectureBoundary, EnforcementPoint
-from agent_interlock.models import ActorType, ControlDecision
+from agent_interlock.models import ActorType, ControlDecision, CredentialClaims
 from agent_interlock.policy import (
     A2A_PROFILE,
     CHECKS,
@@ -534,19 +534,85 @@ class CheckTableTests(unittest.TestCase):
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", reasons)
 
     def test_a_credential_that_declares_no_authentication_reads_as_unauthenticated(self):
-        """CredentialClaims.authenticated defaults to False, and nothing else in the suite can tell:
-        the only readers are A2A-only checks, and the broker always declares the value from a real
-        A2APrincipal, so flipping the default back to True leaves every other test green while
-        making "nobody authenticated this" indistinguishable from "authentication passed".
-        clean_case()'s credential names the right actor, so the binding half of the check passes and
-        the authentication half is the only thing under test here."""
+        """CredentialClaims.authenticated defaults to False, and a producer that did not verify the
+        principal must not be able to reach the same state as one that did. clean_case()'s
+        credential is authenticated and names the right actor, so stripping the flag is the only
+        difference between the two halves of this test and the binding half cannot mask it."""
         policy, context = clean_case()
         self.assertEqual(context.credential.actor, context.source.id)  # not vacuous
+        bare = CredentialClaims(reference="", issuer="", subject="", actor="", audience="", resource="")
+        self.assertFalse(bare.authenticated)  # the class default, not the fixture's
         profile = replace(A2A_PROFILE, checks=("A2A-IDENTITY-BINDING-MISMATCH",))
-        reasons, _, _ = run_checks(policy, context, profile)
+        unauthenticated = replace(context, credential=replace(context.credential, authenticated=False))
+        reasons, _, _ = run_checks(policy, unauthenticated, profile)
         self.assertEqual(reasons, ["A2A-IDENTITY-BINDING-MISMATCH"])
-        authenticated = replace(context, credential=replace(context.credential, authenticated=True))
-        self.assertEqual(run_checks(policy, authenticated, profile)[0], [])
+        self.assertEqual(run_checks(policy, context, profile)[0], [])
+
+    def test_the_m5_presence_check_reads_authentication_not_the_object(self):
+        """All three coverage states of L1-M5-CREDENTIAL-MISSING, at both shared enforcement points.
+
+        The check asks whether this invocation has a credential it can rely on, and every field on
+        CredentialClaims other than `authenticated` is whatever the caller wrote. So a credential no
+        producer verified answers that question with "no": the sibling M5 checks can only compare a
+        forged credential against itself, and reporting them clean is the defect this effort exists
+        to remove. Only mcp_oauth.MCPAuthorizationCodeTokenClient.exchange, which runs the claims
+        verifier, sets the flag.
+
+        The unauthenticated row is the one that used to be RAN_CLEAN while the SDK executed the
+        call. RAN_FLAGGED is the honest replacement -- returning None would swap one lie for
+        another -- so each row pins membership in `ran` as well as the emitted codes.
+        """
+        policy, context = clean_case()
+        bound = replace(context, intent=replace(context.intent, expected_audience=context.target.identity))
+        cases = (
+            ("INAPPLICABLE: the intent names no audience or resource", context, False, []),
+            ("RAN_FLAGGED: nothing presented", replace(bound, credential=None), True, ["L1-M5-CREDENTIAL-MISSING"]),
+            (
+                "RAN_FLAGGED: presented but unverified",
+                replace(bound, credential=replace(bound.credential, authenticated=False)),
+                True,
+                ["L1-M5-CREDENTIAL-MISSING"],
+            ),
+            ("RAN_CLEAN: presented and verified", bound, True, []),
+        )
+        for profile in (GATEWAY_PROFILE, SDK_PROFILE):
+            for label, case, expected_ran, expected_reasons in cases:
+                with self.subTest(enforcement_point=profile.enforcement_point, case=label):
+                    single = replace(profile, checks=("L1-M5-CREDENTIAL-MISSING",))
+                    reasons, _, ran = run_checks(policy, case, single)
+                    self.assertEqual(reasons, expected_reasons)
+                    self.assertEqual("L1-M5-CREDENTIAL-MISSING" in ran, expected_ran)
+
+    def test_a_forged_credential_does_not_permit_execution_at_the_gateway(self):
+        """The check is shared, so the SDK's hole and the gateway's close together.
+
+        main had no `authenticated` field at all, so at the gateway this closes a weakness inherited
+        from before the branch; at the SDK it closes one the branch created, by giving wrap() M5
+        checks that read only self-asserted fields. Asserted on permits_execution rather than on the
+        reason code alone: the code reaching the record is not the same claim as the invocation
+        being denied.
+        """
+        policy, context = clean_case()
+        forged = replace(
+            context,
+            intent=replace(
+                context.intent,
+                expected_audience=context.target.identity,
+                expected_resource=f"a2a://{context.target.id}",
+            ),
+            credential=replace(
+                context.credential,
+                issuer="https://attacker.example",
+                audience=context.target.identity,
+                resource=f"a2a://{context.target.id}",
+                authenticated=False,
+            ),
+        )
+        record = evaluate(policy, forged)
+        self.assertEqual(record.reason_codes, ("L1-M5-CREDENTIAL-MISSING",))
+        self.assertFalse(record.permits_execution)
+        verified = replace(forged, credential=replace(forged.credential, authenticated=True))
+        self.assertEqual(evaluate(policy, verified).reason_codes, ())
 
     def test_the_resource_comparison_renames_apart_at_each_enforcement_point(self):
         """_token_audience emits one key for the audience comparison and another for the resource
