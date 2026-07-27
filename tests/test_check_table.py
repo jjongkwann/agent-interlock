@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unittest
 from dataclasses import replace
-from types import CodeType
+from types import CodeType, FunctionType
 from unittest.mock import patch
 
 from test_policy_characterization import clean_case
@@ -31,26 +31,55 @@ from agent_interlock.policy import (
 _REASON_KEY = re.compile(r"^(?:INTERLOCK|L1|A2A)-[A-Z0-9-]+$")
 
 
+def _cells(function) -> tuple:
+    return tuple(cell.cell_contents for cell in function.__closure__ or ())
+
+
 def reason_keys(run) -> set[str]:
-    """The reason keys a check's `run` can emit, read out of its compiled constants.
+    """The reason keys a check's `run` can emit, read statically out of everything it can reach.
 
     Static rather than behavioural on purpose: a key only reachable down a branch no fixture
-    happens to take is exactly the one that slips past a profile's rename map. Nested tuples and
-    nested code objects (comprehensions, lambdas) are walked, so a key inside one is still seen.
-    A key assembled at runtime by concatenation would evade this -- no check does that today, and
-    test_every_condition_the_a2a_profile_can_trip_emits_an_a2a_reason_code covers the other side.
+    happens to take -- or down a branch that does not exist yet -- is exactly the one that slips
+    past a profile's rename map, and no behavioural test can reach either.
+
+    Reading `co_consts` alone is not enough, and the gap is silent rather than loud: a key written
+    as a module-level constant, pulled out into a helper, or looked up from a module-level dict
+    leaves *no* literal in the check's own constants, so the scan returns the check's other keys
+    and looks like it worked. So this also resolves each code object's `co_names` against the
+    module globals and walks what it finds -- strings, containers, and functions inside the
+    package -- plus closure cells and nested code objects (comprehensions, lambdas).
+
+    Over-approximation is the safe direction here: a key reached this way but never emitted still
+    has to be mapped, and a wrong extra key fails loudly. The shape that remains invisible is the
+    one leaving no matching literal anywhere, measured to be `"L1-M9-{}".format(x)`. Building a key
+    by concatenation or by f-string is *not* invisible: constant folding leaves a literal
+    concatenation whole, and an f-string with a runtime piece still leaves its `"L1-M9-"` prefix
+    behind, which matches `_REASON_KEY` and is reported as an unmapped key. That residue is what
+    the pinned A2A_EMITTED_KEYS snapshot backstops: it cannot see a key that was never visible, but
+    it does make one *disappearing* from this scan a failure.
     """
     found: set[str] = set()
-    stack: list[object] = [run.__code__]
+    seen: set[int] = set()
+    namespace = run.__globals__
+    stack: list[object] = [run.__code__, *_cells(run)]
     while stack:
         item = stack.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
         if isinstance(item, str):
             if _REASON_KEY.match(item):
                 found.add(item)
-        elif isinstance(item, tuple):
+        elif isinstance(item, (tuple, list, set, frozenset)):
             stack.extend(item)
+        elif isinstance(item, dict):
+            stack.extend(item.values())
         elif isinstance(item, CodeType):
             stack.extend(item.co_consts)
+            stack.extend(namespace[name] for name in item.co_names if name in namespace)
+        elif isinstance(item, FunctionType) and getattr(item, "__module__", "").startswith("agent_interlock"):
+            stack.append(item.__code__)
+            stack.extend(_cells(item))
     return found
 
 
@@ -104,6 +133,30 @@ def _intent(**changes):
     return lambda policy, context: (policy, replace(context, intent=replace(context.intent, **changes)))
 
 
+# The reason keys each check in A2A_PROFILE can emit, pinned. reason_keys() must reproduce this map
+# exactly, which is what makes a key *disappearing* from the scan a failure rather than a quieter
+# scan: emptiness is not the only way to under-audit, and a check that still yields its other keys
+# looks like a scan that worked. Written out in full, including the fourteen entries whose only key
+# is the check id, so the pin is a literal record and not something derived from the thing it pins.
+A2A_EMITTED_KEYS = {
+    "A2A-IDENTITY-BINDING-MISMATCH": frozenset({"A2A-IDENTITY-BINDING-MISMATCH"}),
+    "INTERLOCK-ACTOR-TYPE-DENIED": frozenset({"INTERLOCK-ACTOR-TYPE-DENIED"}),
+    "INTERLOCK-PURPOSE-DENIED": frozenset({"INTERLOCK-PURPOSE-DENIED"}),
+    "INTERLOCK-DATA-CLASS-DENIED": frozenset({"INTERLOCK-DATA-CLASS-DENIED", "L1-M9-SENSITIVE-EGRESS"}),
+    "L1-M8-CREDENTIAL-DETECTED": frozenset({"L1-M8-CREDENTIAL-DETECTED"}),
+    "L1-M5-TOKEN-ACTOR-MISMATCH": frozenset({"L1-M5-TOKEN-ACTOR-MISMATCH"}),
+    "L1-M5-TOKEN-AUDIENCE-MISMATCH": frozenset({"L1-M5-TOKEN-AUDIENCE-MISMATCH", "L1-M5-TOKEN-RESOURCE-MISMATCH"}),
+    "L1-M5-TOKEN-PASSTHROUGH": frozenset({"L1-M5-TOKEN-PASSTHROUGH"}),
+    "L1-M5-DELEGATION-DEPTH": frozenset({"L1-M5-DELEGATION-DEPTH"}),
+    "A2A-INPUT-SCHEMA-INVALID": frozenset({"A2A-INPUT-SCHEMA-INVALID"}),
+    "A2A-PAYLOAD-INVALID": frozenset({"A2A-PAYLOAD-INVALID"}),
+    "A2A-BOUNDARY-RELATIONSHIP-DENIED": frozenset({"A2A-BOUNDARY-RELATIONSHIP-DENIED"}),
+    "A2A-BOUNDARY-DATA-CLASS-DENIED": frozenset({"A2A-BOUNDARY-DATA-CLASS-DENIED"}),
+    "A2A-BOUNDARY-IDENTITY-REQUIRED": frozenset({"A2A-BOUNDARY-IDENTITY-REQUIRED"}),
+    "A2A-BOUNDARY-TENANT-REQUIRED": frozenset({"A2A-BOUNDARY-TENANT-REQUIRED"}),
+    "A2A-BOUNDARY-PAYLOAD-TOO-LARGE": frozenset({"A2A-BOUNDARY-PAYLOAD-TOO-LARGE"}),
+}
+
 # One recipe per reason key the A2A profile can emit, not one per check: INTERLOCK-DATA-CLASS-DENIED
 # and L1-M5-TOKEN-AUDIENCE-MISMATCH each have a second branch with a second key, and a second branch
 # is precisely where an unmapped gateway-namespace string hides.
@@ -117,8 +170,13 @@ A2A_RECIPES = (
     ("INTERLOCK-PURPOSE-DENIED", "the purpose is not allowed", _intent(purpose="EXFILTRATE")),
     ("INTERLOCK-DATA-CLASS-DENIED", "a denied data class", _intent(data_classes=frozenset({"D8"}))),
     (
+        # Reaches the second branch, which is all this recipe claims: both of the branch's keys
+        # rename to A2A-DATA-CLASS-DENIED, so an all-A2A- assertion cannot tell which one fired.
+        # That L1-M9-SENSITIVE-EGRESS is the key on a denied D7 is pinned by
+        # test_policy_characterization.py::test_every_reason_code_is_reachable, at the gateway where
+        # the two keys stay distinct, and that it is *mapped* is pinned by the snapshot above.
         "INTERLOCK-DATA-CLASS-DENIED",
-        "a denied D7 takes the second branch and emits L1-M9-SENSITIVE-EGRESS",
+        "a denied D7 reaches the second branch",
         lambda policy, context: (
             replace(policy, denied_data_classes=policy.denied_data_classes | {"D7"}),
             replace(context, intent=replace(context.intent, data_classes=frozenset({"D7"}))),
@@ -312,15 +370,31 @@ class CheckTableTests(unittest.TestCase):
         startswith("A2A-") and then asserted the survivors start with "A2A-" -- a tautology -- and
         inspected the map's values, which are hand-written A2A strings, rather than its key domain.
         Both an unmapped id added to the profile and an unmapped key added to a check body passed it.
+
+        The scanned set is compared against a pinned snapshot before it is used, because an audit
+        that quietly stops seeing things reports the same green as one that looked and found
+        nothing -- this plan's own pathology, in the machinery built to detect it. Asserting only
+        that the scan found *something* per check is not enough: a check keeping its existing keys
+        while a new one moves out of reach is partial blindness, and partial blindness passes a
+        non-emptiness test. Comparing whole sets makes a key vanishing as loud as a key appearing.
         """
         self.assertEqual(A2A_PROFILE.reason_codes["L1-M9-SENSITIVE-EGRESS"], "A2A-DATA-CLASS-DENIED")
         self.assertEqual(A2A_PROFILE.reason_codes["L1-M5-TOKEN-RESOURCE-MISMATCH"], "A2A-RESOURCE-MISMATCH")
+        scanned = {check_id: reason_keys(CHECKS[check_id].run) for check_id in A2A_PROFILE.checks}
+        # Reported per check and per direction rather than as two whole dicts: comparing the maps
+        # directly is just as loud but truncates to "Diff is 1250 characters long", which tells the
+        # next reader nothing about which key moved or which way.
+        drift = {}
+        for check_id in set(scanned) | set(A2A_EMITTED_KEYS):
+            found, pinned = scanned.get(check_id, set()), set(A2A_EMITTED_KEYS.get(check_id, ()))
+            if found != pinned:
+                drift[check_id] = {
+                    "scanned but not pinned": sorted(found - pinned),
+                    "pinned but not scanned": sorted(pinned - found),
+                }
+        self.assertEqual(drift, {})
         unmapped = {}
-        for check_id in A2A_PROFILE.checks:
-            keys = reason_keys(CHECKS[check_id].run)
-            # A check body yielding no key at all means the scan stopped working, not that the check
-            # emits nothing: fail rather than silently audit an empty set.
-            self.assertNotEqual(keys, set(), f"no reason key found in the body of {check_id}")
+        for keys in scanned.values():
             for key in keys:
                 code = A2A_PROFILE.reason_codes.get(key, key)
                 if not code.startswith("A2A-"):
