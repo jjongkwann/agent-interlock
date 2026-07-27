@@ -92,6 +92,171 @@ def _actor_type(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     return (("INTERLOCK-ACTOR-TYPE-DENIED", ControlDecision.BLOCK),)
 
 
+def _purpose(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.intent.purpose in policy.allowed_purposes:
+        return ()
+    return (("INTERLOCK-PURPOSE-DENIED", ControlDecision.BLOCK),)
+
+
+def _definition_state(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    # revision=None means this control does not apply to the invocation -- it is a valid
+    # CheckContext (Tasks 5-7 build one before a revision is resolved), not a crash. That is
+    # INAPPLICABLE, so it returns None and stays out of run_checks' `ran` set; () would claim the
+    # control ran and passed. The record evaluate() assembles cannot tell the two apart, but the
+    # coverage layer in Plan 2 reads `ran`, and there the difference is the whole point.
+    if context.revision is None:
+        return None
+    if context.revision.state == DefinitionState.ACTIVE:
+        return ()
+    # The inline branch paired N forwarded reason codes with a single QUARANTINE; as findings that
+    # is N pairs, which dedupe and strongest_decision collapse back to the same record.
+    codes = context.revision.reason_codes or ("L1-M2-DEFINITION-NOT-ACTIVE",)
+    return tuple((code, ControlDecision.QUARANTINE) for code in codes)
+
+
+def _definition_drift(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.revision is None:  # INAPPLICABLE, see _definition_state
+        return None
+    approved = context.target.definition_digest
+    if approved and approved == context.revision.canonical_digest:
+        return ()
+    return (("L1-M2-DEFINITION-DRIFT", ControlDecision.QUARANTINE),)
+
+
+def _input_schema(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.revision is None:  # INAPPLICABLE, see _definition_state
+        return None
+    if not validate_schema(context.arguments, context.revision.definition.input_schema):
+        return ()
+    return (("INTERLOCK-INPUT-SCHEMA-INVALID", ControlDecision.BLOCK),)
+
+
+def _data_classes(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """One check, two reason keys: which one is emitted depends on the classes involved, so a
+    profile renaming this check has to map both (see run_checks)."""
+    denied = context.intent.data_classes & policy.denied_data_classes
+    unexpected = context.intent.data_classes - policy.allowed_data_classes
+    if not denied and not unexpected:
+        return ()
+    key = "L1-M9-SENSITIVE-EGRESS" if "D7" in denied else "INTERLOCK-DATA-CLASS-DENIED"
+    return ((key, ControlDecision.BLOCK),)
+
+
+def _secret(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if not contains_secret(context.arguments):
+        return ()
+    return (("L1-M8-CREDENTIAL-DETECTED", policy.secret_action),)
+
+
+def _canonical_destinations(destinations: tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalise what parses and drop what does not. Must not raise: the unparseable entries
+    are what the L1-M9-NEW-DESTINATION check reports, and the record needs the rest either way."""
+    canonical: list[str] = []
+    for destination in destinations:
+        try:
+            canonical.append(canonical_destination(destination))
+        except ValueError:
+            continue
+    return tuple(canonical)
+
+
+def _new_destination(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """Three former inline branches, one check: destinations that do not parse, destinations
+    outside the target's allowlist, and an external write with no destination at all. All three
+    emit the same key with the same decision, so their relative order never reaches the record."""
+    destinations = context.intent.destinations
+    require_explicit = (
+        policy.require_explicit_destination and context.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE
+    )
+    if not destinations and not require_explicit:
+        return None
+    canonical = _canonical_destinations(destinations)
+    allowed = {item.rstrip(".").encode("idna").decode("ascii").lower() for item in context.target.allowed_domains}
+    finding = ("L1-M9-NEW-DESTINATION", policy.new_destination_action)
+    findings = [finding] * (len(destinations) - len(canonical))
+    findings.extend(finding for item in canonical if destination_domain(item) not in allowed)
+    if require_explicit and not canonical:
+        findings.append(finding)
+    return tuple(findings)
+
+
+def _volume(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if (policy.max_export_records and context.intent.estimated_record_count > policy.max_export_records) or (
+        policy.max_export_bytes and context.intent.estimated_byte_count > policy.max_export_bytes
+    ):
+        return (("L1-M9-VOLUME-EXCEEDED", policy.volume_action),)
+    return ()
+
+
+def _side_effect_declared(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.intent.estimated_side_effect in {SideEffect.NONE, *context.target.side_effects}:
+        return ()
+    return (("L1-UNDECLARED-SIDE-EFFECT", policy.undeclared_side_effect_action),)
+
+
+def _destructive_write(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.intent.estimated_side_effect != SideEffect.DESTRUCTIVE_WRITE:
+        return ()
+    return (("INTERLOCK-DESTRUCTIVE-WRITE", policy.destructive_write_action),)
+
+
+def _approval(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE and not context.approval_valid:
+        return (("INTERLOCK-APPROVAL-REQUIRED", ControlDecision.HOLD),)
+    return ()
+
+
+def _credential_missing(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if not (context.intent.expected_audience or context.intent.expected_resource):
+        return None  # the intent names no audience or resource, so there is no credential to miss
+    if context.credential is not None:
+        return ()
+    return (("L1-M5-CREDENTIAL-MISSING", ControlDecision.BLOCK),)
+
+
+def _token_passthrough(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.credential is None:  # nothing presented, _credential_missing owns that verdict
+        return None
+    if context.credential.exchanged:
+        return ()
+    return (("L1-M5-TOKEN-PASSTHROUGH", ControlDecision.BLOCK),)
+
+
+def _token_audience(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """The audience comparison and the resource comparison emit the same reason key (inherited,
+    not introduced here) and check ids are unique, so they are one check. They stay two
+    conditions inside it because each carries its own policy flag."""
+    credential = context.credential
+    if credential is None:  # nothing presented, _credential_missing owns that verdict
+        return None
+    audience = context.intent.expected_audience if policy.require_audience else ""
+    resource = context.intent.expected_resource if policy.require_resource else ""
+    if not audience and not resource:
+        return None  # the intent declares nothing to compare the credential against
+    findings: list[tuple[str, ControlDecision]] = []
+    if audience and credential.audience != audience:
+        findings.append(("L1-M5-TOKEN-AUDIENCE-MISMATCH", ControlDecision.BLOCK))
+    if resource and credential.resource != resource:
+        findings.append(("L1-M5-TOKEN-AUDIENCE-MISMATCH", ControlDecision.BLOCK))
+    return tuple(findings)
+
+
+def _token_actor(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.credential is None:  # nothing presented, _credential_missing owns that verdict
+        return None
+    if context.credential.actor == context.source.id:
+        return ()
+    return (("L1-M5-TOKEN-ACTOR-MISMATCH", ControlDecision.BLOCK),)
+
+
+def _delegation_depth(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.credential is None:  # nothing presented, _credential_missing owns that verdict
+        return None
+    if context.credential.delegation_depth <= policy.max_delegation_depth:
+        return ()
+    return (("L1-M5-DELEGATION-DEPTH", ControlDecision.BLOCK),)
+
+
 def _build_check_table(checks: tuple[Check, ...]) -> dict[str, Check]:
     """Build the id-keyed table, raising if two checks share an id: a silent collision would
     drop a control and surface later as a baffling missing-reason-code failure."""
@@ -110,6 +275,102 @@ CHECKS: dict[str, Check] = _build_check_table(
             scope=CheckScope.PAIR,
             armed=lambda policy: True,
             run=_actor_type,
+        ),
+        Check(
+            id="INTERLOCK-PURPOSE-DENIED",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: bool(policy.allowed_purposes),
+            run=_purpose,
+        ),
+        Check(
+            id="L1-M2-DEFINITION-NOT-ACTIVE",
+            scope=CheckScope.ACTOR,
+            armed=lambda policy: policy.require_active_definition,
+            run=_definition_state,
+        ),
+        Check(
+            id="L1-M2-DEFINITION-DRIFT",
+            scope=CheckScope.ACTOR,
+            armed=lambda policy: policy.require_digest_pin,
+            run=_definition_drift,
+        ),
+        Check(
+            id="INTERLOCK-INPUT-SCHEMA-INVALID",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_input_schema,
+        ),
+        Check(
+            id="INTERLOCK-DATA-CLASS-DENIED",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_data_classes,
+        ),
+        Check(
+            id="L1-M8-CREDENTIAL-DETECTED",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_secret,
+        ),
+        Check(
+            id="L1-M9-NEW-DESTINATION",
+            scope=CheckScope.ACTOR,
+            armed=lambda policy: True,
+            run=_new_destination,
+        ),
+        Check(
+            id="L1-M9-VOLUME-EXCEEDED",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: bool(policy.max_export_records or policy.max_export_bytes),
+            run=_volume,
+        ),
+        Check(
+            id="L1-UNDECLARED-SIDE-EFFECT",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_side_effect_declared,
+        ),
+        Check(
+            id="INTERLOCK-DESTRUCTIVE-WRITE",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_destructive_write,
+        ),
+        Check(
+            id="INTERLOCK-APPROVAL-REQUIRED",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: policy.external_write_requires_approval,
+            run=_approval,
+        ),
+        Check(
+            id="L1-M5-CREDENTIAL-MISSING",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: True,
+            run=_credential_missing,
+        ),
+        Check(
+            id="L1-M5-TOKEN-PASSTHROUGH",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: not policy.token_passthrough,
+            run=_token_passthrough,
+        ),
+        Check(
+            id="L1-M5-TOKEN-AUDIENCE-MISMATCH",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: policy.require_audience or policy.require_resource,
+            run=_token_audience,
+        ),
+        Check(
+            id="L1-M5-TOKEN-ACTOR-MISMATCH",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: policy.require_actor_binding,
+            run=_token_actor,
+        ),
+        Check(
+            id="L1-M5-DELEGATION-DEPTH",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: True,
+            run=_delegation_depth,
         ),
     )
 )
@@ -144,133 +405,42 @@ def run_checks(
     return reasons, decisions, ran
 
 
-GATEWAY_PROFILE = Profile(enforcement_point="MCP_GATEWAY", checks=("INTERLOCK-ACTOR-TYPE-DENIED",))
+GATEWAY_PROFILE = Profile(
+    enforcement_point="MCP_GATEWAY",
+    checks=(
+        "INTERLOCK-ACTOR-TYPE-DENIED",
+        "INTERLOCK-PURPOSE-DENIED",
+        "L1-M2-DEFINITION-NOT-ACTIVE",
+        "L1-M2-DEFINITION-DRIFT",
+        "INTERLOCK-INPUT-SCHEMA-INVALID",
+        "INTERLOCK-DATA-CLASS-DENIED",
+        "L1-M8-CREDENTIAL-DETECTED",
+        "L1-M9-NEW-DESTINATION",
+        "L1-M9-VOLUME-EXCEEDED",
+        "L1-UNDECLARED-SIDE-EFFECT",
+        "INTERLOCK-DESTRUCTIVE-WRITE",
+        "INTERLOCK-APPROVAL-REQUIRED",
+        "L1-M5-CREDENTIAL-MISSING",
+        "L1-M5-TOKEN-PASSTHROUGH",
+        "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-ACTOR-MISMATCH",
+        "L1-M5-DELEGATION-DEPTH",
+    ),
+)
 
 
 def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
     reasons, decisions, _ = run_checks(policy, value, GATEWAY_PROFILE)
-    arguments_hash = canonical_digest(value.arguments)
-
-    if policy.allowed_purposes and value.intent.purpose not in policy.allowed_purposes:
-        reasons.append("INTERLOCK-PURPOSE-DENIED")
-        decisions.append(ControlDecision.BLOCK)
-    # revision=None means the two M2 controls below (require_active_definition,
-    # require_digest_pin) do not apply to this invocation -- it is a valid CheckContext (Tasks
-    # 5-7 build one before a revision is resolved), not a crash. Within this plan that
-    # "does not apply" is indistinguishable from "ran clean" in the record evaluate() returns
-    # (reasons/decisions stay empty either way, decision collapses to ALLOW): the coverage layer
-    # that makes the two distinguishable arrives in Plan 2. Keep applicability
-    # (require_flag and revision is not None) as its own outer condition, separate from the
-    # "did it find something" check nested inside -- when these move into the check table
-    # (Task 4), that separation is what makes returning `None` (INAPPLICABLE) for a missing
-    # revision the obvious answer instead of `()` (RAN_CLEAN).
-    if policy.require_active_definition and value.revision is not None:
-        if value.revision.state != DefinitionState.ACTIVE:
-            reasons.extend(value.revision.reason_codes or ("L1-M2-DEFINITION-NOT-ACTIVE",))
-            decisions.append(ControlDecision.QUARANTINE)
-    if policy.require_digest_pin and value.revision is not None:
-        approved = value.target.definition_digest
-        if not approved or approved != value.revision.canonical_digest:
-            reasons.append("L1-M2-DEFINITION-DRIFT")
-            decisions.append(ControlDecision.QUARANTINE)
-
-    # Same gap, same rationale: a missing revision means "this check does not apply", not a
-    # crash, and is indistinguishable from "ran clean" until Plan 2's coverage layer.
-    schema_errors = (
-        validate_schema(value.arguments, value.revision.definition.input_schema)
-        if value.revision is not None
-        else ()
-    )
-    if schema_errors:
-        reasons.append("INTERLOCK-INPUT-SCHEMA-INVALID")
-        decisions.append(ControlDecision.BLOCK)
-    denied_classes = value.intent.data_classes & policy.denied_data_classes
-    unexpected_classes = value.intent.data_classes - policy.allowed_data_classes
-    if denied_classes or unexpected_classes:
-        reasons.append("L1-M9-SENSITIVE-EGRESS" if "D7" in denied_classes else "INTERLOCK-DATA-CLASS-DENIED")
-        decisions.append(ControlDecision.BLOCK)
-    if contains_secret(value.arguments):
-        reasons.append("L1-M8-CREDENTIAL-DETECTED")
-        decisions.append(policy.secret_action)
-
-    canonical_destinations: list[str] = []
-    for destination in value.intent.destinations:
-        try:
-            canonical_destinations.append(canonical_destination(destination))
-        except ValueError:
-            reasons.append("L1-M9-NEW-DESTINATION")
-            decisions.append(policy.new_destination_action)
-    allowed_domains = {item.rstrip(".").encode("idna").decode("ascii").lower() for item in value.target.allowed_domains}
-    for destination in canonical_destinations:
-        if destination_domain(destination) not in allowed_domains:
-            reasons.append("L1-M9-NEW-DESTINATION")
-            decisions.append(policy.new_destination_action)
-    if (
-        policy.require_explicit_destination
-        and value.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE
-        and not canonical_destinations
-    ):
-        reasons.append("L1-M9-NEW-DESTINATION")
-        decisions.append(policy.new_destination_action)
-    if (policy.max_export_records and value.intent.estimated_record_count > policy.max_export_records) or (
-        policy.max_export_bytes and value.intent.estimated_byte_count > policy.max_export_bytes
-    ):
-        reasons.append("L1-M9-VOLUME-EXCEEDED")
-        decisions.append(policy.volume_action)
-
-    if value.intent.estimated_side_effect not in {SideEffect.NONE, *value.target.side_effects}:
-        reasons.append("L1-UNDECLARED-SIDE-EFFECT")
-        decisions.append(policy.undeclared_side_effect_action)
-    if value.intent.estimated_side_effect == SideEffect.DESTRUCTIVE_WRITE:
-        decisions.append(policy.destructive_write_action)
-        reasons.append("INTERLOCK-DESTRUCTIVE-WRITE")
-    if (
-        value.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE
-        and policy.external_write_requires_approval
-        and not value.approval_valid
-    ):
-        decisions.append(ControlDecision.HOLD)
-        reasons.append("INTERLOCK-APPROVAL-REQUIRED")
-
-    credential = value.credential
-    if not credential and (value.intent.expected_audience or value.intent.expected_resource):
-        reasons.append("L1-M5-CREDENTIAL-MISSING")
-        decisions.append(ControlDecision.BLOCK)
-    elif credential:
-        if not policy.token_passthrough and not credential.exchanged:
-            reasons.append("L1-M5-TOKEN-PASSTHROUGH")
-            decisions.append(ControlDecision.BLOCK)
-        if (
-            policy.require_audience
-            and value.intent.expected_audience
-            and credential.audience != value.intent.expected_audience
-        ):
-            reasons.append("L1-M5-TOKEN-AUDIENCE-MISMATCH")
-            decisions.append(ControlDecision.BLOCK)
-        if (
-            policy.require_resource
-            and value.intent.expected_resource
-            and credential.resource != value.intent.expected_resource
-        ):
-            reasons.append("L1-M5-TOKEN-AUDIENCE-MISMATCH")
-            decisions.append(ControlDecision.BLOCK)
-        if policy.require_actor_binding and credential.actor != value.source.id:
-            reasons.append("L1-M5-TOKEN-ACTOR-MISMATCH")
-            decisions.append(ControlDecision.BLOCK)
-        if credential.delegation_depth > policy.max_delegation_depth:
-            reasons.append("L1-M5-DELEGATION-DEPTH")
-            decisions.append(ControlDecision.BLOCK)
-
-    decision = strongest_decision(decisions)
+    canonical_destinations = _canonical_destinations(value.intent.destinations)
     return PolicyDecisionRecord(
         decision_id=str(uuid.uuid4()),
-        decision=decision,
+        decision=strongest_decision(decisions),
         reason_codes=tuple(dict.fromkeys(reasons)),
         policy_id=policy.id,
         policy_version=policy.version,
         mode=policy.mode,
-        arguments_hash=arguments_hash,
-        canonical_destinations=tuple(canonical_destinations),
+        arguments_hash=canonical_digest(value.arguments),
+        canonical_destinations=canonical_destinations,
         expires_at_epoch=time.time() + policy.decision_ttl_seconds,
         enforced=policy.mode == PolicyMode.ENFORCE,
         interaction_id=value.interaction_id,
