@@ -275,9 +275,18 @@ fixtures in `schemas/fixtures/`. The existing byte-identical parity test
 configuration: `CHALLENGE` and `DEGRADE` rank equal to `BLOCK`, and `BYPASSED` —
 which should be weakest — also ranks equal to `BLOCK`.
 
-Rank all eleven explicitly, drop the fallback, and assert at import time that the
-map covers `ControlDecision` exactly. A twelfth value then fails on load rather
-than being silently ranked mid-table.
+Rank all eleven explicitly, drop the fallback, and **raise** at import time if the
+map does not cover `ControlDecision` exactly. A twelfth value then fails on load
+rather than being silently ranked mid-table. An `assert` will not do: `python -O`
+strips it, and the guarantee would then be conditional on an optimisation flag.
+
+Cover *totality* at import and *distinctness* behaviourally, not both at import.
+Non-totality fails as an unhandled `KeyError` inside the enforcement path at first
+use, so failing at load is strictly better. Non-injectivity produces a
+running-but-wrong total order — fully observable, and precisely the defect class
+this document exists to eliminate — so it belongs in a test that can name the
+colliding pair. Raising on it at import would kill collection and destroy that
+diagnostic.
 
 `BYPASSED` ranks lowest — below `ALLOW`. `ERROR` ranks above `BLOCK` but **below**
 `QUARANTINE`, not highest. FAIL_CLOSED only requires `ERROR > ALLOW`: at any rank

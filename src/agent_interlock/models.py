@@ -73,7 +73,8 @@ class ControlDecision(StrEnum):
 # not outrank a control that ran and permitted the call.
 #
 # ERROR ranks above BLOCK but below QUARANTINE, not highest. FAIL_CLOSED needs only ERROR >
-# ALLOW -- at any rank above ALLOW every ``!= ALLOW`` predicate in src/ denies. Ranking it above
+# ALLOW -- and note it is would_block and strongest_decision that need it, not the ``!= ALLOW``
+# predicates elsewhere in src/, which deny at any rank including below ALLOW. Ranking it above
 # KILL would buy nothing and would cost strongest_decision([KILL, ERROR]) == ERROR: one check
 # erroring erases a definite KILL, so a consumer routing on the decision takes "unknown, retry"
 # instead of "terminate this agent". Neither BYPASSED nor ERROR has a producer in src/; both are
@@ -285,9 +286,14 @@ class PolicyDecisionRecord:
         This and would_block disagree on exactly one member, BYPASSED, and the disagreement is
         deliberate rather than an oversight: BYPASSED is not a block, because a skipped control
         raised no objection, and it is also not a permission, because nothing in src/ defines
-        what a BYPASSED verdict means. Both answers fail closed. Widening this to "anything not
-        would_block" would let an undefined verdict execute; narrowing would_block to ``!= ALLOW``
-        would count a bypass as an objection. tests/test_decision_ranking.py pins both.
+        what a BYPASSED verdict means. Neither answer permits execution. Widening this to
+        "anything not would_block" would let an undefined verdict execute; narrowing would_block
+        to ``!= ALLOW`` would count a bypass as an objection. tests/test_decision_ranking.py
+        pins both.
+
+        Note the two risk directions differ and only this one is fail-closed. would_block gates
+        nothing -- it feeds statistics -- so its BYPASSED answer risks under-reporting instead,
+        which is the open question the spec raises about shadowWouldBlockCount.
         """
         return not self.enforced or self.decision == ControlDecision.ALLOW
 
@@ -301,6 +307,10 @@ class PolicyDecisionRecord:
         Read from _DECISION_RANK rather than written as ``!= ALLOW`` so the two cannot drift:
         BYPASSED ranks below ALLOW and is not a block -- the control was skipped, it did not
         object -- and any future member ranked below ALLOW inherits that without an edit here.
+
+        This disagrees with permits_execution on BYPASSED, deliberately; read its docstring
+        before changing either. Five other predicates in src/ still test ``!= ALLOW`` and so
+        disagree with this one on that member -- the spec's open questions list them.
         """
         return _DECISION_RANK[self.decision] > _DECISION_RANK[ControlDecision.ALLOW]
 

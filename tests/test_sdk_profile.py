@@ -131,8 +131,10 @@ class SDKProfileTests(unittest.TestCase):
     def test_profile_is_the_gateway_order_minus_the_two_m2_checks(self):
         """The M2 pair is ABSENT at this enforcement point, not inapplicable to the call: the SDK
         has no ToolRevision. Everything else keeps GATEWAY_PROFILE's order so the two points emit
-        reason codes in the same order; since _DECISION_RANK became total the order no longer
-        moves the verdict."""
+        reason codes in the same order; since _DECISION_RANK became total *and injective* the
+        order no longer moves the verdict. Totality alone would not be enough -- a total map with
+        two members sharing a rank is still order-dependent, which is why distinctness is guarded
+        behaviourally by test_decision_ranking rather than at import."""
         self.assertEqual(
             SDK_PROFILE.checks,
             tuple(item for item in GATEWAY_PROFILE.checks if not item.startswith("L1-M2-")),
