@@ -8,10 +8,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .canonical import canonical_digest
+from .canonical import canonical_digest, canonical_json
 from .gateway import GatewayError
 from .ledger import InMemoryLedger, Ledger
-from .models import ActorSpec, ControlDecision, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
+from .models import ActorSpec, ControlDecision, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode
+from .policy import SDK_PROFILE, CheckContext, run_checks, strongest_decision
 from .security import validate_schema
 
 
@@ -36,6 +37,7 @@ class Actor:
             tenant_id: str,
             intent: InvocationIntent,
             trace_id: str | None = None,
+            credential: CredentialClaims | None = None,
         ) -> Any:
             return self._interlock._invoke(
                 source=source,
@@ -45,6 +47,7 @@ class Actor:
                 tenant_id=tenant_id,
                 intent=intent,
                 trace_id=trace_id,
+                credential=credential,
             )
 
         return guarded
@@ -114,6 +117,7 @@ class Interlock:
         tenant_id: str,
         intent: InvocationIntent,
         trace_id: str | None,
+        credential: CredentialClaims | None = None,
     ) -> Any:
         policy = self._links.get((source.spec.id, target.spec.id))
         if not policy:
@@ -145,16 +149,23 @@ class Interlock:
             },
             **common,
         )
-        reasons: list[str] = []
-        if validate_schema(arguments, target.spec.input_schema):
-            reasons.append("INTERLOCK-INPUT-SCHEMA-INVALID")
-        if intent.data_classes - target.spec.data_access:
-            reasons.append("INTERLOCK-DATA-CLASS-DENIED")
-        if intent.estimated_side_effect not in {SideEffect.NONE, *target.spec.side_effects}:
-            reasons.append("L1-UNDECLARED-SIDE-EFFECT")
-        if intent.taint_labels and intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE:
-            reasons.append("INTERLOCK-TAINTED-EXTERNAL-WRITE")
-        decision = ControlDecision.BLOCK if reasons else ControlDecision.ALLOW
+        reasons, decisions, _ = run_checks(
+            policy,
+            CheckContext(
+                source=source.spec,
+                target=target.spec,
+                intent=intent,
+                arguments=arguments,
+                interaction_id=interaction,
+                trace_id=trace,
+                span_id=span,
+                credential=credential,
+                relationship=policy.relationship,
+                payload_bytes=len(canonical_json(dict(arguments))),
+            ),
+            SDK_PROFILE,
+        )
+        decision = strongest_decision(decisions)
         enforced = policy.mode == PolicyMode.ENFORCE
         self.ledger.append(
             "CONTROL_EVALUATED",
@@ -172,7 +183,7 @@ class Interlock:
             severity="HIGH" if reasons else "INFO",
             **common,
         )
-        if reasons and enforced:
+        if decision != ControlDecision.ALLOW and enforced:
             self.ledger.append(
                 "ACTION_EXECUTED",
                 payload={"result": "COMPLETED", "connectorExecutionId": None},

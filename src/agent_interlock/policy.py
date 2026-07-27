@@ -204,6 +204,14 @@ def _destructive_write(policy: LinkPolicy, context: CheckContext) -> Findings | 
     return (("INTERLOCK-DESTRUCTIVE-WRITE", policy.destructive_write_action),)
 
 
+def _tainted_external_write(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.intent.estimated_side_effect != SideEffect.EXTERNAL_WRITE:
+        return None
+    if not context.intent.taint_labels:
+        return ()
+    return (("INTERLOCK-TAINTED-EXTERNAL-WRITE", ControlDecision.BLOCK),)
+
+
 def _approval(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     if context.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE and not context.approval_valid:
         return (("INTERLOCK-APPROVAL-REQUIRED", ControlDecision.HOLD),)
@@ -341,6 +349,12 @@ CHECKS: dict[str, Check] = _build_check_table(
             run=_destructive_write,
         ),
         Check(
+            id="INTERLOCK-TAINTED-EXTERNAL-WRITE",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy: True,
+            run=_tainted_external_write,
+        ),
+        Check(
             id="INTERLOCK-APPROVAL-REQUIRED",
             scope=CheckScope.PAYLOAD,
             armed=lambda policy: policy.external_write_requires_approval,
@@ -423,12 +437,30 @@ GATEWAY_PROFILE = Profile(
         "L1-M9-VOLUME-EXCEEDED",
         "L1-UNDECLARED-SIDE-EFFECT",
         "INTERLOCK-DESTRUCTIVE-WRITE",
+        # Sits with the other estimated_side_effect checks, and after the two whose decision the
+        # policy configures: it emits a hard-coded BLOCK, and strongest_decision resolves ties by
+        # first position, so an earlier slot would mask a configured CHALLENGE/REVOKE here.
+        "INTERLOCK-TAINTED-EXTERNAL-WRITE",
         "INTERLOCK-APPROVAL-REQUIRED",
         "L1-M5-CREDENTIAL-MISSING",
         "L1-M5-TOKEN-PASSTHROUGH",
         "L1-M5-TOKEN-AUDIENCE-MISMATCH",
         "L1-M5-TOKEN-ACTOR-MISMATCH",
         "L1-M5-DELEGATION-DEPTH",
+    ),
+)
+
+
+SDK_PROFILE = Profile(
+    enforcement_point="SDK",
+    # Derived from GATEWAY_PROFILE in its order, not rewritten: strongest_decision still resolves
+    # ties by position, so a fresh tuple would silently change verdicts. The two M2 checks are
+    # dropped by id rather than left to return None -- the SDK has no ToolRevision to pin, so the
+    # control is ABSENT at this enforcement point, not inapplicable to this invocation.
+    checks=tuple(
+        check_id
+        for check_id in GATEWAY_PROFILE.checks
+        if check_id not in {"L1-M2-DEFINITION-NOT-ACTIVE", "L1-M2-DEFINITION-DRIFT"}
     ),
 )
 
