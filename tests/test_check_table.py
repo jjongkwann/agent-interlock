@@ -45,14 +45,23 @@ def reason_keys(run) -> set[str]:
     Reading `co_consts` alone is not enough, and the gap is silent rather than loud: a key written
     as a module-level constant, pulled out into a helper, or looked up from a module-level dict
     leaves *no* literal in the check's own constants, so the scan returns the check's other keys
-    and looks like it worked. So this also resolves each code object's `co_names` against the
-    module globals and walks what it finds -- strings, containers, and functions inside the
-    package -- plus closure cells and nested code objects (comprehensions, lambdas).
+    and looks like it worked. So this also resolves each code object's `co_names` and walks what it
+    finds -- strings, containers, and functions inside the package -- plus closure cells and nested
+    code objects (comprehensions, lambdas).
+
+    A name resolves against the globals of the module its code object came from, so the namespace
+    travels *with* each item rather than being captured once from the entry check. Carrying one
+    namespace reopened the same one-refactor hole a module over: a helper in `security.py` reading
+    a constant of `security.py` had that name looked up in `policy.py`'s globals, where it does not
+    exist, and the key went invisible again while a helper returning the same string as a literal
+    was caught.
 
     Over-approximation is the safe direction here: a key reached this way but never emitted still
-    has to be mapped, and a wrong extra key fails loudly. The shape that remains invisible is the
-    one leaving no matching literal anywhere, measured to be `"L1-M9-{}".format(x)`. Building a key
-    by concatenation or by f-string is *not* invisible: constant folding leaves a literal
+    has to be mapped, and a wrong extra key fails loudly. What remains invisible, measured rather
+    than assumed: a key that leaves no literal matching `_REASON_KEY` anywhere the walk reaches,
+    of which the known shape is `"L1-M9-{}".format(x)`; and anything reached only through a module
+    outside the `agent_interlock` package, which the walk does not enter. Building a key by
+    concatenation or by f-string is *not* invisible: constant folding leaves a literal
     concatenation whole, and an f-string with a runtime piece still leaves its `"L1-M9-"` prefix
     behind, which matches `_REASON_KEY` and is reported as an unmapped key. That residue is what
     the pinned A2A_EMITTED_KEYS snapshot backstops: it cannot see a key that was never visible, but
@@ -60,10 +69,15 @@ def reason_keys(run) -> set[str]:
     """
     found: set[str] = set()
     seen: set[int] = set()
-    namespace = run.__globals__
-    stack: list[object] = [run.__code__, *_cells(run)]
+    # (value, namespace) pairs: `namespace` is the globals `value`'s names resolve against. Strings
+    # and containers just inherit their parent's -- only code objects resolve names, and a function
+    # brings its own module's globals with it. `seen` is keyed on the value alone, which is enough:
+    # a code object belongs to exactly one module, and nothing else consults the namespace. It is
+    # also what terminates the walk on self-recursive and mutually recursive helpers.
+    stack: list[tuple[object, dict]] = [(run.__code__, run.__globals__)]
+    stack.extend((cell, run.__globals__) for cell in _cells(run))
     while stack:
-        item = stack.pop()
+        item, namespace = stack.pop()
         if id(item) in seen:
             continue
         seen.add(id(item))
@@ -71,15 +85,15 @@ def reason_keys(run) -> set[str]:
             if _REASON_KEY.match(item):
                 found.add(item)
         elif isinstance(item, (tuple, list, set, frozenset)):
-            stack.extend(item)
+            stack.extend((value, namespace) for value in item)
         elif isinstance(item, dict):
-            stack.extend(item.values())
+            stack.extend((value, namespace) for value in item.values())
         elif isinstance(item, CodeType):
-            stack.extend(item.co_consts)
-            stack.extend(namespace[name] for name in item.co_names if name in namespace)
+            stack.extend((const, namespace) for const in item.co_consts)
+            stack.extend((namespace[name], namespace) for name in item.co_names if name in namespace)
         elif isinstance(item, FunctionType) and getattr(item, "__module__", "").startswith("agent_interlock"):
-            stack.append(item.__code__)
-            stack.extend(_cells(item))
+            stack.append((item.__code__, item.__globals__))
+            stack.extend((cell, item.__globals__) for cell in _cells(item))
     return found
 
 
