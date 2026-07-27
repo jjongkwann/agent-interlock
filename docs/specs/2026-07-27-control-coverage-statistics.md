@@ -1,6 +1,6 @@
 # Control Coverage Statistics
 
-Status: proposed
+Status: Plan 1 complete, Plan 2 not started
 Date: 2026-07-27
 
 ## Problem
@@ -148,9 +148,23 @@ not a second check.
 
 - `armed(policy)` reads the policy only, and the profile decides membership, so
   neither depends on the individual invocation. A policy with
-  `require_digest_pin=False`, `require_audience=False`,
-  `max_export_records=0` or an empty `allowed_purposes` has switched that control
-  off; a profile that omits the check id never had it. Either way: **ABSENT**.
+  `require_digest_pin=False` or an empty `allowed_purposes` has switched that
+  control off; a profile that omits the check id never had it. Either way:
+  **ABSENT**.
+
+  Two things `armed` does **not** currently catch, both measured. First, a check
+  id that bundles two independently-switchable controls: `armed` for
+  `L1-M5-TOKEN-AUDIENCE-MISMATCH` is `require_audience or require_resource`, so
+  with `require_audience=False`, `require_resource=True` and a wrong audience the
+  check reports **RAN_CLEAN** — the audience control is off, the audience is
+  wrong, and the statistic says the check ran and found nothing.
+  `L1-M9-VOLUME-EXCEEDED` (`max_export_records or max_export_bytes`) is the same
+  shape. Second, arming inputs the signature cannot reach at all: boundary
+  switches (`require_identity`, `require_tenant_binding`), actor properties
+  (`target.input_schema`, which `_input_schema` and `_message_parts_schema` gate
+  on) and edge structure (`boundary is None`, which all five boundary checks gate
+  on) are each constant for the link yet report INAPPLICABLE rather than ABSENT.
+  See the open questions — these must be settled before the statistic ships.
 - `run(context)` is per invocation:
   - `None` — armed, but this invocation did not engage it (**INAPPLICABLE**);
     no destinations were declared, or the intent expects no audience
@@ -187,11 +201,17 @@ reducer only carries it.
 `delegation_depth`), so the broker builds a real credential rather than a
 special case.
 
-With `revision=None` the M2 checks return `None` — INAPPLICABLE, not passing —
-and schema validation reads `ActorSpec.input_schema`. An SDK link therefore shows
-M2 as INAPPLICABLE on one hundred percent of its interactions, which is the
-readable signal that this point supplies no definition to pin. It is deliberately
-not ABSENT: ABSENT means the control was switched off, a different fact.
+With `revision=None` the M2 checks return `None` rather than passing, and schema
+validation falls back to `ActorSpec.input_schema`.
+
+At the SDK the M2 pair is **ABSENT, not INAPPLICABLE** — `SDK_PROFILE` omits both
+ids. An earlier draft of this section said the opposite and called it deliberate;
+that contradicted §2 above and the shipped code, and §2 is right. INAPPLICABLE is
+a per-invocation fact — armed, but *this* call did not engage it. The SDK has no
+`ToolRevision` on *any* call, so "no definition to pin" is a property of the
+enforcement point, not of an invocation, and recording it per event would stamp a
+constant onto every one. ABSENT is declared once per
+`(enforcementPoint, policyId, policyVersion)`, which is exactly the right shape.
 
 **Import cycle.** `architecture.py:13` imports `sdk`, and after unification `sdk`
 imports `policy`, so `policy` importing `ArchitectureBoundary` from
@@ -222,10 +242,20 @@ is seen:
   "enforcementPoint": "A2A_BROKER",
   "policyId": "…",
   "policyVersion": "…",
-  "armed": [{"id": "M5-AUDIENCE", "scope": "PAIR"}],
-  "evaluated": ["M5-AUDIENCE"]
+  "armed": [{"id": "L1-M5-TOKEN-AUDIENCE-MISMATCH", "scope": "PAIR"}],
+  "evaluated": ["L1-M5-TOKEN-AUDIENCE-MISMATCH"]
 }
 ```
+
+Check ids **are** the gateway reason strings — there is no second id namespace.
+An earlier draft of this example used `"M5-AUDIENCE"`, which does not exist;
+copying it would have invented one and `byCheck` would never have joined.
+
+Note the ids on the wire are the *check* ids, which at the SDK and broker are not
+the emitted reason codes: a denied D7 runs under check id
+`INTERLOCK-DATA-CLASS-DENIED` while emitting `L1-M9-SENSITIVE-EGRESS` at the
+gateway and `A2A-DATA-CLASS-DENIED` at the broker. Any join from coverage to
+reason codes must go through `Profile.reason_codes`, never a string match.
 
 The reducer derives the three states: in `evaluated` is RAN; in `armed` but not
 `evaluated` is INAPPLICABLE; in the catalogue but not `armed` is ABSENT. The
@@ -263,17 +293,32 @@ the only view that preserves the per-point wording.
 The schema sets `additionalProperties: false` throughout, so every addition is a
 synchronised change across the schema, `studio/app/analytics.mjs`, and the golden
 fixtures in `schemas/fixtures/`. The existing byte-identical parity test
-(`tests/test_analytics.py`) covers the new fields.
+(`tests/test_analytics.py`) is the mechanism, but it does **not** cover these
+fields yet — `byEdge`, `byCheck` and `unattributed` appear nowhere in the schema,
+the reducer or the Studio port. Extending it is Plan 2's work, not something
+already in place.
 
 ### 6. Ancillary correctness fixes
 
-**`strongest_decision`** (`policy.py:160-171`) ranks six of eleven
-`ControlDecision` values and falls back to `order.get(item, 3)`. Five
-`LinkPolicy` fields — `secret_action`, `new_destination_action`, `volume_action`,
-`destructive_write_action`, `undeclared_side_effect_action` — are unconstrained
-`ControlDecision` values (`models.py:140-152`), so the fallback is reachable by
-configuration: `CHALLENGE` and `DEGRADE` rank equal to `BLOCK`, and `BYPASSED` —
-which should be weakest — also ranks equal to `BLOCK`.
+*Line references in this document point at `main`, the state being fixed, unless
+marked otherwise. Where a symbol moved, the shipped location is given inline.*
+
+**`strongest_decision`** ranked six of eleven `ControlDecision` values and fell
+back to `order.get(item, 3)`. Five `LinkPolicy` fields — `secret_action`,
+`new_destination_action`, `volume_action`, `destructive_write_action`,
+`undeclared_side_effect_action` — are unconstrained `ControlDecision` values, so
+the fallback was reachable by configuration: `CHALLENGE` and `DEGRADE` ranked
+equal to `BLOCK`, and `BYPASSED` — which should be weakest — also ranked equal to
+`BLOCK`. Because `max` is first-wins on a tie, **which check ran first decided
+the emitted verdict**. A sixth path exists that the original analysis missed:
+`architecture.py:1238` builds `new_destination_action` from an architecture
+document with `ControlDecision(str(...))` and no validation, even though
+`schemas/architecture.schema.json:159` already declares the four-member enum.
+
+The rank map ships in `models.py`, not `policy.py`: it is a total function of
+`ControlDecision`, so it belongs beside the enum where whoever adds a twelfth
+member meets the map and the coverage check on one screen. `strongest_decision`
+itself stays in `policy.py` and imports it.
 
 Rank all eleven explicitly, drop the fallback, and **raise** at import time if the
 map does not cover `ControlDecision` exactly. A twelfth value then fails on load
@@ -377,10 +422,15 @@ Of the seventeen A2A policy findings, fifteen appear in no test file — only
 `A2A-AUDIENCE-MISMATCH` and `A2A-BOUNDARY-DATA-CLASS-DENIED` are asserted
 anywhere.
 
-Twenty-five reason codes therefore need characterization before the merge. This
+Twenty-five reason codes therefore needed characterization before the merge. This
 is a string-presence proxy, not line coverage — it bounds the risk from below —
-but restructuring three judgment engines against it as-is means a broken check
-passes 459 green tests.
+but restructuring three judgment engines against it as-is would have meant a
+broken check passing 459 green tests.
+
+**Everything above this line describes the state before Plan 1 and is retained as
+the record of why it was necessary. It is no longer true.** All twenty-five are
+characterized; the suite is now 503 passed / 12 skipped / 72 subtests on the
+pytest path and `Ran 515, OK` on the CI `unittest` path.
 
 The characterization test is one table per engine: each reason code with a
 triggering input and a non-triggering input. After the merge the same tables
@@ -397,7 +447,11 @@ Additional tests:
 - Golden-fixture parity between the Python reducer and `studio/app/analytics.mjs`,
   extended to the new fields.
 
-Baseline before any change: 459 passed, 12 skipped, 15 subtests passed.
+Baseline before any change: 459 passed, 12 skipped, 15 subtests passed — measured
+with the optional extras installed. A fresh checkout without them under-collects:
+run `uv sync --extra jwt`, or use the CI path
+(`PYTHONPATH=src:tests python3 -m unittest discover -s tests`), which is
+unaffected.
 
 ## Risks
 
@@ -450,13 +504,80 @@ settle them without shipping an undocumented decision.
   action fields to that four-member subset would have made Plan 1's tie-break
   unreachable in the first place, and is the general fix for this bug class.
 
+### Carried into Plan 2
+
+Plan 1's execution ledger
+(`.superpowers/sdd/2026-07-27-unified-judgment-engine/progress.md`) has the full
+reasoning and measurements. These are the items Plan 2 cannot start without.
+
+**Blocking — the coverage states are not yet trustworthy.** `run_checks` returns
+`ran`, and all three call sites in `src/` discard it, so within Plan 1 the three
+states have zero observable effect. Wiring telemetry to `ran` as it stands
+under-reports:
+
+1. **A check whose subject is empty must return `None` (INAPPLICABLE), never `()`
+   (RAN_CLEAN).** State the rule once and audit all 26 against it rather than
+   patching case by case. Three known instances: `_data_classes` and
+   `_boundary_data_classes` (empty `data_classes`), and `_secret`, whose
+   `contains_secret` returns `False` vacuously for an argument map holding no
+   strings — that one is in all three profiles, and `clean_case()` itself, the
+   fixture used to prove the same bug in `_input_schema`, demonstrates it.
+   Weaker fourth: `_volume` on a zero estimate.
+2. **`armed`'s blind spots are four distinct shapes**, only one of which a wider
+   signature fixes. See §2. Note the spec's own
+   `(enforcementPoint, policyId, policyVersion)` ABSENT key cannot express actor
+   properties or edge structure.
+3. **Split the two multi-control check ids** — `L1-M5-TOKEN-AUDIENCE-MISMATCH`
+   and `L1-M9-VOLUME-EXCEEDED` — or accept that those two `byCheck` rows are
+   unreliable.
+4. **Pick one coverage convention for the three side-effect checks.**
+   `_tainted_external_write` returns `None` for a non-matching side effect while
+   `_destructive_write` and `_approval` return `()`. Read-only traffic would show
+   one at ~100% RAN_CLEAN (a working control) and the other at ~100% INAPPLICABLE
+   — same situation, opposite statistic.
+5. **The reducer must not read a missing `CONTROL_EVALUATED` as clean.**
+6. **Two A2A controls are unsatisfiable** and would count as passing:
+   `A2A-BOUNDARY-TENANT-REQUIRED` (`A2APrincipal.__post_init__` rejects an empty
+   tenant first) and `A2A-PAYLOAD-INVALID` (`A2AMessage.__post_init__` requires
+   at least one part, so `payload_bytes >= 2`).
+7. **`assertNotIn(id, ran)` passes vacuously** if that id is dropped from the
+   profile entirely — audit profile membership, not just the predicate.
+
+**Reconcile before adding consumers.** Six predicates test `!= ALLOW` and so
+disagree with `would_block` on `BYPASSED`: `analytics.py:69`, `sdk.py:189`,
+`gateway.py:259/315/530`, `config_guard.py:412`. Separately, `analytics.py:147`
+picks `chosen` as the first control matching the strongest decision and takes
+`policyId`, `mode` and `actualEnforced` from it — **Plan 1's re-ranking already
+moves shipped statistics through that path, untested and with no fixture.**
+
+**Known and accepted.** `_definition_state` forwards arbitrary registry strings
+as reason keys, an unbounded key set that `Profile.reason_codes` renames blindly.
+`A2APrincipal.authenticated` still defaults `True` and `for_edge` does not accept
+it, so the value `_identity_binding` reads is fail-open on the live path.
+`ArchitectureLinter._lint_boundaries` skips three CRITICAL checks for same-zone
+edges that the broker enforces unconditionally. `_message_parts_schema` couples
+`policy.py` to the A2A wire shape and its multi-part arity branch is uncovered in
+the fail-open direction; the remedy is a typed projection on `CheckContext`, not
+a Protocol.
+
+**The static emitted-key audit is weaker than it reads.** It covers
+`A2A_PROFILE` only, and its blindness has three structural causes: the walk's
+`isinstance` ladder terminates on any type outside a fixed set; `co_names`
+resolves only against module globals, so function-local imports and
+`__defaults__` are invisible; and runtime string construction escapes entirely.
+Twenty distinct mutants pass. Several are ordinary refactors — most notably a
+`StrEnum` of reason keys, which is arguably the most idiomatic possible spelling
+of exactly the hoist the guard exists to catch, and which `policy.py` already
+uses for `CheckScope`. `_REASON_KEY` is also a three-namespace allowlist against
+six live namespaces. This does not affect Plan 1, whose 26 checks are all
+correctly audited. **It matters because Plan 2 adds checks.**
+
 ## Sequence
 
-Delivered as two plans. The first produces a working, fully tested unified engine
-with no observable behaviour change; the second adds the telemetry that depends
-on the check ids the first defines.
+Delivered as two plans. The first produces a working, fully tested unified engine;
+the second adds the telemetry that depends on the check ids the first defines.
 
-**Plan 1 — unified judgment engine**
+**Plan 1 — unified judgment engine** *(complete)*
 
 1. Characterization tests for the twenty-five uncovered reason codes.
 2. `Check`, `Profile`, `CheckScope`, `CheckContext`; boundary `Protocol`.
@@ -464,6 +585,33 @@ on the check ids the first defines.
 4. SDK routed through the table via `Profile(SDK)`.
 5. Broker routed through the table via `Profile(A2A_BROKER)`.
 6. `strongest_decision` and `would_block`.
+
+Plan 1 was drafted as "no observable behaviour change." It is not, and the
+differences are deliberate rather than accidental. Recorded here because the
+final review found them only by differencing against `main` — every per-task
+differential compared one task to the previous one, so a change introduced in a
+later task was never measured against the starting point.
+
+- **The MCP gateway gained a blocking control.** `INTERLOCK-TAINTED-EXTERNAL-WRITE`
+  existed only in `sdk.py`; promoting it to a shared check put it in
+  `GATEWAY_PROFILE`. It is production-reachable — `mcp_transport.py:148` forwards
+  caller-supplied `taint_labels` into the intent — so a tainted external write
+  that used to pass at the gateway now blocks.
+- **The SDK gained thirteen reason codes**, the M5/M8/M9 families it never ran.
+  That was the point of the merge: the SDK checked four things while the gateway
+  checked twenty, and a statistic spanning both was not comparable.
+- **The SDK's execution predicate now honours the operator's action fields.** It
+  previously hard-coded `BLOCK` for its findings; it now takes the configured
+  decision, so `secret_action=ALLOW` and friends genuinely disable enforcement.
+  Net across the measured grid: 2,075 newly blocked, 498 newly executed.
+- **`CredentialClaims.authenticated` now defaults `False`.** `True` was fail-open:
+  it made "nobody authenticated this" read as "authentication passed."
+- **The `strongest_decision` re-ranking** changes the emitted decision for
+  configurations that mix severities — 31 of 110 ordered pairs, plus 3 more from
+  moving `ERROR`. No reason code moves in content or order at any point.
+
+Reason codes themselves held: zero movement at the gateway across 32,610 cases,
+zero divergence at the broker across 18,402.
 
 **Plan 2 — coverage telemetry and statistics**
 

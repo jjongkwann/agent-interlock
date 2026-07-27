@@ -990,7 +990,24 @@ A2A_PROFILE = Profile(
 )
 ```
 
-`A2A-IDENTITY-BINDING-MISMATCH`, `A2A-PAYLOAD-INVALID` and `A2A-RESOURCE-MISMATCH` keep their own ids: no gateway check corresponds to them.
+`A2A-IDENTITY-BINDING-MISMATCH` and `A2A-PAYLOAD-INVALID` keep their own ids: no gateway check corresponds to them.
+
+> ⚠️ **The map above is incomplete as written and must not be copied.** The map is
+> keyed on the **emitted reason key**, not the check id, and a check may emit more
+> than one key. Two entries are missing here and were added before this landed:
+>
+> ```python
+>         "L1-M9-SENSITIVE-EGRESS": "A2A-DATA-CLASS-DENIED",
+>         "L1-M5-TOKEN-RESOURCE-MISMATCH": "A2A-RESOURCE-MISMATCH",
+> ```
+>
+> Without the first, a denied D7 puts the gateway-namespace string
+> `L1-M9-SENSITIVE-EGRESS` on the A2A wire, because `reason_codes.get(key, key)`
+> passes unmapped keys through unchanged. Without the second, the audience check —
+> which task 4 merged with the resource check into one id emitting two keys —
+> raises `KeyError`. The gateway and SDK profiles instead map
+> `L1-M5-TOKEN-RESOURCE-MISMATCH` **to** `L1-M5-TOKEN-AUDIENCE-MISMATCH`, which
+> preserves their historical collapse byte for byte.
 
 **The audience and resource comparisons genuinely differ** and are the only non-mechanical part of this task. The broker compares `principal.audience` against `target.identity`, the gateway compares `credential.audience` against `intent.expected_audience`. Resolve it in the check by preferring the declared expectation and falling back to the target's identity:
 
@@ -1141,18 +1158,38 @@ def strongest_decision(decisions: list[ControlDecision]) -> ControlDecision:
 
 - [ ] **Step 4: Add `would_block`**
 
-In `models.py`, after `permits_execution`:
+> ⚠️ **This step was written wrong and was NOT implemented as shown. Do not copy
+> it.** Kept struck through because the reason it was wrong is the point.
+>
+> ~~```python~~
+> ~~    @property~~
+> ~~    def would_block(self) -> bool:~~
+> ~~        """Whether the policy found grounds to block, regardless of enforcement mode.~~
+> ~~        permits_execution answers "may this run now", which is False in SHADOW~~
+> ~~        even for a BLOCK verdict. This answers "did the policy object".~~
+> ~~        """~~
+> ~~        return self.decision != ControlDecision.ALLOW~~
+> ~~```~~
+>
+> Two errors. `BYPASSED` ranks **below** `ALLOW`, so `!= ALLOW` reports a
+> deliberately bypassed control as "the policy found grounds to block" — and Plan
+> 2 wires `shadowWouldBlockCount` to this property, so the lie would land in the
+> statistic this effort exists to make trustworthy. Reverting to this body fails
+> exactly one test in the suite. And `permits_execution` is `True` in SHADOW, not
+> `False`; the docstring had it backwards.
+
+What shipped derives the predicate from the rank map so the two cannot drift, in
+`models.py` after `permits_execution`:
 
 ```python
     @property
     def would_block(self) -> bool:
-        """Whether the policy found grounds to block, regardless of enforcement mode.
-
-        permits_execution answers "may this run now", which is False in SHADOW
-        even for a BLOCK verdict. This answers "did the policy object".
-        """
-        return self.decision != ControlDecision.ALLOW
+        """Whether the verdict is more severe than ALLOW, regardless of enforcement mode."""
+        return _DECISION_RANK[self.decision] > _DECISION_RANK[ControlDecision.ALLOW]
 ```
+
+See `docs/specs/2026-07-27-control-coverage-statistics.md` §6, which supersedes
+this document.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
