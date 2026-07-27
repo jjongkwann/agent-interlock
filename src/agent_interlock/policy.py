@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any, Protocol
 
 from .canonical import canonical_digest
 from .models import (
@@ -24,28 +25,116 @@ from .registry import ToolRevision
 from .security import canonical_destination, contains_secret, destination_domain, validate_schema
 
 
+class CheckScope(StrEnum):
+    ACTOR = "ACTOR"
+    PAYLOAD = "PAYLOAD"
+    PAIR = "PAIR"
+    BOUNDARY = "BOUNDARY"
+
+
+class BoundaryLike(Protocol):
+    """Structural view of ArchitectureBoundary.
+
+    policy.py must not import architecture.py: architecture imports sdk, and sdk
+    imports policy, so a direct import would close the cycle.
+    """
+
+    allowed_relationships: frozenset[str]
+    allowed_data_classes: frozenset[str]
+    denied_data_classes: frozenset[str]
+    require_identity: bool
+    require_tenant_binding: bool
+    max_payload_bytes: int
+    mode: PolicyMode
+
+
+Findings = tuple[tuple[str, ControlDecision], ...]
+
+
 @dataclass(frozen=True, slots=True)
-class EvaluationInput:
+class Check:
+    id: str
+    scope: CheckScope
+    armed: Callable[[LinkPolicy], bool]
+    run: Callable[[LinkPolicy, "CheckContext"], Findings | None]
+
+
+@dataclass(frozen=True, slots=True)
+class Profile:
+    enforcement_point: str
+    checks: tuple[str, ...]
+    reason_codes: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class CheckContext:
     source: ActorSpec
     target: ActorSpec
-    revision: ToolRevision
     intent: InvocationIntent
     arguments: Mapping[str, Any]
-    credential: CredentialClaims | None
-    approval_valid: bool
     interaction_id: str
     trace_id: str
     span_id: str
+    revision: ToolRevision | None = None
+    credential: CredentialClaims | None = None
+    approval_valid: bool = False
+    boundary: BoundaryLike | None = None
+    payload_bytes: int = 0
+    relationship: str = ""
 
 
-def evaluate(policy: LinkPolicy, value: EvaluationInput) -> PolicyDecisionRecord:
+EvaluationInput = CheckContext
+
+
+def _actor_type(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.source.type in policy.source_types and context.target.type in policy.target_types:
+        return ()
+    return (("INTERLOCK-ACTOR-TYPE-DENIED", ControlDecision.BLOCK),)
+
+
+CHECKS: dict[str, Check] = {
+    check.id: check
+    for check in (
+        Check(
+            id="INTERLOCK-ACTOR-TYPE-DENIED",
+            scope=CheckScope.PAIR,
+            armed=lambda policy: True,
+            run=_actor_type,
+        ),
+    )
+}
+
+
+def run_checks(
+    policy: LinkPolicy,
+    context: CheckContext,
+    profile: Profile,
+) -> tuple[list[str], list[ControlDecision], set[str]]:
+    """Run a profile's checks. Returns emitted reason codes, decisions, and the ids that ran."""
     reasons: list[str] = []
     decisions: list[ControlDecision] = []
+    ran: set[str] = set()
+    for check_id in profile.checks:
+        check = CHECKS[check_id]
+        if not check.armed(policy):
+            continue
+        findings = check.run(policy, context)
+        if findings is None:
+            continue
+        ran.add(check_id)
+        for key, decision in findings:
+            reasons.append(profile.reason_codes.get(key, key))
+            decisions.append(decision)
+    return reasons, decisions, ran
+
+
+GATEWAY_PROFILE = Profile(enforcement_point="MCP_GATEWAY", checks=("INTERLOCK-ACTOR-TYPE-DENIED",))
+
+
+def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
+    reasons, decisions, _ = run_checks(policy, value, GATEWAY_PROFILE)
     arguments_hash = canonical_digest(value.arguments)
 
-    if value.source.type not in policy.source_types or value.target.type not in policy.target_types:
-        reasons.append("INTERLOCK-ACTOR-TYPE-DENIED")
-        decisions.append(ControlDecision.BLOCK)
     if policy.allowed_purposes and value.intent.purpose not in policy.allowed_purposes:
         reasons.append("INTERLOCK-PURPOSE-DENIED")
         decisions.append(ControlDecision.BLOCK)
