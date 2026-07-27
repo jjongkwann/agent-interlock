@@ -722,6 +722,9 @@ class MCPAuthorizationCodeTokenClient:
             delegation_depth=0,
             exchanged=True,
             fingerprint=f"sha256:{fingerprint}",
+            # The claims verifier ran and _validate_verified_claims passed: this is the one
+            # producer here that actually authenticated the principal, so it is the one that says so.
+            authenticated=True,
         )
         return MCPAccessToken(access_token, credential, verified.expires_at_epoch)
 

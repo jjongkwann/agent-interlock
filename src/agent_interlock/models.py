@@ -202,10 +202,12 @@ class CredentialClaims:
     delegation_depth: int = 0
     exchanged: bool = True
     fingerprint: str = ""
-    # The A2A broker's identity-binding and boundary-tenant checks read these two off the
-    # credential; every other producer leaves the defaults, which those checks read as bound.
+    # Read by the A2A broker's identity-binding and boundary-tenant checks. Both default to the
+    # value those checks read as *unbound*: a credential nobody authenticated must not be
+    # indistinguishable from one that passed, so only a producer that actually verified the
+    # principal says so. `exchanged` above predates this and keeps its own (opposite) default.
     tenant_id: str = ""
-    authenticated: bool = True
+    authenticated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

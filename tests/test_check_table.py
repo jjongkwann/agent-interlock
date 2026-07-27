@@ -133,6 +133,21 @@ class CheckTableTests(unittest.TestCase):
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", reasons)
 
+    def test_a_credential_that_declares_no_authentication_reads_as_unauthenticated(self):
+        """CredentialClaims.authenticated defaults to False, and nothing else in the suite can tell:
+        the only readers are A2A-only checks, and the broker always declares the value from a real
+        A2APrincipal, so flipping the default back to True leaves every other test green while
+        making "nobody authenticated this" indistinguishable from "authentication passed".
+        clean_case()'s credential names the right actor, so the binding half of the check passes and
+        the authentication half is the only thing under test here."""
+        policy, context = clean_case()
+        self.assertEqual(context.credential.actor, context.source.id)  # not vacuous
+        profile = replace(A2A_PROFILE, checks=("A2A-IDENTITY-BINDING-MISMATCH",))
+        reasons, _, _ = run_checks(policy, context, profile)
+        self.assertEqual(reasons, ["A2A-IDENTITY-BINDING-MISMATCH"])
+        authenticated = replace(context, credential=replace(context.credential, authenticated=True))
+        self.assertEqual(run_checks(policy, authenticated, profile)[0], [])
+
     def test_the_resource_comparison_renames_apart_at_each_enforcement_point(self):
         """_token_audience emits one key for the audience comparison and another for the resource
         comparison, because the A2A broker has always reported them as two codes and reason_codes
