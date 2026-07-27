@@ -136,7 +136,10 @@ def generate_security_tests(graph: ArchitectureGraph, skeleton_module: str) -> s
             continue
         target = nodes[edge.target]
         class_name = f"Edge_{python_identifier(edge.id)}_Tests"
-        allowed_classes = sorted(target.data_access)[:1]
+        # Derive the declared flow from the edge policy, which is what the check table judges.
+        # The Actor grant is only an upper bound on it (ARCH-DATA-CLASS-EXCEEDS-ACTOR), so a
+        # class taken from the grant can still sit outside the policy allow-list.
+        allowed_classes = sorted(edge.policy.allowed_data_classes)[:1]
         allowed = (
             "frozenset({" + ", ".join(repr(item) for item in allowed_classes) + "})"
             if allowed_classes

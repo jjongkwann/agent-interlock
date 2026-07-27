@@ -801,6 +801,21 @@ class ArchitectureLinter:
                     remediation=("Deny D5 and use opaque credential references with a credential broker."),
                 )
             )
+        # An Actor that declares no data access at all is undeclared, not declared to hold
+        # nothing, so the grant comparison below only applies once data_access is populated.
+        excess = edge.policy.allowed_data_classes - target.data_access if target.data_access else frozenset()
+        if excess:
+            findings.append(
+                ArchitectureFinding(
+                    "ARCH-DATA-CLASS-EXCEEDS-ACTOR",
+                    FindingSeverity.CRITICAL,
+                    f"LinkPolicy allows data classes the target Actor does not hold: {', '.join(sorted(excess))}",
+                    edge_id=edge.id,
+                    remediation=(
+                        "Narrow allowedDataClasses to the target Actor's dataAccess, or widen the Actor grant."
+                    ),
+                )
+            )
         if edge.relationship_id in self._high_risk_relationships:
             if edge.policy.mode == PolicyMode.OBSERVE:
                 findings.append(

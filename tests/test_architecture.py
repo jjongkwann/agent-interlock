@@ -90,6 +90,39 @@ class ArchitectureSecurityLintTests(unittest.TestCase):
         finding = next(item for item in findings if item.code == "ARCH-CREDENTIAL-DATA-ALLOWED")
         self.assertEqual(finding.severity, FindingSeverity.CRITICAL)
 
+    def test_edge_policy_cannot_allow_a_data_class_the_target_actor_lacks(self):
+        value = manifest()
+        rag = next(item for item in value["spec"]["nodes"] if item["id"] == "rag.support-knowledge")
+        rag["dataAccess"] = ["D3"]
+        findings = ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
+        finding = next(item for item in findings if item.code == "ARCH-DATA-CLASS-EXCEEDS-ACTOR")
+        self.assertEqual(finding.severity, FindingSeverity.CRITICAL)
+        self.assertEqual(finding.edge_id, "edge.research-rag")
+
+    def test_data_class_excess_finding_names_the_classes_the_actor_lacks(self):
+        value = manifest()
+        rag = next(item for item in value["spec"]["nodes"] if item["id"] == "rag.support-knowledge")
+        rag["dataAccess"] = ["D3"]
+        findings = ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
+        finding = next(item for item in findings if item.code == "ARCH-DATA-CLASS-EXCEEDS-ACTOR")
+        self.assertIn("D2", finding.message)
+        self.assertIn("D7", finding.message)
+        self.assertNotIn("D3", finding.message)
+
+    def test_data_class_excess_is_reported_when_the_actor_grant_is_disjoint(self):
+        value = manifest()
+        rag = next(item for item in value["spec"]["nodes"] if item["id"] == "rag.support-knowledge")
+        rag["dataAccess"] = ["D1"]
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
+        self.assertIn("ARCH-DATA-CLASS-EXCEEDS-ACTOR", codes)
+
+    def test_actor_without_declared_data_access_is_not_treated_as_holding_nothing(self):
+        value = manifest()
+        rag = next(item for item in value["spec"]["nodes"] if item["id"] == "rag.support-knowledge")
+        rag["dataAccess"] = []
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
+        self.assertNotIn("ARCH-DATA-CLASS-EXCEEDS-ACTOR", codes)
+
     def test_prevent_control_cannot_run_only_after_execution(self):
         value = manifest()
         value["spec"]["edges"][0]["controls"][0]["timing"] = "POST_EXECUTION"
