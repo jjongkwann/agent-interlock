@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 from test_policy_characterization import clean_case
 
-from agent_interlock.models import ActorType, ControlDecision
-from agent_interlock.policy import CHECKS, GATEWAY_PROFILE, CheckScope, Profile, run_checks
+from agent_interlock import policy as policy_module
+from agent_interlock.models import ActorType, ControlDecision, PolicyDecisionRecord
+from agent_interlock.policy import CHECKS, GATEWAY_PROFILE, Check, CheckScope, Profile, evaluate, run_checks
 
 
 class CheckTableTests(unittest.TestCase):
@@ -30,15 +32,71 @@ class CheckTableTests(unittest.TestCase):
             checks=("INTERLOCK-ACTOR-TYPE-DENIED",),
             reason_codes={"INTERLOCK-ACTOR-TYPE-DENIED": "A2A-ACTOR-TYPE-DENIED"},
         )
-        reasons, decisions, _ = run_checks(policy, context, profile)
+        reasons, decisions, ran = run_checks(policy, context, profile)
         self.assertEqual(reasons, ["A2A-ACTOR-TYPE-DENIED"])
         self.assertEqual(decisions, [ControlDecision.BLOCK])
+        self.assertIn("INTERLOCK-ACTOR-TYPE-DENIED", ran)
 
     def test_a_check_absent_from_the_profile_does_not_run(self):
         policy, context = clean_case()
         profile = Profile(enforcement_point="SDK", checks=(), reason_codes={})
         _, _, ran = run_checks(policy, context, profile)
         self.assertEqual(ran, set())
+
+    def test_unarmed_and_inapplicable_checks_are_both_excluded_from_ran(self):
+        """The three-way split (ran / armed-but-skipped / unarmed) is the whole point of
+        run_checks: an unarmed check and a check that opts out by returning None must both
+        be absent from `ran`, not merely absent from `reasons`."""
+        stub_checks = {
+            "STUB-UNARMED": Check(
+                id="STUB-UNARMED",
+                scope=CheckScope.ACTOR,
+                armed=lambda policy: False,
+                run=lambda policy, context: (("STUB-UNARMED", ControlDecision.BLOCK),),
+            ),
+            "STUB-INAPPLICABLE": Check(
+                id="STUB-INAPPLICABLE",
+                scope=CheckScope.ACTOR,
+                armed=lambda policy: True,
+                run=lambda policy, context: None,
+            ),
+        }
+        profile = Profile(enforcement_point="TEST", checks=("STUB-UNARMED", "STUB-INAPPLICABLE"))
+        policy, context = clean_case()
+        with patch.dict(policy_module.CHECKS, stub_checks):
+            reasons, decisions, ran = run_checks(policy, context, profile)
+        self.assertEqual(reasons, [])
+        self.assertEqual(decisions, [])
+        self.assertEqual(ran, set())
+
+    def test_build_check_table_raises_on_duplicate_id(self):
+        """Task 4 registers nineteen more checks into a table keyed by id; a collision must
+        raise, not silently drop a control."""
+        duplicate = Check(
+            id="DUP", scope=CheckScope.ACTOR, armed=lambda policy: True, run=lambda policy, context: None
+        )
+        with self.assertRaises(ValueError):
+            policy_module._build_check_table((duplicate, duplicate))
+
+    def test_evaluate_emits_no_actor_type_finding_when_the_table_check_is_disabled(self):
+        """Guards against Task 4 moving a branch into the table without deleting the original:
+        if this fails, an inline branch is still emitting a reason code the table's own
+        coverage says never ran."""
+        policy, context = clean_case()
+        context = replace(context, source=replace(context.source, type=ActorType.USER))
+        empty_profile = Profile(enforcement_point="MCP_GATEWAY", checks=())
+        with patch.object(policy_module, "GATEWAY_PROFILE", empty_profile):
+            record = evaluate(policy, context)
+        self.assertEqual(record.reason_codes, ())
+
+    def test_evaluate_with_revision_none_does_not_raise(self):
+        """CheckContext.revision is optional (Tasks 5-7 build one before a revision is
+        resolved); a missing revision must make the revision-dependent checks not apply, not
+        crash the enforcement path."""
+        policy, context = clean_case()
+        context = replace(context, revision=None)
+        record = evaluate(policy, context)
+        self.assertIsInstance(record, PolicyDecisionRecord)
 
 
 if __name__ == "__main__":

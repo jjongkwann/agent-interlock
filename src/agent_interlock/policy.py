@@ -92,9 +92,19 @@ def _actor_type(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     return (("INTERLOCK-ACTOR-TYPE-DENIED", ControlDecision.BLOCK),)
 
 
-CHECKS: dict[str, Check] = {
-    check.id: check
-    for check in (
+def _build_check_table(checks: tuple[Check, ...]) -> dict[str, Check]:
+    """Build the id-keyed table, raising if two checks share an id: a silent collision would
+    drop a control and surface later as a baffling missing-reason-code failure."""
+    table: dict[str, Check] = {}
+    for check in checks:
+        if check.id in table:
+            raise ValueError(f"duplicate check id: {check.id!r}")
+        table[check.id] = check
+    return table
+
+
+CHECKS: dict[str, Check] = _build_check_table(
+    (
         Check(
             id="INTERLOCK-ACTOR-TYPE-DENIED",
             scope=CheckScope.PAIR,
@@ -102,7 +112,7 @@ CHECKS: dict[str, Check] = {
             run=_actor_type,
         ),
     )
-}
+)
 
 
 def run_checks(
@@ -110,7 +120,13 @@ def run_checks(
     context: CheckContext,
     profile: Profile,
 ) -> tuple[list[str], list[ControlDecision], set[str]]:
-    """Run a profile's checks. Returns emitted reason codes, decisions, and the ids that ran."""
+    """Run a profile's checks. Returns emitted reason codes, decisions, and the ids that ran.
+
+    `profile.reason_codes` is keyed on the reason key a check's `run` emits, not on the check's
+    id: a single check can emit more than one distinct reason key (see policy.py's own
+    L1-M9-SENSITIVE-EGRESS / INTERLOCK-DATA-CLASS-DENIED branch), so a profile that renames must
+    map every key its checks can produce.
+    """
     reasons: list[str] = []
     decisions: list[ControlDecision] = []
     ran: set[str] = set()
@@ -138,16 +154,26 @@ def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
     if policy.allowed_purposes and value.intent.purpose not in policy.allowed_purposes:
         reasons.append("INTERLOCK-PURPOSE-DENIED")
         decisions.append(ControlDecision.BLOCK)
-    if policy.require_active_definition and value.revision.state != DefinitionState.ACTIVE:
+    if (
+        policy.require_active_definition
+        and value.revision is not None
+        and value.revision.state != DefinitionState.ACTIVE
+    ):
         reasons.extend(value.revision.reason_codes or ("L1-M2-DEFINITION-NOT-ACTIVE",))
         decisions.append(ControlDecision.QUARANTINE)
-    if policy.require_digest_pin:
+    if policy.require_digest_pin and value.revision is not None:
         approved = value.target.definition_digest
         if not approved or approved != value.revision.canonical_digest:
             reasons.append("L1-M2-DEFINITION-DRIFT")
             decisions.append(ControlDecision.QUARANTINE)
 
-    schema_errors = validate_schema(value.arguments, value.revision.definition.input_schema)
+    # A missing revision means "this check does not apply", not a crash: revision=None is a
+    # valid CheckContext (Tasks 5-7 build one before a revision is resolved).
+    schema_errors = (
+        validate_schema(value.arguments, value.revision.definition.input_schema)
+        if value.revision is not None
+        else ()
+    )
     if schema_errors:
         reasons.append("INTERLOCK-INPUT-SCHEMA-INVALID")
         decisions.append(ControlDecision.BLOCK)
