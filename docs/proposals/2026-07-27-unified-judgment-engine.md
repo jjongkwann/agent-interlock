@@ -99,6 +99,7 @@ def clean_case() -> tuple[LinkPolicy, EvaluationInput]:
         resource="",
         exchanged=True,
         delegation_depth=0,
+        authenticated=True,
     )
     context = EvaluationInput(
         source=source,

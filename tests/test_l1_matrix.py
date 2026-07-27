@@ -334,6 +334,10 @@ class M5ConfusedDeputyTests(unittest.TestCase):
             audience="https://mail-api.example",
             resource="mail",
             exchanged=False,  # raw gateway token forwarded, never exchanged
+            # The forwarded token is a real one -- the confused deputy is that it was not exchanged
+            # for this audience, not that it was unverified. Without the flag M5's presence check
+            # also fires and the BLOCK stops being attributable to the passthrough.
+            authenticated=True,
         )
         decision = gateway.evaluate_invocation(
             tenant_id=TENANT,

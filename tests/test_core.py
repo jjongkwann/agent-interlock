@@ -168,6 +168,10 @@ class GatewayPolicyTests(unittest.TestCase):
             audience="https://wrong-api.example",
             resource="mail",
             exchanged=True,
+            # A verified token whose audience is wrong -- one defect, the one this test names.
+            # Without the flag M5's presence check also fires, and the BLOCK below stops being
+            # attributable to the audience comparison.
+            authenticated=True,
         )
         decision = gateway.evaluate_invocation(
             tenant_id="tenant-a",
@@ -194,6 +198,7 @@ class GatewayPolicyTests(unittest.TestCase):
             audience="https://mail-api.example",
             resource="mail",
             exchanged=False,
+            authenticated=True,  # verified, but never exchanged -- one defect, see above
         )
         decision = gateway.evaluate_invocation(
             tenant_id="tenant-a",

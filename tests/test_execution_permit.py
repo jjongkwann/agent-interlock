@@ -16,6 +16,7 @@ from __future__ import annotations
 import unittest
 
 from l1_harness import TENANT, build_gateway
+from test_decision_ranking import decided
 from test_l1_matrix import BENIGN_ARGS
 
 from agent_interlock import (
@@ -91,6 +92,20 @@ class ExecutionPermitTests(unittest.TestCase):
         so it is pinned rather than left to a Python idiom."""
         self.assertTrue(execution_permitted([]))
         self.assertTrue(execution_permitted([ControlDecision.ALLOW]))
+
+    def test_a_record_carrying_no_permit_evidence_still_permits_an_allow(self):
+        """PolicyDecisionRecord.execution_permitted defaults True, and that default is load-bearing.
+
+        permits_execution ANDs the field with the severity test, which is what makes the documented
+        claim true: the field can only ever *narrow* a permit, so a record built outside evaluate()
+        behaves exactly as it did before the field existed. Flip the default to False and every such
+        record silently stops permitting execution -- a real behaviour change for anyone
+        constructing one. It fails closed, so nothing else in the suite objects, which is precisely
+        why it needs its own pin: a mutation run found the default unguarded.
+        """
+        record = decided(ControlDecision.ALLOW, enforced=True)
+        self.assertTrue(record.execution_permitted)
+        self.assertTrue(record.permits_execution)
 
     def test_the_severity_reduction_the_permit_replaces_is_left_untouched(self):
         """The two halves of the ruling in one place. _DECISION_RANK keeps BYPASSED below ALLOW --
