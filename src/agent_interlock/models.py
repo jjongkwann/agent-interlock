@@ -65,6 +65,35 @@ class ControlDecision(StrEnum):
     BYPASSED = "BYPASSED"
 
 
+# Severity order for strongest_decision and would_block. It lives here rather than in policy.py
+# because PolicyDecisionRecord.would_block reads it and models.py cannot import policy.py.
+#
+# BYPASSED ranks below ALLOW: a bypassed control raised no objection, it was skipped, so it must
+# not outrank a control that ran and permitted the call. ERROR ranks above KILL: it means the
+# verdict is unknown, which nothing known should be allowed to outrank. evaluate() does not
+# produce ERROR today -- an evaluation error propagates as an exception -- so the rank is a
+# guarantee for callers that supply one, not a description of current behaviour.
+#
+# There is no fallback rank. The five members with no producer in src/ are reachable through the
+# unconstrained LinkPolicy action fields, and a shared fallback made them tie with BLOCK, which
+# let profile check order decide the emitted verdict.
+_DECISION_RANK = {
+    ControlDecision.BYPASSED: 0,
+    ControlDecision.ALLOW: 1,
+    ControlDecision.SANITIZE: 2,
+    ControlDecision.DEGRADE: 3,
+    ControlDecision.CHALLENGE: 4,
+    ControlDecision.HOLD: 5,
+    ControlDecision.BLOCK: 6,
+    ControlDecision.QUARANTINE: 7,
+    ControlDecision.REVOKE: 8,
+    ControlDecision.KILL: 9,
+    ControlDecision.ERROR: 10,
+}
+
+assert set(_DECISION_RANK) == set(ControlDecision), "decision rank map must cover every ControlDecision"
+
+
 class ActionResult(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -243,6 +272,19 @@ class PolicyDecisionRecord:
     @property
     def permits_execution(self) -> bool:
         return not self.enforced or self.decision == ControlDecision.ALLOW
+
+    @property
+    def would_block(self) -> bool:
+        """Whether the verdict is more severe than ALLOW, regardless of enforcement mode.
+
+        permits_execution answers "may this run now", which is True in SHADOW even for a BLOCK
+        verdict. This answers "is the verdict above ALLOW".
+
+        Read from _DECISION_RANK rather than written as ``!= ALLOW`` so the two cannot drift:
+        BYPASSED ranks below ALLOW and is not a block -- the control was skipped, it did not
+        object -- and any future member ranked below ALLOW inherits that without an edit here.
+        """
+        return _DECISION_RANK[self.decision] > _DECISION_RANK[ControlDecision.ALLOW]
 
 
 @dataclass(frozen=True, slots=True)

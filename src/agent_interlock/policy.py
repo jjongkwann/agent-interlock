@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from .canonical import canonical_digest
 from .models import (
+    _DECISION_RANK,
     ActorSpec,
     ControlDecision,
     CredentialClaims,
@@ -570,9 +571,10 @@ GATEWAY_PROFILE = Profile(
         "L1-M9-VOLUME-EXCEEDED",
         "L1-UNDECLARED-SIDE-EFFECT",
         "INTERLOCK-DESTRUCTIVE-WRITE",
-        # Sits with the other estimated_side_effect checks, and after the two whose decision the
-        # policy configures: it emits a hard-coded BLOCK, and strongest_decision resolves ties by
-        # first position, so an earlier slot would mask a configured CHALLENGE/REVOKE here.
+        # Sits with the other estimated_side_effect checks. Its slot used to be verdict-bearing --
+        # it emits a hard-coded BLOCK, and strongest_decision resolved ties by first position, so
+        # an earlier slot masked a configured CHALLENGE/REVOKE -- but _DECISION_RANK is total now
+        # and this position sets reason-code order only.
         "INTERLOCK-TAINTED-EXTERNAL-WRITE",
         "INTERLOCK-APPROVAL-REQUIRED",
         "L1-M5-CREDENTIAL-MISSING",
@@ -589,10 +591,11 @@ GATEWAY_PROFILE = Profile(
 
 SDK_PROFILE = Profile(
     enforcement_point="SDK",
-    # Derived from GATEWAY_PROFILE in its order, not rewritten: strongest_decision still resolves
-    # ties by position, so a fresh tuple would silently change verdicts. The two M2 checks are
-    # dropped by id rather than left to return None -- the SDK has no ToolRevision to pin, so the
-    # control is ABSENT at this enforcement point, not inapplicable to this invocation.
+    # Derived from GATEWAY_PROFILE in its order, not rewritten, so the two points keep emitting
+    # reason codes in the same order; since _DECISION_RANK became total the order no longer moves
+    # the verdict. The two M2 checks are dropped by id rather than left to return None -- the SDK
+    # has no ToolRevision to pin, so the control is ABSENT at this enforcement point, not
+    # inapplicable to this invocation.
     checks=tuple(
         check_id
         for check_id in GATEWAY_PROFILE.checks
@@ -677,14 +680,11 @@ def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
 
 
 def strongest_decision(decisions: list[ControlDecision]) -> ControlDecision:
+    """The most severe decision in the list, by _DECISION_RANK.
+
+    Every member is ranked and every rank is distinct, so the result does not depend on argument
+    order: a profile's check order sets reason-code order and nothing else.
+    """
     if not decisions:
         return ControlDecision.ALLOW
-    order = {
-        ControlDecision.ALLOW: 0,
-        ControlDecision.SANITIZE: 1,
-        ControlDecision.HOLD: 2,
-        ControlDecision.BLOCK: 3,
-        ControlDecision.QUARANTINE: 4,
-        ControlDecision.KILL: 5,
-    }
-    return max(decisions, key=lambda item: order.get(item, 3))
+    return max(decisions, key=lambda item: _DECISION_RANK[item])
