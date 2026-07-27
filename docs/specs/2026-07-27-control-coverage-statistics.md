@@ -7,24 +7,42 @@ Date: 2026-07-27
 
 The platform's promotion loop is: design a multi-agent graph in Studio, observe
 inter-actor traffic, read the statistics, promote a link from SHADOW to ENFORCE.
-That loop currently reads a number it cannot justify, for two reasons.
+That loop reads a number it cannot justify, for two reasons.
 
-### Two judgment engines that disagree
+### Three judgment engines that disagree
 
-`policy.evaluate()` runs twenty checks: actor type, purpose, definition state
-(M2), digest pin (M2), input schema, denied data classes and sensitive egress
-(M9), secret detection (M8), destination canonicalisation, destination
-allowlist, explicit-destination requirement, export volume (M9), undeclared side
-effect, destructive write, approval requirement, and six credential checks (M5).
+| Engine | Site | Checks | Reason-code namespace |
+| --- | --- | --- | --- |
+| MCP gateway | `policy.evaluate()` | 20 | `INTERLOCK-*`, `L1-*` |
+| SDK | `sdk.py:148-157` | 4 | `INTERLOCK-*`, `L1-*` |
+| A2A broker | `a2a.py:806-870` | 12 link + 5 boundary | `A2A-*` |
 
-`Interlock._invoke()` (`src/agent_interlock/sdk.py:148-157`) runs four: input
-schema, data-class subset, undeclared side effect, and tainted external write.
+`policy.evaluate()` is the only one reached through `EvaluationInput`, and
+`gateway.py:221` is its only construction site. Neither the SDK nor the A2A
+broker calls it.
 
-These are not in a subset relationship. `INTERLOCK-TAINTED-EXTERNAL-WRITE` is
-emitted only by the SDK and is unknown to `policy.py`. M5, M8, and M9 are absent
-from the SDK entirely. Both paths write byte-identical `payload.control` shapes
-into the ledger — deliberately, per the comment at `src/agent_interlock/sdk.py:161-162`
-— so nothing downstream can tell them apart.
+These are not in a subset relationship.
+
+- `INTERLOCK-TAINTED-EXTERNAL-WRITE` is emitted only by the SDK and is unknown
+  to the other two.
+- M9 (destination allowlist, export volume) and M2 (definition state, digest
+  pin) exist only in the gateway.
+- Trust-boundary checks exist only in the A2A broker.
+- Roughly ten checks are duplicated between the gateway and the broker under
+  different names: `INTERLOCK-ACTOR-TYPE-DENIED` / `A2A-ACTOR-TYPE-DENIED`,
+  `L1-M5-TOKEN-PASSTHROUGH` / `A2A-TOKEN-PASSTHROUGH`,
+  `L1-M8-CREDENTIAL-DETECTED` / `A2A-CREDENTIAL-DETECTED`, and so on.
+
+Seven of those duplicates are the *same predicate* over a differently named
+credential object — `A2ASendContext.principal` and `CredentialClaims` carry the
+same fields. Two differ substantively: the broker compares audience against
+`target.identity` and resource against `a2a://{target.id}`, where the gateway
+compares against `intent.expected_audience` and `intent.expected_resource`.
+
+The consequence for statistics is that **no aggregate keyed on reason code is
+comparable across paths**. Agent-to-agent traffic — the whole subject of a
+multi-agent design — runs entirely through the broker, so the segment the
+operator most wants to inspect is the one speaking a different language.
 
 `wrap()` is not a demo surface. `README.md:129` lists it as an SDK feature and
 `docs/02-developer-framework-design.md:336` states that an existing Tool can be
@@ -47,7 +65,8 @@ Per segment of the declared graph, the statistics answer two distinct questions:
 1. **Coverage** — which controls were armed, which were applicable, which ran.
 2. **Firing** — of those that ran, which flagged.
 
-And the two execution paths reach the same verdict for the same input.
+And a control means the same thing at every enforcement point, whatever string
+that point emits into the ledger.
 
 ## Non-goals and explicit limits
 
@@ -68,238 +87,295 @@ stronger evidence while carrying the same blind spot.
 
 ## Design
 
-### 1. Checks become data
+### 1. One check table, one profile per enforcement point
 
-The twenty inline branches in `evaluate()` become a declarative table.
+A check is declared once. An enforcement point selects which checks it runs and
+what it calls them.
 
 ```python
 class CheckScope(StrEnum):
-    ACTOR   = "ACTOR"     # property of the target actor; same verdict for every caller
-    PAYLOAD = "PAYLOAD"   # property of the arguments or intent
-    PAIR    = "PAIR"      # genuinely about this source -> target link
+    ACTOR    = "ACTOR"     # property of the target actor; same verdict for every caller
+    PAYLOAD  = "PAYLOAD"   # property of the arguments or message
+    PAIR     = "PAIR"      # genuinely about this source -> target link
+    BOUNDARY = "BOUNDARY"  # about the trust-zone crossing, not the link
 
 
 @dataclass(frozen=True, slots=True)
 class Check:
-    id: str
+    id: str                                          # canonical reason key
     scope: CheckScope
-    armed: Callable[[LinkPolicy], bool]
-    run: Callable[[LinkPolicy, EvaluationInput], Findings | None]
+    armed: Callable[[LinkPolicy], bool]              # policy only — keeps the ABSENT set stable
+    run: Callable[[LinkPolicy, CheckContext], Findings | None]
+
+
+@dataclass(frozen=True, slots=True)
+class Profile:
+    enforcement_point: EnforcementPoint
+    checks: tuple[str, ...]                          # check ids this point runs
+    reason_codes: Mapping[str, str]                  # check id -> emitted reason code
 ```
 
-The two callables answer questions at different scopes, which is what makes the
-three coverage states well defined:
+**Scale up** — a point gains a control by adding its id to that profile's tuple.
+**Scale out** — a new enforcement point is a new `Profile`. Neither touches the
+engine or any existing check.
 
-- `armed(policy)` is a property of the policy alone, stable across invocations.
-  A policy with `require_digest_pin=False`, `require_audience=False`,
-  `max_export_records=0` or an empty `allowed_purposes` has genuinely switched
-  those controls off. Such a check is **ABSENT**.
-- `run(policy, value)` is per invocation and returns:
+`reason_codes` is what makes the merge non-breaking. The broker keeps emitting
+`A2A-AUDIENCE-MISMATCH`; the gateway keeps emitting
+`L1-M5-TOKEN-AUDIENCE-MISMATCH`. Ledger history, the `docs/05` L1-SIM test IDs,
+and existing assertions all stay valid. The canonical check id is what
+statistics aggregate on, so the same control correlates across paths without
+anyone claiming the two implementations are byte-identical.
+
+Where the predicates genuinely differ — audience and resource comparison targets
+— the difference becomes a parameter of the check, resolved from `CheckContext`,
+not a second check.
+
+### 2. Three coverage states, and why two callables
+
+- `armed(policy)` reads the policy only, and the profile decides membership, so
+  neither depends on the individual invocation. A policy with
+  `require_digest_pin=False`, `require_audience=False`,
+  `max_export_records=0` or an empty `allowed_purposes` has switched that control
+  off; a profile that omits the check id never had it. Either way: **ABSENT**.
+- `run(context)` is per invocation:
   - `None` — armed, but this invocation did not engage it (**INAPPLICABLE**);
-    for example no destinations were declared, or the intent expects no audience
+    no destinations were declared, or the intent expects no audience
   - `()` — **RAN_CLEAN**
-  - non-empty — **RAN_FLAGGED**; a tuple of `(reason_code, ControlDecision)`
+  - non-empty — **RAN_FLAGGED**; `(reason_code, ControlDecision)` pairs
 
-Because `armed` depends only on the policy, the ABSENT set is a function of
-`(policyId, policyVersion)` and can be declared once instead of per event.
+Because `armed` does not depend on the invocation, the ABSENT set is a function
+of `(enforcementPoint, policyId, policyVersion)` and is declared once rather than
+recorded per event.
 
-`evaluate()` becomes a loop over the table. Three-state coverage is derived from
-the return value, so there is no separate bookkeeping to keep in sync, and a
-check that is not in the table does not run at all. Adding check twenty-one
-cannot silently escape the coverage record.
+`CheckScope` stops one actor-scoped failure from lighting up every link that
+points at that actor. A tool whose definition has drifted is one finding on one
+actor, not twelve findings on twelve edges. Consumers group by scope; the
+reducer only carries it.
 
-Check ids are stable and distinct from reason codes, and the two do not map one
-to one in either direction. Twenty checks emit eighteen distinct reason codes:
-the destination checks share `L1-M9-NEW-DESTINATION` across three branches, the
-audience and resource checks share `L1-M5-TOKEN-AUDIENCE-MISMATCH`, and the
-definition-state check forwards whatever `revision.reason_codes` carries.
+### 3. Normalized input
 
-`CheckScope` exists to stop a single actor-scoped failure from lighting up every
-link that points at that actor. A tool whose definition has drifted is one
-finding on one actor, not twelve findings on twelve edges. Consumers group by
-scope; the reducer only has to carry it.
+`EvaluationInput` is replaced by `CheckContext`, which all three points build:
 
-### 2. The two paths converge on one engine
+| Field | Gateway | SDK | Broker |
+| --- | --- | --- | --- |
+| `source`, `target` | `ActorSpec` | `ActorSpec` | `architecture.actors[...]` |
+| `credential` | `CredentialClaims \| None` | new `wrap()` argument | built from `context.principal` |
+| `intent` | given | given | built from `context.purpose`, `context.data_classes` |
+| `payload` | `arguments` | `arguments` | `message.to_dict()` |
+| `payload_bytes` | `len(canonical_json(...))` | same | already computed |
+| `revision` | `ToolRevision` | `None` | `None` |
+| `boundary` | `None` | `None` | `architecture.boundary_for(edge)` |
+| `relationship` | `policy.relationship` | `policy.relationship` | `edge.relationship` |
+| `approval_valid` | computed | `False` | `False` |
 
-- `EvaluationInput.revision` and `EvaluationInput.credential` become optional.
-- With `revision=None`, the M2 checks (definition state, digest pin) return
-  `None` — INAPPLICABLE, not passing — and schema validation reads
-  `ActorSpec.input_schema` instead of `revision.definition.input_schema`. An SDK
-  link therefore shows M2 as INAPPLICABLE on one hundred percent of its
-  interactions, which is the readable signal that this engine supplies no
-  definition to pin. It is deliberately not reported as ABSENT: ABSENT means the
-  policy switched the control off, which is a different fact.
-- `Actor.wrap()`'s returned `guarded()` gains a `credential: CredentialClaims | None`
-  keyword argument, defaulting to `None`.
-- `src/agent_interlock/sdk.py:148-157` is deleted; `_invoke` calls `evaluate()`.
-- `INTERLOCK-TAINTED-EXTERNAL-WRITE` is promoted into the shared table, so the
-  gateway and broker paths gain it.
+`A2ASendContext.principal` maps field-for-field onto `CredentialClaims`
+(`actor_id`→`actor`, plus `audience`, `resource`, `exchanged`,
+`delegation_depth`), so the broker builds a real credential rather than a
+special case.
 
-The regression guard is an equivalence test: for the same actors, policy, intent
-and arguments, the SDK path and the gateway path produce the same decision and
-the same reason codes.
+With `revision=None` the M2 checks return `None` — INAPPLICABLE, not passing —
+and schema validation reads `ActorSpec.input_schema`. An SDK link therefore shows
+M2 as INAPPLICABLE on one hundred percent of its interactions, which is the
+readable signal that this point supplies no definition to pin. It is deliberately
+not ABSENT: ABSENT means the control was switched off, a different fact.
 
-### 3. Coverage on the wire
+**Import cycle.** `architecture.py:13` imports `sdk`, and after unification `sdk`
+imports `policy`, so `policy` importing `ArchitectureBoundary` from
+`architecture` would close a cycle. `policy.py` therefore declares a
+`typing.Protocol` naming only the boundary fields it reads
+(`allowed_relationships`, `allowed_data_classes`, `denied_data_classes`,
+`require_identity`, `require_tenant_binding`, `max_payload_bytes`, `mode`).
+`ArchitectureBoundary` already satisfies it structurally; no change to
+`architecture.py` and no runtime dependency.
+
+### 4. Coverage on the wire
 
 Two fields are added to `payload.control` on `CONTROL_EVALUATED`:
 
 | Field | Value |
 | --- | --- |
-| `enforcementPoint` | `SDK` \| `MCP_GATEWAY` \| `A2A_BROKER` — the existing `EnforcementPoint` enum (`src/agent_interlock/architecture.py:31-47`), which is currently computed at lint time and never reaches runtime |
-| `evaluatedProfile` | `canonical_digest` of the set of check ids that actually ran on this invocation |
+| `enforcementPoint` | `SDK` \| `MCP_GATEWAY` \| `A2A_BROKER` — the existing `EnforcementPoint` enum (`architecture.py:31-47`), currently computed at lint time and never reaching runtime |
+| `evaluatedProfile` | `canonical_digest` of the check ids that actually ran on this invocation |
 
-Both are short strings. Coverage costs O(1) per event, not a twenty-element list.
+Both are short strings; coverage costs O(1) per event, not a list of twenty.
 
-A new event type `CONTROL_COVERAGE_DECLARED` is appended the first time a given
-digest is seen:
+A new event type `CONTROL_COVERAGE_DECLARED` is appended the first time a digest
+is seen:
 
 ```json
 {
   "profileDigest": "…",
-  "enforcementPoint": "SDK",
+  "enforcementPoint": "A2A_BROKER",
   "policyId": "…",
   "policyVersion": "…",
-  "armed": [{"id": "…", "scope": "PAIR"}],
-  "evaluated": ["…"]
+  "armed": [{"id": "M5-AUDIENCE", "scope": "PAIR"}],
+  "evaluated": ["M5-AUDIENCE"]
 }
 ```
 
 The reducer derives the three states: in `evaluated` is RAN; in `armed` but not
 `evaluated` is INAPPLICABLE; in the catalogue but not `armed` is ABSENT. The
-catalogue is the union of all `armed` sets observed in the ledger, so the
-reducer stays a pure function of the event stream and the Studio TypeScript port
-needs no access to Python.
+catalogue is the union of all `armed` sets seen in the ledger, so the reducer
+stays a pure function of the event stream and the Studio TypeScript port needs no
+access to Python.
 
 No separate `armedProfile` field: the armed set is a function of
 `(enforcementPoint, policyId, policyVersion)`, all already on the event.
 
-### 4. Statistics contract
+### 5. Statistics contract
 
 Added to each partition in `schemas/security-statistics.schema.json`:
 
 - **`byEdge`** — keyed by `(sourceActorId, targetActorId, policyId)`. All three
-  are already present in `InteractionRecord` (`src/agent_interlock/analytics.py:46-91`);
-  `target_actor_id` is currently used by no grouping. **No new instrumentation.**
-  The graph permits several edges between the same actor pair —
-  `ArchitectureGraph.edges` is a tuple and uniqueness is enforced on edge ids
-  only (`src/agent_interlock/architecture.py:277,293`) — so the pair alone is not
-  a key. Including `policyId` splits precisely where the armed check set can
-  differ; two edges sharing a pair and a policy have identical coverage by
-  definition. Studio holds the ArchitectureGraph and maps the triple back to an
-  edge label locally.
-- **`byCheck`** — per check id, carrying `scope` and counts for RAN_CLEAN,
-  RAN_FLAGGED, INAPPLICABLE, ABSENT.
-- **`byEdge[].byCheck[]`** — the cross-tabulation. This is the deliverable: on
-  this segment, which controls applied and what happened. Entries whose state is
-  ABSENT for every interaction on that edge are omitted to bound the payload.
-- **`unattributed`** — interactions that match no declared edge, kept as an
+  are already in `InteractionRecord` (`analytics.py:46-91`); `target_actor_id` is
+  currently used by no grouping. **No new instrumentation.** The graph permits
+  several edges between one actor pair — `ArchitectureGraph.edges` is a tuple and
+  uniqueness is enforced on edge ids only (`architecture.py:277,293`) — so the
+  pair alone is not a key. `policyId` splits precisely where the armed set can
+  differ. Studio holds the ArchitectureGraph and maps the triple to an edge label
+  locally.
+- **`byCheck`** — per canonical check id, carrying `scope` and counts for
+  RAN_CLEAN, RAN_FLAGGED, INAPPLICABLE, ABSENT. This is the aggregate that now
+  spans all three enforcement points.
+- **`byEdge[].byCheck[]`** — the cross-tabulation, and the deliverable: on this
+  segment, which controls applied and what happened. Entries ABSENT for every
+  interaction on that edge are omitted to bound the payload.
+- **`unattributed`** — interactions matching no declared edge, kept as an
   explicit bucket rather than dropped.
 
-`byReasonCode` is retained; it remains the right view for "what fired".
+`byReasonCode` is retained; it remains the right view for "what fired", and it is
+the only view that preserves the per-point wording.
 
 The schema sets `additionalProperties: false` throughout, so every addition is a
 synchronised change across the schema, `studio/app/analytics.mjs`, and the golden
-fixtures. The existing byte-identical parity test covers the new fields.
+fixtures in `schemas/fixtures/`. The existing byte-identical parity test
+(`tests/test_analytics.py`) covers the new fields.
 
-### 5. Ancillary correctness fixes
+### 6. Ancillary correctness fixes
 
-**`strongest_decision`** (`src/agent_interlock/policy.py:160-171`) ranks six of
-the eleven `ControlDecision` values and falls back to `order.get(item, 3)`. Five
+**`strongest_decision`** (`policy.py:160-171`) ranks six of eleven
+`ControlDecision` values and falls back to `order.get(item, 3)`. Five
 `LinkPolicy` fields — `secret_action`, `new_destination_action`, `volume_action`,
 `destructive_write_action`, `undeclared_side_effect_action` — are unconstrained
-`ControlDecision` values (`src/agent_interlock/models.py:140-152`), so the
-fallback is reachable by configuration: `CHALLENGE` and `DEGRADE` rank equal to
-`BLOCK`, and `BYPASSED` — which should be weakest — also ranks equal to `BLOCK`.
+`ControlDecision` values (`models.py:140-152`), so the fallback is reachable by
+configuration: `CHALLENGE` and `DEGRADE` rank equal to `BLOCK`, and `BYPASSED` —
+which should be weakest — also ranks equal to `BLOCK`.
 
-Fix: rank all eleven explicitly (`BYPASSED` lowest, `ERROR` highest, since an
+Rank all eleven explicitly (`BYPASSED` lowest; `ERROR` highest, since an
 evaluation error means the verdict is unknown and the default failure mode is
-FAIL_CLOSED), drop the `.get` fallback, and assert at import time that the map
-covers `ControlDecision` exactly. A twelfth decision value then fails on load
-rather than being silently ranked mid-table.
+FAIL_CLOSED), drop the fallback, and assert at import time that the map covers
+`ControlDecision` exactly. A twelfth value then fails on load rather than being
+silently ranked mid-table.
 
 **`PolicyDecisionRecord.would_block`** — a two-line property returning
 `self.decision != ControlDecision.ALLOW`. `permits_execution` keeps its name and
-semantics; its sole consumer is `src/agent_interlock/gateway.py:286` and its
-behaviour in SHADOW is correct by definition. What is missing is a
-mode-independent reading for callers that need one, and a first-class source for
-`shadowWouldBlockCount`.
+semantics; its sole consumer is `gateway.py:286` and its behaviour in SHADOW is
+correct by definition. What is missing is a mode-independent reading for callers
+that need one, and a first-class source for `shadowWouldBlockCount`.
 
-### 6. Mode composition
+### 7. Mode composition
 
-`PolicyMode` is attached in two independent places: `edge.policy.mode` and
-`boundary.mode` (`src/agent_interlock/architecture.py:425,1401`). Both greps land
-in lint code, so whether `boundary.mode` affects runtime behaviour is unresolved.
+`PolicyMode` is attached in two places, `edge.policy.mode` and `boundary.mode`,
+and `a2a.py:616-619` shows the runtime rule:
 
-This spec does not invent a composition rule. The requirement is that
-`CONTROL_EVALUATED` records both inputs and the effective value, so no operator
-has to compose them from memory. If investigation shows `boundary.mode` is
-design-time only, `effectiveMode` equals the edge mode and that fact is written
-down rather than left implicit.
+```python
+enforced = bool(
+    (link_reasons and edge.policy.mode == PolicyMode.ENFORCE)
+    or (boundary_reasons and boundary is not None and boundary.mode == PolicyMode.ENFORCE)
+)
+```
+
+Neither mode wins. **Each reason set is enforced against its own mode**: link
+findings answer to the edge, boundary findings answer to the boundary. This is
+already correct behaviour and is not being changed; it is written down here
+because it was previously discoverable only by reading the broker, and because
+`CheckScope.BOUNDARY` is what lets the unified engine preserve it.
+
+`CONTROL_EVALUATED` records both modes and the resulting `actualEnforced` so no
+operator has to compose them from memory.
 
 ## Out of scope
 
 - **False-negative measurement.** Requires an external corpus. Separate work.
 - **Undeclared-path detection.** The `unattributed` bucket only. Proper handling
-  belongs to `compare_observed_runtime`
-  (`src/agent_interlock/architecture.py:1071-1091`), which already finds observed
-  interactions with no declared edge. Wiring that into the statistics is a
-  follow-on cycle.
+  belongs to `compare_observed_runtime` (`architecture.py:1071-1091`), which
+  already finds observed interactions with no declared edge. Wiring it into the
+  statistics is a follow-on cycle.
 - **`ArchitectureEdge.id` propagation to runtime events.** The
-  `(source, target, policyId)` triple is sufficient; edge identity would require
-  instrumenting three execution paths for a distinction that does not change
-  coverage.
+  `(source, target, policyId)` triple is sufficient.
 - **Orchestration workflow steps.** `WORKFLOW_*` events carry no `interaction_id`
-  (`src/agent_interlock/orchestration.py:602-633`) and are excluded from the
-  reducer. Unchanged here.
-- **Trust-zone boundaries in the MCP path.** `a2a.py` emits `payload.boundary`
-  and the reducer discards it; `gateway.py` has no boundary concept. Unchanged
-  here.
+  (`orchestration.py:602-633`) and are excluded from the reducer. Unchanged.
+- **A2A operational errors.** The seventeen `A2AError` codes that are not policy
+  findings — `A2A-TASK-NOT-FOUND`, `A2A-IDEMPOTENCY-CONFLICT`,
+  `A2A-HANDLER-FAILED` and similar — stay where they are. Only the twelve link
+  and five boundary findings move into the table.
 
 ## Testing
 
-**Characterization tests land before the restructure.** Of the eighteen reason
-codes `policy.py` emits, ten appear in no test file: `INTERLOCK-ACTOR-TYPE-DENIED`,
-`INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-DESTRUCTIVE-WRITE`,
-`INTERLOCK-INPUT-SCHEMA-INVALID`, `INTERLOCK-PURPOSE-DENIED`,
-`L1-M2-DEFINITION-NOT-ACTIVE`, `L1-M5-CREDENTIAL-MISSING`,
-`L1-M5-DELEGATION-DEPTH`, `L1-M5-TOKEN-ACTOR-MISMATCH`, and
-`L1-M9-SENSITIVE-EGRESS`. Four of the six M5 credential checks are unprotected.
-This is a string-presence proxy, not line coverage — it bounds the risk from
-below — but restructuring the judgment engine against it as-is means a broken
-check passes 459 green tests.
+**Characterization tests land before any restructure.** Of the eighteen reason
+codes `policy.py` emits, ten appear in no test file:
+`INTERLOCK-ACTOR-TYPE-DENIED`, `INTERLOCK-APPROVAL-REQUIRED`,
+`INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-INPUT-SCHEMA-INVALID`,
+`INTERLOCK-PURPOSE-DENIED`, `L1-M2-DEFINITION-NOT-ACTIVE`,
+`L1-M5-CREDENTIAL-MISSING`, `L1-M5-DELEGATION-DEPTH`,
+`L1-M5-TOKEN-ACTOR-MISMATCH`, `L1-M9-SENSITIVE-EGRESS`. Four of the six M5
+credential checks are unprotected.
 
-The characterization test is one table: each reason code with a triggering input
-and a non-triggering input. After the restructure the same table also asserts the
-three coverage states, since the non-triggering cases distinguish INAPPLICABLE
-from RAN_CLEAN.
+Of the seventeen A2A policy findings, fifteen appear in no test file — only
+`A2A-AUDIENCE-MISMATCH` and `A2A-BOUNDARY-DATA-CLASS-DENIED` are asserted
+anywhere.
+
+Twenty-five reason codes therefore need characterization before the merge. This
+is a string-presence proxy, not line coverage — it bounds the risk from below —
+but restructuring three judgment engines against it as-is means a broken check
+passes 459 green tests.
+
+The characterization test is one table per engine: each reason code with a
+triggering input and a non-triggering input. After the merge the same tables
+assert the three coverage states, since the non-triggering cases distinguish
+INAPPLICABLE from RAN_CLEAN.
 
 Additional tests:
 
-- SDK/gateway verdict equivalence for identical inputs.
+- Verdict equivalence across enforcement points for the checks they share, given
+  equivalent inputs.
+- Reason-code stability: each profile emits exactly the strings it emitted before
+  the merge.
 - Import-time assertion that the decision-rank map is total.
-- Golden-fixture parity across the Python reducer and `studio/app/analytics.mjs`,
+- Golden-fixture parity between the Python reducer and `studio/app/analytics.mjs`,
   extended to the new fields.
 
 Baseline before any change: 459 passed, 12 skipped, 15 subtests passed.
 
 ## Risks
 
-- **The restructure touches the file the whole platform trusts.** Mitigated by
-  characterization tests first, and by the table being a mechanical transposition
-  of existing branches rather than a rewrite of their logic.
-- **Payload growth in the statistics document.** Bounded by omitting
-  all-ABSENT entries and by digesting coverage rather than listing it per event.
+- **Three judgment paths change at once.** Mitigated by characterization first,
+  by profiles preserving every emitted reason code, and by the merge being a
+  transposition of existing predicates rather than a rewrite of their logic.
+- **Two predicates genuinely differ** (audience, resource). These are the only
+  places where transposition is not mechanical and they get dedicated tests.
+- **Payload growth in the statistics document.** Bounded by omitting all-ABSENT
+  entries and by digesting coverage rather than listing it per event.
 - **A coverage number read as a safety number.** Mitigated only by the limits
-  section above being carried into the Studio surface, not just this document.
+  section being carried into the Studio surface, not just this document.
 
 ## Sequence
 
-1. Characterization tests for `policy.evaluate`.
-2. Check table; `evaluate()` becomes a loop. Tests stay green.
-3. `EvaluationInput` optional fields; SDK routed through `evaluate()`; equivalence
-   test.
-4. `enforcementPoint`, `evaluatedProfile`, `CONTROL_COVERAGE_DECLARED`.
-5. Statistics schema, reducer, Studio port, golden fixtures.
+Delivered as two plans. The first produces a working, fully tested unified engine
+with no observable behaviour change; the second adds the telemetry that depends
+on the check ids the first defines.
+
+**Plan 1 — unified judgment engine**
+
+1. Characterization tests for the twenty-five uncovered reason codes.
+2. `Check`, `Profile`, `CheckScope`, `CheckContext`; boundary `Protocol`.
+3. Gateway checks transposed into the table; `evaluate()` becomes a loop.
+4. SDK routed through the table via `Profile(SDK)`.
+5. Broker routed through the table via `Profile(A2A_BROKER)`.
 6. `strongest_decision` and `would_block`.
-7. Mode composition investigation and `effectiveMode`.
-8. Studio verification, full sweep, independent review, documentation.
+
+**Plan 2 — coverage telemetry and statistics**
+
+7. `enforcementPoint`, `evaluatedProfile`, `CONTROL_COVERAGE_DECLARED`.
+8. Statistics schema, reducer, Studio port, golden fixtures.
+9. Studio verification, full sweep, independent review, documentation.
