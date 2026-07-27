@@ -65,18 +65,23 @@ class ControlDecision(StrEnum):
     BYPASSED = "BYPASSED"
 
 
-# Severity order for strongest_decision and would_block. It lives here rather than in policy.py
-# because PolicyDecisionRecord.would_block reads it and models.py cannot import policy.py.
+# Severity order for strongest_decision and would_block. It is a total function of
+# ControlDecision, so it belongs beside the enum: whoever adds a twelfth member sees the map and
+# the coverage check on the same screen.
 #
 # BYPASSED ranks below ALLOW: a bypassed control raised no objection, it was skipped, so it must
-# not outrank a control that ran and permitted the call. ERROR ranks above KILL: it means the
-# verdict is unknown, which nothing known should be allowed to outrank. evaluate() does not
-# produce ERROR today -- an evaluation error propagates as an exception -- so the rank is a
-# guarantee for callers that supply one, not a description of current behaviour.
+# not outrank a control that ran and permitted the call.
 #
-# There is no fallback rank. The five members with no producer in src/ are reachable through the
-# unconstrained LinkPolicy action fields, and a shared fallback made them tie with BLOCK, which
-# let profile check order decide the emitted verdict.
+# ERROR ranks above BLOCK but below QUARANTINE, not highest. FAIL_CLOSED needs only ERROR >
+# ALLOW -- at any rank above ALLOW every ``!= ALLOW`` predicate in src/ denies. Ranking it above
+# KILL would buy nothing and would cost strongest_decision([KILL, ERROR]) == ERROR: one check
+# erroring erases a definite KILL, so a consumer routing on the decision takes "unknown, retry"
+# instead of "terminate this agent". Neither BYPASSED nor ERROR has a producer in src/; both are
+# reachable only through the unconstrained LinkPolicy action fields, and neither is defined
+# anywhere yet -- see the spec's open questions before wiring a statistic to either.
+#
+# There is no fallback rank. A shared fallback made five members tie with BLOCK, which let
+# profile check order decide the emitted verdict.
 _DECISION_RANK = {
     ControlDecision.BYPASSED: 0,
     ControlDecision.ALLOW: 1,
@@ -85,13 +90,17 @@ _DECISION_RANK = {
     ControlDecision.CHALLENGE: 4,
     ControlDecision.HOLD: 5,
     ControlDecision.BLOCK: 6,
-    ControlDecision.QUARANTINE: 7,
-    ControlDecision.REVOKE: 8,
-    ControlDecision.KILL: 9,
-    ControlDecision.ERROR: 10,
+    ControlDecision.ERROR: 7,
+    ControlDecision.QUARANTINE: 8,
+    ControlDecision.REVOKE: 9,
+    ControlDecision.KILL: 10,
 }
 
-assert set(_DECISION_RANK) == set(ControlDecision), "decision rank map must cover every ControlDecision"
+# Raised, not asserted: `python -O` strips asserts, and a load-time guarantee must not be
+# conditional on an optimisation flag. A twelfth member fails on import rather than reaching
+# strongest_decision as a KeyError.
+if set(_DECISION_RANK) != set(ControlDecision):
+    raise RuntimeError("decision rank map must cover every ControlDecision")
 
 
 class ActionResult(StrEnum):
@@ -271,6 +280,15 @@ class PolicyDecisionRecord:
 
     @property
     def permits_execution(self) -> bool:
+        """Whether this invocation may run now. Tests ``== ALLOW``, not the rank map, on purpose.
+
+        This and would_block disagree on exactly one member, BYPASSED, and the disagreement is
+        deliberate rather than an oversight: BYPASSED is not a block, because a skipped control
+        raised no objection, and it is also not a permission, because nothing in src/ defines
+        what a BYPASSED verdict means. Both answers fail closed. Widening this to "anything not
+        would_block" would let an undefined verdict execute; narrowing would_block to ``!= ALLOW``
+        would count a bypass as an objection. tests/test_decision_ranking.py pins both.
+        """
         return not self.enforced or self.decision == ControlDecision.ALLOW
 
     @property

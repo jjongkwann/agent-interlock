@@ -38,6 +38,13 @@ def decided(decision: ControlDecision, *, enforced: bool) -> PolicyDecisionRecor
 
 class DecisionRankingTests(unittest.TestCase):
     def test_every_control_decision_has_a_rank(self):
+        """Documentation of the invariant, not a guard for it, and it cannot fail as written.
+
+        models.py raises at import when the map is not total, so a missing member kills collection
+        of every test module before this one runs. It is kept for two reasons: the invariant is
+        discoverable from the suite rather than only from the source, and it becomes the guard
+        again if the import-time raise is ever removed. Do not cite it as coverage.
+        """
         self.assertEqual(set(_DECISION_RANK), set(ControlDecision))
 
     def test_no_pair_of_decisions_depends_on_argument_order(self):
@@ -57,8 +64,19 @@ class DecisionRankingTests(unittest.TestCase):
         self.assertEqual(strongest_decision([ControlDecision.BYPASSED]), ControlDecision.BYPASSED)
 
     def test_error_outranks_block(self):
+        """FAIL_CLOSED needs only ERROR > ALLOW; above BLOCK is where the spec puts it."""
         self.assertEqual(strongest_decision([ControlDecision.BLOCK, ControlDecision.ERROR]), ControlDecision.ERROR)
         self.assertEqual(strongest_decision([ControlDecision.ERROR, ControlDecision.BLOCK]), ControlDecision.ERROR)
+
+    def test_error_does_not_outrank_kill(self):
+        """"We could not determine" must not erase "we determined the worst possible thing".
+        A consumer routing on the decision would take "unknown, retry, page ops" instead of
+        "terminate this agent" -- the statistic's own pathology, inverted."""
+        self.assertEqual(strongest_decision([ControlDecision.KILL, ControlDecision.ERROR]), ControlDecision.KILL)
+        self.assertEqual(strongest_decision([ControlDecision.ERROR, ControlDecision.KILL]), ControlDecision.KILL)
+        self.assertEqual(
+            strongest_decision([ControlDecision.QUARANTINE, ControlDecision.ERROR]), ControlDecision.QUARANTINE
+        )
 
     def test_challenge_is_weaker_than_block(self):
         self.assertEqual(strongest_decision([ControlDecision.CHALLENGE, ControlDecision.BLOCK]), ControlDecision.BLOCK)
@@ -93,6 +111,18 @@ class WouldBlockTests(unittest.TestCase):
         shadow = decided(ControlDecision.BLOCK, enforced=False)
         self.assertTrue(shadow.permits_execution)
         self.assertTrue(shadow.would_block)
+
+    def test_bypassed_is_neither_an_objection_nor_a_permission(self):
+        """The one member where the two properties disagree, and the disagreement is deliberate.
+
+        would_block is False: a bypassed control raised no objection, so it must not be counted
+        as one. permits_execution is False: BYPASSED is not defined anywhere in src/, and an
+        undefined verdict does not earn permission to run. Both answers fail closed. Anyone
+        changing either one to "agree" with the other reopens one of the two holes.
+        """
+        record = decided(ControlDecision.BYPASSED, enforced=True)
+        self.assertFalse(record.would_block)
+        self.assertFalse(record.permits_execution)
 
 
 if __name__ == "__main__":

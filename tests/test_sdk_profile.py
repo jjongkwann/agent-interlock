@@ -130,8 +130,9 @@ class SDKProfileTests(unittest.TestCase):
 
     def test_profile_is_the_gateway_order_minus_the_two_m2_checks(self):
         """The M2 pair is ABSENT at this enforcement point, not inapplicable to the call: the SDK
-        has no ToolRevision. Everything else keeps GATEWAY_PROFILE's order, because
-        strongest_decision still resolves ties by position."""
+        has no ToolRevision. Everything else keeps GATEWAY_PROFILE's order so the two points emit
+        reason codes in the same order; since _DECISION_RANK became total the order no longer
+        moves the verdict."""
         self.assertEqual(
             SDK_PROFILE.checks,
             tuple(item for item in GATEWAY_PROFILE.checks if not item.startswith("L1-M2-")),
