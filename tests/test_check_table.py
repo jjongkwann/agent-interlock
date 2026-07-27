@@ -105,6 +105,24 @@ class CheckTableTests(unittest.TestCase):
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
         self.assertIn("L1-M2-DEFINITION-DRIFT", ran)  # not vacuous: the same check runs when it applies
 
+    def test_a_resolved_revision_shadows_the_actor_schema_even_when_it_declares_none(self):
+        """_input_schema falls back to ActorSpec.input_schema only when no revision is resolved.
+        Written as a ternary rather than `or` for exactly this case: an empty revision schema is a
+        tool that declares nothing to validate, so the check is INAPPLICABLE. An `or` would reach
+        past it to the actor's schema and re-validate gateway traffic against an unapproved
+        definition -- and no other fixture can tell the two forms apart, because clean_case()
+        leaves both operands empty."""
+        policy, context = clean_case()
+        context = replace(
+            context,
+            target=replace(context.target, input_schema={"type": "object", "required": ["ticket"]}),
+            arguments={"wrong": 1},
+        )
+        self.assertEqual(context.revision.definition.input_schema, {})  # the discriminating operand
+        reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", reasons)
+
     def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
         """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates
         (require_active_definition, require_digest_pin) enabled, and CheckContext.revision is

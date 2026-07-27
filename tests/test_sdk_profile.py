@@ -107,6 +107,27 @@ class SDKProfileTests(unittest.TestCase):
         )
         self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
 
+    def test_repeated_findings_are_de_duplicated_in_the_ledger(self):
+        """_new_destination emits one finding per offending destination, so without the same
+        dict.fromkeys() evaluate() applies, a reducer would see the SDK and the gateway disagree
+        on reason-code cardinality for identical inputs."""
+        interlock, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE))
+        guarded = target.wrap(lambda arguments: {"ok": True})
+        with self.assertRaises(GatewayError):
+            guarded(
+                {},
+                source=source,
+                tenant_id="tenant-a",
+                intent=InvocationIntent(
+                    purpose="SUPPORT_LOOKUP",
+                    destinations=("https://evil.example", "https://worse.example"),
+                    estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+                ),
+            )
+        evaluated = next(event for event in interlock.ledger.all() if event.event_type == "CONTROL_EVALUATED")
+        reasons = evaluated.payload["control"]["reasonCodes"]
+        self.assertEqual(reasons.count("L1-M9-NEW-DESTINATION"), 1)
+
     def test_profile_is_the_gateway_order_minus_the_two_m2_checks(self):
         """The M2 pair is ABSENT at this enforcement point, not inapplicable to the call: the SDK
         has no ToolRevision. Everything else keeps GATEWAY_PROFILE's order, because
