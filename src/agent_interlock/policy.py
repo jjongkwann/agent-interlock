@@ -168,6 +168,29 @@ def _canonical_destinations(destinations: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(canonical)
 
 
+def _canonical_domains(domains: frozenset[str]) -> set[str]:
+    """IDNA-encode the allowlist entries that encode and drop the ones that do not.
+
+    Must not raise, for the same reason _canonical_destinations must not: this runs inside a check,
+    and neither evaluate() nor the SDK wraps the call, so a UnicodeError from an entry that is not a
+    domain (an over-63-character DNS label, an empty label in "x..y") escapes all the way out of
+    wrap() -- past CONTROL_EVALUATED, leaving a ledger interaction with no control record at all.
+
+    Dropping the entry is the fail-closed direction and needs no new reason code. canonical_destination
+    applies the same .encode("idna") to the destination host, so an entry that cannot be encoded could
+    never have matched anything on the wire: removing it cannot turn a deny into a permit, and the
+    destination it was meant to permit is then simply not allowed. Dropping is per entry, so a
+    malformed entry does not disarm its well-formed siblings.
+    """
+    allowed: set[str] = set()
+    for domain in domains:
+        try:
+            allowed.add(domain.rstrip(".").encode("idna").decode("ascii").lower())
+        except UnicodeError:
+            continue
+    return allowed
+
+
 def _new_destination(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     """Three former inline branches, one check: destinations that do not parse, destinations
     outside the target's allowlist, and an external write with no destination at all. All three
@@ -176,10 +199,14 @@ def _new_destination(policy: LinkPolicy, context: CheckContext) -> Findings | No
     require_explicit = (
         policy.require_explicit_destination and context.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE
     )
+    # No destination declared and none required: the control has no subject, so it is INAPPLICABLE
+    # (see _definition_state) whatever the allowlist looks like. Canonicalising the allowlist above
+    # this line -- which is where the gateway used to do it -- would make a malformed entry crash an
+    # invocation that declares no egress at all.
     if not destinations and not require_explicit:
         return None
     canonical = _canonical_destinations(destinations)
-    allowed = {item.rstrip(".").encode("idna").decode("ascii").lower() for item in context.target.allowed_domains}
+    allowed = _canonical_domains(context.target.allowed_domains)
     finding = ("L1-M9-NEW-DESTINATION", policy.new_destination_action)
     findings = [finding] * (len(destinations) - len(canonical))
     findings.extend(finding for item in canonical if destination_domain(item) not in allowed)
@@ -601,7 +628,16 @@ SDK_PROFILE = Profile(
         for check_id in GATEWAY_PROFILE.checks
         if check_id not in {"L1-M2-DEFINITION-NOT-ACTIVE", "L1-M2-DEFINITION-DRIFT"}
     ),
-    reason_codes=GATEWAY_PROFILE.reason_codes,
+    # Its own map, not GATEWAY_PROFILE's object: the two points agree on the resource key but not on
+    # the data-class one, and while they shared a dict that divergence could not even be expressed.
+    reason_codes={
+        **GATEWAY_PROFILE.reason_codes,
+        # _data_classes emits a second key for a denied D7. The gateway has always put that key on
+        # the wire; the SDK never has -- its inline check had no second branch and reported every
+        # data-class denial as INTERLOCK-DATA-CLASS-DENIED. Unmapped, one byReasonCode bucket
+        # silently splits in two for readers of the SDK's ledger.
+        "L1-M9-SENSITIVE-EGRESS": "INTERLOCK-DATA-CLASS-DENIED",
+    },
 )
 
 

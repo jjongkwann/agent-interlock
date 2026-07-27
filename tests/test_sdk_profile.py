@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from agent_interlock import ActorSpec, ActorType, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
 from agent_interlock.gateway import GatewayError
@@ -10,7 +11,7 @@ from agent_interlock.policy import GATEWAY_PROFILE, SDK_PROFILE, CheckContext, r
 from agent_interlock.sdk import Interlock
 
 
-def wired(policy: LinkPolicy, input_schema: dict | None = None):
+def wired(policy: LinkPolicy, input_schema: dict | None = None, allowed_domains: frozenset | None = None):
     interlock = Interlock()
     source = interlock.define_actor(
         ActorSpec(id="agent-1", type=ActorType.AGENT, owner="team", identity="spiffe://agent-1")
@@ -21,7 +22,7 @@ def wired(policy: LinkPolicy, input_schema: dict | None = None):
             type=ActorType.TOOL,
             owner="team",
             identity="spiffe://tool-1",
-            allowed_domains=frozenset({"good.example"}),
+            allowed_domains=frozenset({"good.example"}) if allowed_domains is None else allowed_domains,
             input_schema=input_schema or {},
         )
     )
@@ -159,6 +160,93 @@ class SDKProfileTests(unittest.TestCase):
                 ),
             )
         self.assertIn("INTERLOCK-TAINTED-EXTERNAL-WRITE", str(raised.exception))
+
+    def test_a_denied_d7_keeps_emitting_the_code_this_point_has_always_emitted(self):
+        """The SDK's data-class control is one of the four it has always had, and it has always
+        reported every denial as INTERLOCK-DATA-CLASS-DENIED -- main's wrap() had no second branch.
+        Routing it through the shared check gained that branch, so a denied D7 started reaching the
+        ledger as L1-M9-SENSITIVE-EGRESS and any reducer keyed on the SDK's byReasonCode silently
+        split one bucket into two. The gateway keeps L1-M9-SENSITIVE-EGRESS; only this point renames
+        it back, which is why SDK_PROFILE needs a rename map of its own rather than the gateway's.
+        """
+        policy = LinkPolicy(mode=PolicyMode.ENFORCE)
+        policy = replace(policy, denied_data_classes=policy.denied_data_classes | {"D7"})
+        interlock, source, target = wired(policy)
+        guarded = target.wrap(lambda arguments: {"ok": True})
+        with self.assertRaises(GatewayError):
+            guarded(
+                {},
+                source=source,
+                tenant_id="tenant-a",
+                intent=InvocationIntent(purpose="SUPPORT_LOOKUP", data_classes=frozenset({"D7"})),
+            )
+        evaluated = next(event for event in interlock.ledger.all() if event.event_type == "CONTROL_EVALUATED")
+        self.assertEqual(evaluated.payload["control"]["reasonCodes"], ["INTERLOCK-DATA-CLASS-DENIED"])
+
+    def test_the_gateway_still_emits_the_sensitive_egress_code_for_the_same_input(self):
+        """The other half of the rename: the SDK's map must not be the gateway's. Written as a
+        direct comparison of the two profiles' output on one context, because the failure being
+        guarded is a shared mutable map -- fixing the SDK by editing the object both profiles point
+        at would satisfy the test above and silently move the gateway's wire code instead."""
+        policy = LinkPolicy(mode=PolicyMode.ENFORCE)
+        policy = replace(policy, denied_data_classes=policy.denied_data_classes | {"D7"})
+        _, source, target = wired(policy)
+        context = CheckContext(
+            source=source.spec,
+            target=target.spec,
+            intent=InvocationIntent(purpose="SUPPORT_LOOKUP", data_classes=frozenset({"D7"})),
+            arguments={},
+            interaction_id="i",
+            trace_id="t",
+            span_id="s",
+        )
+        self.assertEqual(run_checks(policy, context, GATEWAY_PROFILE)[0], ["L1-M9-SENSITIVE-EGRESS"])
+        self.assertEqual(run_checks(policy, context, SDK_PROFILE)[0], ["INTERLOCK-DATA-CLASS-DENIED"])
+
+    def test_a_malformed_allowlist_entry_still_produces_a_control_record(self):
+        """main's SDK never read allowed_domains; routing wrap() through the shared table made it
+        IDNA-encode the allowlist, and an over-long DNS label raised UnicodeError out of wrap()
+        after INTERACTION_REQUESTED and DATA_FLOW_OBSERVED and before CONTROL_EVALUATED. That
+        leaves a ledger interaction with no control record at all -- Plan 2's reducer reads it as
+        un-evaluated, which is the defect class this plan exists to eliminate, newly created in
+        production code. Every invocation that reaches the policy layer must produce a verdict.
+        """
+        interlock, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE), allowed_domains=frozenset({"x" * 70}))
+        guarded = target.wrap(lambda arguments: {"ok": True})
+        with self.assertRaises(GatewayError) as raised:
+            guarded(
+                {},
+                source=source,
+                tenant_id="tenant-a",
+                intent=InvocationIntent(
+                    purpose="SUPPORT_LOOKUP",
+                    destinations=("https://evil.example",),
+                    estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+                ),
+            )
+        self.assertIn("L1-M9-NEW-DESTINATION", str(raised.exception))
+        types = [event.event_type for event in interlock.ledger.all()]
+        self.assertIn("CONTROL_EVALUATED", types)
+
+    def test_a_malformed_allowlist_entry_is_not_a_silent_permit(self):
+        """The fail-closed direction, stated on the surface that decides whether the call runs. A
+        malformed allowlist entry must never let the wrapped function execute: the entry allows
+        nothing, so the destination it named is simply not allowed."""
+        _, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE), allowed_domains=frozenset({"x" * 70}))
+        calls = []
+        guarded = target.wrap(lambda arguments: calls.append(arguments) or {"ok": True})
+        with self.assertRaises(GatewayError):
+            guarded(
+                {},
+                source=source,
+                tenant_id="tenant-a",
+                intent=InvocationIntent(
+                    purpose="SUPPORT_LOOKUP",
+                    destinations=("https://x" + "x" * 69 + "/",),
+                    estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+                ),
+            )
+        self.assertEqual(calls, [])
 
     def test_credential_keyword_reaches_the_m5_checks(self):
         _, source, target = wired(LinkPolicy(mode=PolicyMode.ENFORCE))
