@@ -124,7 +124,11 @@ def _definition_drift(policy: LinkPolicy, context: CheckContext) -> Findings | N
 
 
 def _input_schema(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if context.revision is None:  # INAPPLICABLE, see _definition_state
+    # No revision, or a tool that ships no input schema: INAPPLICABLE, see _definition_state.
+    # validate_schema short-circuits on an empty schema, so () here would report a clean pass over
+    # a validation that never happened -- on a fleet of schema-less tools, near-total coverage of
+    # nothing.
+    if context.revision is None or not context.revision.definition.input_schema:
         return None
     if not validate_schema(context.arguments, context.revision.definition.input_schema):
         return ()

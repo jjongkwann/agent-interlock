@@ -89,6 +89,22 @@ class CheckTableTests(unittest.TestCase):
             record = evaluate(policy, context)
         self.assertEqual(record.reason_codes, ())
 
+    def test_checks_that_do_not_apply_stay_out_of_ran(self):
+        """`ran` is the only place the None-vs-() distinction is visible: reason_codes and decision
+        are identical either way, so without this test any of these `return None`s could become
+        `return ()` and the whole suite would stay green -- while Plan 2's coverage statistic
+        started reporting a control as run-and-passed on invocations it never examined."""
+        policy, context = clean_case()
+        _, _, ran = run_checks(policy, replace(context, revision=None), GATEWAY_PROFILE)
+        self.assertNotIn("L1-M2-DEFINITION-NOT-ACTIVE", ran)
+        self.assertNotIn("L1-M2-DEFINITION-DRIFT", ran)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
+        # clean_case()'s tool ships input_schema={}, and validate_schema short-circuits on an empty
+        # schema -- so the schema check must stay out of `ran` here too, revision or no revision.
+        _, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
+        self.assertIn("L1-M2-DEFINITION-DRIFT", ran)  # not vacuous: the same check runs when it applies
+
     def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
         """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates
         (require_active_definition, require_digest_pin) enabled, and CheckContext.revision is
