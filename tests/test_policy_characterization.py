@@ -224,6 +224,29 @@ class PolicyCharacterizationTests(unittest.TestCase):
                 record = evaluate(case_policy, case_context)
                 self.assertIn(code, record.reason_codes)
 
+    def test_unparseable_destination_emits_new_destination(self):
+        """The canonical_destination ValueError path -- a destination string that cannot be parsed
+        at all. It is one of the three sites emitting L1-M9-NEW-DESTINATION and the case above
+        pins only the domain-allowlist site; without this the collapse into one check would be
+        unguarded here."""
+        policy, context = clean_case()
+        context = replace(context, intent=InvocationIntent(purpose="SUPPORT_LOOKUP", destinations=("user@",)))
+        record = evaluate(policy, context)
+        self.assertIn("L1-M9-NEW-DESTINATION", record.reason_codes)
+        self.assertEqual(record.decision, ControlDecision.HOLD)
+        self.assertEqual(record.canonical_destinations, ())
+
+    def test_missing_destination_on_external_write_emits_new_destination(self):
+        """The third emission site: require_explicit_destination with nothing to point at.
+        Also unpinned before this."""
+        policy, context = clean_case()
+        context = replace(
+            context,
+            intent=InvocationIntent(purpose="SUPPORT_LOOKUP", estimated_side_effect=SideEffect.EXTERNAL_WRITE),
+        )
+        record = evaluate(policy, context)
+        self.assertIn("L1-M9-NEW-DESTINATION", record.reason_codes)
+
 
 if __name__ == "__main__":
     unittest.main()
