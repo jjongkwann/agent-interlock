@@ -28,7 +28,7 @@ from .models import (
     SideEffect,
     ToolDefinition,
 )
-from .policy import EvaluationInput, evaluate, strongest_decision
+from .policy import EvaluationInput, evaluate, execution_permitted, strongest_decision
 from .receipts import FakeExternalReceiptStore
 from .registry import DefinitionRegistry, ToolRevision
 from .security import canonical_destination, destination_domain, sanitize_secrets, validate_schema
@@ -237,6 +237,20 @@ class MCPToolGateway:
                 decision,
                 decision=strongest_decision([decision.decision, config_decision.decision]),
                 reason_codes=decision.reason_codes + config_decision.reason_codes,
+                # The permit is aggregated here, not reduced. This is the one place a decision is
+                # merged outside evaluate(), and strongest_decision annihilates every member ranked
+                # below ALLOW -- so updating `decision` alone let a BYPASSED config verdict merge
+                # into an ALLOW record and execute, which is the H2 defect verbatim. ANDing keeps
+                # the property the record's docstring claims: a config verdict can only ever narrow
+                # the permit, never widen one.
+                #
+                # Not written as `config_decision.decision != ALLOW` and not relying on
+                # _config_preflight already filtering ALLOW: this must hold for whatever a future
+                # producer emits, and an unasserted cross-module fact is exactly what left the site
+                # unguarded. execution_permitted is the same aggregate evaluate() uses.
+                execution_permitted=(
+                    decision.execution_permitted and execution_permitted([config_decision.decision])
+                ),
             )
         self._decisions[decision.decision_id] = _Pending(
             tenant_id, source, target, revision, intent, decision, environment, data_source
@@ -549,6 +563,13 @@ class MCPToolGateway:
                     "decision": decision.decision.value,
                     "reasonCodes": decision.reason_codes,
                     "actualEnforced": decision.enforced,
+                    # The permission aggregate, beside the severity reduction it cannot be read
+                    # off. Without it an enforced denial on findings reduced from [ALLOW, BYPASSED]
+                    # records `decision: ALLOW, actualEnforced: true` against a BLOCKED outcome,
+                    # and nothing in the payload says which of the two is the enforcement fact.
+                    # Additive: it moves no reason code, and a reader that does not know the key
+                    # sees exactly what it saw before.
+                    "executionPermitted": decision.execution_permitted,
                 },
             },
             environment=pending.environment,

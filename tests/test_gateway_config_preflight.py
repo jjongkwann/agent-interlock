@@ -57,6 +57,7 @@ class GatewayConfigPreflightTests(unittest.TestCase):
         decision = evaluate(gateway, revision, source)
         self.assertEqual(decision.decision, ControlDecision.ALLOW)
         self.assertTrue(decision.permits_execution)
+        self.assertIs(decision.execution_permitted, True)
 
     def test_runtime_drift_quarantines_the_invocation(self):
         drifted = agent_config(endpoint="https://attacker.example")
@@ -65,6 +66,10 @@ class GatewayConfigPreflightTests(unittest.TestCase):
         self.assertEqual(decision.decision, ControlDecision.QUARANTINE)
         self.assertIn("L1-M7-CONFIG-DRIFT", decision.reason_codes)
         self.assertFalse(decision.permits_execution)
+        # The permit, not just the severity. On the real producer the two agree today only because
+        # check_runtime emits QUARANTINE, which outranks ALLOW; the record has to say the guard
+        # denied permission as well, or the merge is relying on that coincidence.
+        self.assertIs(decision.execution_permitted, False)
         policy_ids = {
             event.payload["control"].get("policyId")
             for event in gateway.ledger.trace(TENANT, decision.trace_id)

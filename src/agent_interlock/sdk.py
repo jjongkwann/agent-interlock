@@ -170,6 +170,7 @@ class Interlock:
         # cardinality from both enforcement points for identical inputs.
         reasons = list(dict.fromkeys(reasons))
         enforced = policy.mode == PolicyMode.ENFORCE
+        permitted = execution_permitted(decisions)
         self.ledger.append(
             "CONTROL_EVALUATED",
             payload={
@@ -181,6 +182,9 @@ class Interlock:
                     "decision": decision.value,
                     "reasonCodes": reasons,
                     "actualEnforced": enforced,
+                    # See gateway._append_control: the permission aggregate beside the severity
+                    # reduction, so a denied invocation does not record an unexplained ALLOW.
+                    "executionPermitted": permitted,
                 }
             },
             severity="HIGH" if reasons else "INFO",
@@ -189,7 +193,7 @@ class Interlock:
         # The execution gate is the separate permission aggregate, not the severity reduction:
         # strongest_decision annihilates BYPASSED, so `decision != ALLOW` executed a call whose
         # findings were [ALLOW, BYPASSED]. `decision` above still supplies what the ledger records.
-        if enforced and not execution_permitted(decisions):
+        if enforced and not permitted:
             self.ledger.append(
                 "ACTION_EXECUTED",
                 payload={"result": "COMPLETED", "connectorExecutionId": None},

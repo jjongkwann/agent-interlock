@@ -249,14 +249,30 @@ def _approval(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     return ()
 
 
+def _usable_credential(credential: CredentialClaims | None) -> bool:
+    """Whether the M5 family has a credential it can rely on: one that was presented, and that a
+    producer which actually ran a verifier marked `authenticated`.
+
+    The single definition the whole family reads. Every other field on CredentialClaims is whatever
+    the caller wrote -- issuer, subject, actor, audience, resource, delegation_depth -- so on a
+    credential nobody verified, each of the comparison checks below compares a forged claim against
+    itself. mcp_oauth.MCPAuthorizationCodeTokenClient.exchange is the one producer in src/ that runs
+    the claims verifier and therefore the one that sets the flag.
+
+    Shared rather than restated in each check because the family disagreeing about it is the defect:
+    when only the presence check read `authenticated`, absence made its four siblings INAPPLICABLE
+    while a forgery made them RAN_CLEAN, and the forgery read as *better examined* than the absence
+    in the coverage channel.
+    """
+    return credential is not None and credential.authenticated
+
+
 def _credential_missing(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     """The M5 presence check: does this invocation have a credential it can rely on?
 
-    Reads `authenticated`, not the object's existence. Every other field on CredentialClaims is
-    whatever the caller wrote -- issuer, subject, actor, audience, resource -- so on a credential
-    no producer verified, the sibling M5 checks below compare a forged claim against itself.
-    Only a producer that ran a verifier says so; mcp_oauth.MCPAuthorizationCodeTokenClient.exchange
-    is the one in src/ that does.
+    Reads `authenticated`, not the object's existence, and owns the unusable-credential verdict for
+    the whole family -- the four comparison checks below defer to it rather than reporting a clean
+    pass over fields the caller chose.
 
     L1-M5-CREDENTIAL-MISSING carries the unverified case rather than a new code, and carrying it
     here is the point rather than a compromise: presenting a forged credential used to be strictly
@@ -264,16 +280,28 @@ def _credential_missing(policy: LinkPolicy, context: CheckContext) -> Findings |
     check and reported the invocation checked and clean. Both now reach the same verdict under the
     same code, which is what removes the incentive. To M5, an unverified claims blob is not a
     credential that is present; it is a credential that is missing.
+
+    A credential that was presented and is unusable is flagged whatever the intent names. The
+    expectation gate applies only to the *absent* case: with nothing presented and nothing expected
+    this control has no subject, so it is INAPPLICABLE. Gating both cases on the expectation is what
+    would leave the deferral above unowned -- a forged credential under an intent naming no audience
+    or resource would then be refused only by whichever sibling its attacker-chosen fields happened
+    to trip, which is the attacker declining to set a field rather than a control.
     """
-    if not (context.intent.expected_audience or context.intent.expected_resource):
-        return None  # the intent names no audience or resource, so there is no credential to miss
-    if context.credential is not None and context.credential.authenticated:
-        return ()
+    if _usable_credential(context.credential):
+        # Verified, so this control's question is answered; it only has a subject at all when the
+        # intent named something to rely on the credential for.
+        return () if (context.intent.expected_audience or context.intent.expected_resource) else None
+    if context.credential is None and not (context.intent.expected_audience or context.intent.expected_resource):
+        return None  # nothing presented and nothing expected, so there is no credential to miss
     return (("L1-M5-CREDENTIAL-MISSING", ControlDecision.BLOCK),)
 
 
 def _token_passthrough(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if context.credential is None:  # nothing presented, _credential_missing owns that verdict
+    if not _usable_credential(context.credential):
+        # No credential this check can rely on -- nothing presented, or nothing verified. Either way
+        # there is nothing here to examine, and _credential_missing owns that verdict (on A2A_PROFILE,
+        # which does not carry it, _identity_binding does).
         return None
     if context.credential.exchanged:
         return ()
@@ -287,7 +315,7 @@ def _token_audience(policy: LinkPolicy, context: CheckContext) -> Findings | Non
     and SDK_PROFILE map the resource key back onto the audience one, which is the single code
     those two points have always emitted for both."""
     credential = context.credential
-    if credential is None:  # nothing presented, _credential_missing owns that verdict
+    if not _usable_credential(credential):  # nothing to compare against, see _token_passthrough
         return None
     audience = context.intent.expected_audience if policy.require_audience else ""
     resource = context.intent.expected_resource if policy.require_resource else ""
@@ -302,7 +330,7 @@ def _token_audience(policy: LinkPolicy, context: CheckContext) -> Findings | Non
 
 
 def _token_actor(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if context.credential is None:  # nothing presented, _credential_missing owns that verdict
+    if not _usable_credential(context.credential):  # nothing to compare against, see _token_passthrough
         return None
     if context.credential.actor == context.source.id:
         return ()
@@ -310,7 +338,7 @@ def _token_actor(policy: LinkPolicy, context: CheckContext) -> Findings | None:
 
 
 def _delegation_depth(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if context.credential is None:  # nothing presented, _credential_missing owns that verdict
+    if not _usable_credential(context.credential):  # attacker-chosen depth, see _token_passthrough
         return None
     if context.credential.delegation_depth <= policy.max_delegation_depth:
         return ()
@@ -320,11 +348,17 @@ def _delegation_depth(policy: LinkPolicy, context: CheckContext) -> Findings | N
 def _identity_binding(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     """The A2A broker's own binding check: the presented credential must belong to the source
     actor and must be authenticated. Distinct from L1-M5-TOKEN-ACTOR-MISMATCH, which compares the
-    same two ids but only when the edge policy asks for actor binding."""
+    same two ids but only when the edge policy asks for actor binding.
+
+    This is the check that *owns* the unusable-credential verdict on A2A_PROFILE, which does not
+    carry L1-M5-CREDENTIAL-MISSING -- so unlike the four M5 comparison checks it flags an
+    unauthenticated credential rather than deferring. A2ABroker always builds a credential from its
+    principal, so the None branch below is reachable only from a hand-built CheckContext.
+    """
     credential = context.credential
-    if credential is None:  # nothing presented, _credential_missing owns that verdict
+    if credential is None:  # nothing presented at all, so this check has no subject either
         return None
-    if credential.actor == context.source.id and credential.authenticated:
+    if credential.actor == context.source.id and _usable_credential(credential):
         return ()
     return (("A2A-IDENTITY-BINDING-MISMATCH", ControlDecision.BLOCK),)
 

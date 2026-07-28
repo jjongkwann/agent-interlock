@@ -141,6 +141,17 @@ def a2a_case():
     return policy, context
 
 
+# The M5 checks that defer to whoever owns the "this credential is not usable" verdict rather than
+# reaching a verdict of their own. Every one of them compares self-asserted fields against each
+# other, so on a credential no producer verified they can only compare a forgery with itself.
+M5_CREDENTIAL_SIBLINGS = (
+    "L1-M5-TOKEN-PASSTHROUGH",
+    "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+    "L1-M5-TOKEN-ACTOR-MISMATCH",
+    "L1-M5-DELEGATION-DEPTH",
+)
+
+
 def _credential(**changes):
     return lambda policy, context: (policy, replace(context, credential=replace(context.credential, **changes)))
 
@@ -613,6 +624,78 @@ class CheckTableTests(unittest.TestCase):
         self.assertFalse(record.permits_execution)
         verified = replace(forged, credential=replace(forged.credential, authenticated=True))
         self.assertEqual(evaluate(policy, verified).reason_codes, ())
+
+    def test_the_whole_m5_family_agrees_on_what_a_usable_credential_is(self):
+        """A forged credential must not read as *more checked* than no credential at all.
+
+        The presence check reads `authenticated`; its four siblings used to key on `credential is
+        None`, each deferring to "nothing presented, _credential_missing owns that verdict" -- a
+        definition that had changed underneath them. The measured result was that absence made the
+        four INAPPLICABLE while a forgery made them RAN_CLEAN, in the coverage channel this branch
+        exists to make trustworthy: the forgery came out looking better examined than the absence.
+
+        Asserted as equality between the two coverage vectors rather than against a literal, so the
+        property is the *agreement* and not one hard-coded answer. A fix that made the absent case
+        RAN_CLEAN would satisfy a literal and fails here on the third assertion.
+        """
+        policy, base = clean_case()
+        bound = replace(base, intent=replace(base.intent, expected_audience=base.target.identity))
+        forged = replace(
+            bound, credential=replace(bound.credential, audience=base.target.identity, authenticated=False)
+        )
+        absent = replace(bound, credential=None)
+        for check_id in M5_CREDENTIAL_SIBLINGS:
+            with self.subTest(check=check_id):
+                single = replace(GATEWAY_PROFILE, checks=(check_id,))
+                forged_ran = check_id in run_checks(policy, forged, single)[2]
+                absent_ran = check_id in run_checks(policy, absent, single)[2]
+                self.assertEqual(forged_ran, absent_ran)
+                self.assertFalse(forged_ran)  # a check with nothing to examine is INAPPLICABLE ...
+                verified = replace(bound, credential=replace(forged.credential, authenticated=True))
+                self.assertIn(check_id, run_checks(policy, verified, single)[2])  # ... and not always
+
+    def test_no_enforcement_point_loses_its_verdict_on_an_unusable_credential(self):
+        """The siblings defer, so somebody in every profile that carries them has to own the verdict.
+
+        Making the four INAPPLICABLE is only honest if an unverified credential is still refused --
+        otherwise the coverage fix hands back a permit, which is the same trade this branch exists to
+        refuse. The gateway and the SDK own it with L1-M5-CREDENTIAL-MISSING; A2A_PROFILE does not
+        carry that check at all and owns it with A2A-IDENTITY-BINDING-MISMATCH. Behavioural per
+        profile rather than a membership test over profile.checks, because what matters is that a
+        code comes out, not that a named check is listed.
+        """
+        policy, base = clean_case()
+        unusable = replace(base, credential=replace(base.credential, authenticated=False))
+        for profile in (GATEWAY_PROFILE, SDK_PROFILE):
+            with self.subTest(enforcement_point=profile.enforcement_point):
+                reasons, _, _ = run_checks(policy, unusable, profile)
+                self.assertEqual(reasons, ["L1-M5-CREDENTIAL-MISSING"])
+        a2a_policy, a2a_context = a2a_case()
+        a2a_unusable = replace(a2a_context, credential=replace(a2a_context.credential, authenticated=False))
+        reasons, _, _ = run_checks(a2a_policy, a2a_unusable, A2A_PROFILE)
+        self.assertEqual(reasons, ["A2A-IDENTITY-BINDING-MISMATCH", "A2A-BOUNDARY-IDENTITY-REQUIRED"])
+
+    def test_a_forged_credential_is_refused_even_when_the_intent_names_nothing(self):
+        """The case where deferring would otherwise open a permit.
+
+        With no expected audience or resource the presence check used to be INAPPLICABLE, so a
+        forged credential was refused only by whichever sibling its attacker-chosen fields happened
+        to trip -- here the delegation depth. Those fields are attacker-chosen, so that refusal was
+        never a control; it was the attacker declining to set a field. The presence check now owns
+        an unverified credential wherever one is presented, and the siblings can defer without
+        anything falling through.
+        """
+        policy, base = clean_case()
+        forged = replace(base, credential=replace(base.credential, authenticated=False, delegation_depth=9))
+        self.assertEqual(forged.intent.expected_audience, "")  # not vacuous: nothing is expected
+        self.assertEqual(forged.intent.expected_resource, "")
+        record = evaluate(policy, forged)
+        self.assertEqual(record.reason_codes, ("L1-M5-CREDENTIAL-MISSING",))
+        self.assertIs(record.permits_execution, False)
+        # An attacker who sets nothing else at all reaches the same verdict, which is the property:
+        # no combination of self-asserted fields buys anything over presenting no credential.
+        quiet = replace(base, credential=replace(base.credential, authenticated=False))
+        self.assertEqual(evaluate(policy, quiet).reason_codes, ("L1-M5-CREDENTIAL-MISSING",))
 
     def test_the_resource_comparison_renames_apart_at_each_enforcement_point(self):
         """_token_audience emits one key for the audience comparison and another for the resource
