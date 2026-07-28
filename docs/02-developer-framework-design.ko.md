@@ -23,6 +23,8 @@ Agent Interlock는 보안팀이 운영 로그를 사후 분석하는 제품에 �
 
 Runtime은 이 선언을 실제 호출에 강제하고, Ledger는 판정과 결과를 기록하며, Graph는 선언된 관계와 실제 실행의 차이를 보여준다.
 
+**예외가 하나 있고, 이 예외는 구조적으로 중요하다.** ActorSpec의 `dataAccess`는 런타임에 집행되지 **않는다**. SDK가 마지막 런타임 소비자였는데, 판정 엔진이 통합된 뒤로 데이터 등급 check는 intent의 등급을 대상 Actor의 허용 범위가 아니라 *link policy*의 `allowedDataClasses`/`deniedDataClasses`와 비교한다. 이제 `ActorSpec.data_access`를 읽는 곳은 설계 시점 linter(`ARCH-DATA-CLASS-EXCEEDS-ACTOR`)와 `scaffold.py`의 테스트 생성기뿐이다. 그래도 선언해야 한다 — linter가 이 값을 필요로 하고, link policy가 대상 Actor의 범위를 넘어 넓어지는 것을 막는 유일한 수단이다 — 다만 여기서 런타임 차단을 기대해서는 안 된다.
+
 ## 2. 개발자 경험
 
 ```mermaid
@@ -46,7 +48,7 @@ const supportAgent = interlock.defineActor({
   owner: "customer-platform",
   tenantMode: "REQUIRED",
   capabilities: ["CUSTOMER_LOOKUP", "SUPPORT_REPLY"],
-  dataAccess: ["CUSTOMER_PII"],
+  dataAccess: ["D2", "D3", "D7"],
   maxDelegationDepth: 2,
 });
 
@@ -64,13 +66,20 @@ export const secureSendEmail = emailTool.wrap(sendEmail);
 supportAgent.connect(emailTool, {
   relationship: "INVOKES",
   allowedPurposes: ["SUPPORT_REPLY", "REFUND_NOTICE"],
-  allowedData: ["CUSTOMER_NAME", "CUSTOMER_EMAIL"],
-  destinationPolicy: "KNOWN_CUSTOMER_ONLY",
-  approvalRequiredWhen: ["NEW_DESTINATION", "BULK_SEND"],
-  maxCallsPerTrace: 3,
+  allowedDataClasses: ["D2", "D3"],
+  deniedDataClasses: ["D5", "D8"],
+  requireExplicitDestination: true,
+  newDestinationAction: "HOLD",
+  externalWriteRequiresApproval: true,
   failureMode: "FAIL_CLOSED"
 });
 ```
+
+이 예시를 읽을 때 유의할 점이 둘 있다.
+
+**데이터 등급은 `D1`–`D9` 코드**이지 상징적인 이름이 아니다. `allowedDataClasses`와 `deniedDataClasses`는 `InvocationIntent.data_classes`와 집합으로 비교되며, 이 비교는 문자 그대로의 집합 연산이다 — `CUSTOMER_PII` 같은 상징적인 값은 대상 Actor가 보유하지 않은 등급일 뿐이다. 배포된 `examples/secure_multi_agent_architecture.json`에 상징적 어휘를 대입하면 깨끗하던 lint가 **CRITICAL `ARCH-DATA-CLASS-EXCEEDS-ACTOR` 4건**으로 바뀌고, 이어서 `interlock architecture compile`이 그래프를 거부한다. 코드 정의는 [03 L1 보안 프로파일](03-l1-mcp-tool-security-profile.ko.md)을 참고한다.
+
+**이것은 의도한 TypeScript 표면이며, 아직 존재하지 않는다.** 배포된 SDK는 Python(`src/agent_interlock/sdk.py`)이고 `defineActor`는 저장소 어디에도 없다. 위 필드 이름은 예시를 schema에 대조해 검증할 수 있도록 실제 `LinkPolicy` 필드의 JSON 표기(`architecture.py`의 `_policy_value`)를 쓴 것이지만, 이전 판본에 있던 `destinationPolicy`, `approvalRequiredWhen`, `maxCallsPerTrace`는 `LinkPolicy` 필드가 아니며 한 번도 아니었다.
 
 ## 3. ActorSpec
 
@@ -105,7 +114,7 @@ supportAgent.connect(emailTool, {
 ### 3.3 Manifest 표현
 
 ```yaml
-apiVersion: interlock.dev/v1
+apiVersion: interlock.dev/v1alpha1
 kind: Actor
 metadata:
   id: tool.send-email
@@ -114,7 +123,7 @@ spec:
   type: TOOL
   identity: spiffe://prod.example/tool/send-email
   capabilities: [EMAIL_SEND]
-  dataAccess: [CUSTOMER_NAME, CUSTOMER_EMAIL]
+  dataAccess: [D2, D3]
   sideEffects: [EXTERNAL_WRITE]
   tenantMode: REQUIRED
   schemas:
@@ -125,6 +134,8 @@ spec:
     timeoutMs: 5000
   failureMode: FAIL_CLOSED
 ```
+
+loader가 받아들이는 버전은 `interlock.dev/v1alpha1` 하나뿐이다. `ArchitectureGraph.from_dict`(`architecture.py:333-334`)는 그 외의 값을 `ValueError`로 거부하며, [04 MCP Tool Gateway 명세](04-mcp-tool-gateway-spec.ko.md)도 전체에서 같은 문자열을 쓴다. `schemas/actor.schema.json`은 `interlock.dev/v1`도 허용하지만 `src/`에서 이 schema를 읽는 곳이 없으므로 그것으로 `v1`이 로드되지는 않는다.
 
 ## 4. ActorGuard
 
@@ -152,6 +163,26 @@ ActorGuard는 기존 비즈니스 로직의 앞뒤에서 다음 처리를 수행
 | Gateway | MCP, A2A, RAG, Egress | 중앙 정책과 강제력 |
 
 SDK가 없어도 Proxy로 통신은 관측할 수 있지만, plan step·memory provenance·sub-agent tree 같은 의미는 SDK가 있어야 정확히 수집할 수 있다.
+
+### 4.2 `wrap()`은 집행하지만 승인할 수는 없다
+
+`wrap()`은 관측 전용이 아니다. `PolicyMode.ENFORCE`에서는 `SDK_PROFILE`의 check 16개를 실행하고(`sdk.py:152`), 종합 판정이 거부면 `GatewayError`를 raise한다(`sdk.py:199`). 호출은 일어나지 않는다. gateway의 check 18개 중 16개가 여기서 실행되며, 빠지는 것은 M2 definition check 2개뿐이다. SDK는 `ToolRevision`을 보유하지 않기 때문이다.
+
+**`wrap()`으로 감싼 Tool은 기본 `LinkPolicy`에서 외부 쓰기를 수행할 수 없다.** `external_write_requires_approval`의 기본값이 `True`이므로 `approval_valid`가 설정되지 않는 한 모든 `EXTERNAL_WRITE` intent에서 `INTERLOCK-APPROVAL-REQUIRED`가 발생하는데, SDK 경로는 이 값을 설정하지 않는다. `CheckContext.approval_valid`의 기본값은 `False`이고(`policy.py:81`), `_invoke`는 이 값을 전달하지 않으며, `Interlock`도 `Actor`도 승인 API를 노출하지 않는다. `grant_approval`은 `MCPToolGateway`에만 있다(`gateway.py:140`).
+
+모든 것을 올바로 선언해도 — 승인된 목적지, 선언된 부작용, taint 없음 — 여기에 도달한다.
+
+```python
+agent.connect(tool, LinkPolicy(id="p", version="1", mode=PolicyMode.ENFORCE))
+send = tool.wrap(send_email)
+send({"to": "user@customer.example"}, source=agent, tenant_id="t",
+     intent=InvocationIntent(purpose="reply",
+                             destinations=("user@customer.example",),
+                             estimated_side_effect=SideEffect.EXTERNAL_WRITE))
+# GatewayError: actor invocation blocked: INTERLOCK-APPROVAL-REQUIRED
+```
+
+동작은 fail-closed이고 방향은 옳지만, 승인 경로는 단순히 미구현인 것이 아니라 **설계상 도달할 수 없다**. SDK에 승인 표면이 생기기 전까지 in-process 외부 쓰기에는 둘 중 하나가 필요하다. 통제를 내려놓는 명시적이고 감사 가능한 결정인 `LinkPolicy(external_write_requires_approval=False)`를 쓰거나, 승인을 보유할 수 있는 `MCPToolGateway`를 경유하는 것이다. 부작용을 `EXTERNAL_WRITE`가 아닌 다른 값으로 선언해 우회해서는 안 된다. 그렇게 하면 눈에 보이는 차단을 잘해야 조용한 `L1-UNDECLARED-SIDE-EFFECT`로, 최악의 경우 탐지되지 않은 외부 쓰기로 바꾸는 것이다.
 
 ## 5. InterlockLink와 LinkPolicy
 
@@ -207,6 +238,8 @@ sequenceDiagram
 ```
 
 정책 엔진 장애 시의 동작은 Runtime이 임의로 선택하지 않고 LinkPolicy의 `failureMode`를 따른다.
+
+**현재 배포된 구현에서는 이 말이 들리는 것보다 범위가 좁다.** `src/`에서 `LinkPolicy.failure_mode`를 읽는 런타임 코드는 정확히 하나, `FAIL_CLOSED` 여부를 검사하는 `egress.py:145`뿐이다. 정책 판정 경로는 어디에서도 이 값을 참조하지 않으며, `DEGRADE_READ_ONLY`는 소비자가 아예 없다. 그 밖에 이 필드가 등장하는 곳은 모두 설계 시점 lint(`ARCH-BOUNDARY-FAIL-OPEN`, `ARCH-HIGH-RISK-FAIL-OPEN`) 아니면 manifest 직렬화다. `FAIL_CLOSED`를 선언하는 것은 여전히 옳고 linter가 요구하는 바이기도 하다. 다만 아직 엔진 전체에 걸친 런타임 스위치로 읽어서는 안 된다.
 
 ## 7. Interlock Ledger
 
@@ -333,13 +366,13 @@ Gateway event 없음 + Target event 있음   → CONTROL_BYPASS
 ## 11. MVP 완료 기준
 
 - 개발자가 Actor 두 개를 선언하고 `connect()`로 관계를 만들 수 있다.
-- 기존 Tool을 `wrap()`해 호출 전 정책을 집행할 수 있다.
+- 기존 Tool을 `wrap()`해 호출 전 정책을 집행할 수 있다. *(충족. 단 막다른 길이 하나 있다 — 외부 쓰기는 SDK에서 승인할 수 없다. §4.2 참고.)*
 - 모든 호출에 trace와 Interaction Event가 생성된다.
 - 선언되지 않은 Actor 관계를 탐지한다.
 - 비신뢰 입력이 외부 쓰기 Tool로 전달될 때 HOLD/BLOCK한다.
 - 정적 설계 그래프와 단일 trace 실행 그래프를 표시한다.
 - 차단 판정과 실제 집행 결과를 별도로 조회한다.
-- Runtime 장애 시 관계별 failureMode가 동작한다.
+- Runtime 장애 시 관계별 failureMode가 동작한다. *(부분 충족 — §6 참고. 현재 이 값을 읽는 곳은 `egress.py`뿐이다.)*
 
 ## 12. 제품 명명 체계
 

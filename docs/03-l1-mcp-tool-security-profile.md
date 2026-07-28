@@ -136,6 +136,10 @@ The MCP Host owns the user's intent and the model context, while the MCP Client 
 
 **Controls.** Prohibit token passthrough and use per-hop token exchange/downscoping. Verify issuer, audience, resource, scope, tenant, and actor binding in full, and bind the OAuth state to the session for single use.
 
+> **What the reference core actually compares.** Of the six fields above, the M5 checks in `policy.py` read **audience**, **resource**, **actor**, **delegation depth**, and the exchange flag. They do **not** read `CredentialClaims.scopes` or `.subject` — neither field has a single reader in `src/`. `.issuer` is read once, in `gateway.py:541`, only to write it into the ledger payload; nothing compares it. `.tenant_id` is read once, by the A2A boundary check (`policy.py:387`), and never at the MCP gateway.
+>
+> Scope broadening is caught, but elsewhere and by a different mechanism: `mcp_oauth.py` rejects it at OAuth challenge time under `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH`. No `Check` in the shared table enforces it, so it will never appear in a `CONTROL_EVALUATED` reason list. Issuer and subject verification is the token verifier's job before a `CredentialClaims` is built at all — which is what `CredentialClaims.authenticated` records, and what `L1-M5-CREDENTIAL-MISSING` now refuses when it is false.
+
 ### 6.6 M6 — Malicious/Compromised MCP Server → Client/Host Compromise
 
 **Mechanism.** The Server embeds dangerous schemes, shell metacharacters, local files, or internal addresses in D1/D4 such as the authorization endpoint, redirect, tool result, or resource URL. If the Client passes these to a shell command, browser, or a vulnerable parser, process execution, SSRF, or file access occurs on the Host.
@@ -197,7 +201,7 @@ Agent Host --INVOKES--> MCP Tool --SENDS/READS/WRITES--> External Resource
 |---|---|---|
 | P0 | definition canonicalization·digest pin·drift quarantine | M1, M2, M3 |
 | P0 | Adjudicate Tool argument schema, destination, sensitivity, and side effect | M1, M3, M8, M9 |
-| P0 | Verify audience/scope/resource/tenant and prohibit token passthrough | M5 |
+| P0 | Verify audience/resource/actor binding and prohibit token passthrough; require an *authenticated* credential (scope is enforced at OAuth challenge time, not by a `Check` — see §6.5) | M5 |
 | P0 | URL validation, Connector sandbox, process/network observation | M4, M6 |
 | P0 | Source-to-destination egress policy and pre-transaction blocking | M9 |
 | P0 | When side effects/destinations exceed the ActorSpec declaration, block pre-execution and recover post-execution (declared-vs-observed reconciliation) | M1, M4, M9 |

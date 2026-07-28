@@ -108,7 +108,7 @@ spec:
   type: TOOL
   identity: spiffe://prod.example/mcp/trusted-mail/send-email
   capabilities: [EMAIL_SEND]
-  dataAccess: [CUSTOMER_NAME, CUSTOMER_EMAIL]
+  dataAccess: [D2, D3, D7]
   sideEffects: [EXTERNAL_WRITE]
   tenantMode: REQUIRED
   failureMode: FAIL_CLOSED
@@ -130,6 +130,8 @@ spec:
 ```
 
 `definitionDigest`는 승인 revision을 가리킨다. 실제 `tools/list`에서 관측된 digest는 Registry가 관리하고 실행 전에 둘을 비교한다.
+
+`dataAccess`는 [03 §4](03-l1-mcp-tool-security-profile.ko.md)의 `D1`–`D9` 코드를 쓰며, 아래 LinkPolicy `data.allowedClasses`와 같은 어휘다. 이 Actor를 대상으로 하는 모든 link policy의 **상위집합**이어야 하고, 아니면 `ARCH-DATA-CLASS-EXCEEDS-ACTOR`가 컴파일을 거부한다. 다만 이것은 설계 시점 선언일 뿐이다. `ActorSpec.data_access`를 읽는 런타임 check는 없다.
 
 ## 6. LinkPolicy 확장
 
@@ -170,6 +172,10 @@ spec:
 ```
 
 정책은 Tool description이 안전하다고 판정했더라도 D3와 실제 목적지를 독립적으로 평가한다. `mode`는 `OBSERVE`, `SHADOW`, `ENFORCE` 중 하나이며 이벤트에는 평가 모드와 실제 집행 여부를 모두 기록한다.
+
+> **이 중 loader가 실제로 읽는 것.** `src/`에는 `kind: LinkPolicy` manifest loader가 없다. 문서에서 `LinkPolicy`로 가는 유일한 경로는 Architecture manifest의 `edge.policy` 블록이며, `_parse_edge`(`architecture.py:1236-1261`)가 고정된 키 목록만 읽는다: `id`, `version`, `mode`, `relationship`, `allowedPurposes`, `allowedDataClasses`, `deniedDataClasses`, `requireActiveDefinition`, `requireDigestPin`, `requireExplicitDestination`, `newDestinationAction`, `tokenPassthrough`, `requireAudience`, `requireResource`, `requireActorBinding`, `maxDelegationDepth`, `externalWriteRequiresApproval`, `failureMode`, `decisionTtlSeconds`.
+>
+> 위 YAML의 나머지는 전부 **조용히 무시된다** — `data.secretAction`, `data.propagateTaint`, `toolDefinition.allowCrossServerReferences`, 그리고 `sideEffects` 블록 전체가 그렇다. 이 통제들은 존재하고 실제로 동작하지만 Python 기본값(`secret_action=BLOCK`, `destructive_write_action=BLOCK`, `undeclared_side_effect_action=BLOCK`)으로만 동작하며, 용량 상한 `max_export_records`/`max_export_bytes`는 기본값이 `0`이라 manifest로 만든 정책에서는 `L1-M9-VOLUME-EXCEEDED`가 **비활성** 상태로 남는다. 여기에 `secretAction: ALLOW`를 써도 secret 통제가 꺼지지 않고, `undeclared: BLOCK`을 써도 이미 켜져 있지 않던 무언가가 켜지지는 않는다. parser와 `schemas/architecture.schema.json`이 이 값들을 지원하기 전까지는 Python에서 `LinkPolicy`를 직접 구성해 설정한다.
 
 ## 7. 처리 파이프라인
 
@@ -298,27 +304,65 @@ payload:
 
 ## 9. Reason code
 
+### 9.1 Gateway 정책 엔진이 방출하는 코드
+
+`GATEWAY_PROFILE`이 실제로 내보낼 수 있는 코드의 전체 집합이다 — check 18개가 코드 19개를 만든다(`policy.py`). “기본 판정”은 기본 `LinkPolicy`에서 해당 check가 반환하는 값이다. 운영자가 설정할 수 있는 `LinkPolicy` action 필드가 판정을 좌우하는 경우에는 그 필드를 Python 표기로 적었다. 대부분은 애초에 manifest로 설정할 수 없기 때문이다(§6 참고).
+
 | Code | 조건 | 기본 판정 |
 |---|---|---|
-| `L1-M1-METADATA-INSTRUCTION` | D1에 기능과 무관한 명령·데이터 접근 요구 | `QUARANTINE` |
+| `INTERLOCK-ACTOR-TYPE-DENIED` | source 또는 target Actor type이 `sourceTypes`/`targetTypes` 밖 | `BLOCK` |
+| `INTERLOCK-PURPOSE-DENIED` | purpose가 `allowedPurposes` 밖 (해당 집합이 비어 있지 않을 때만 활성화) | `BLOCK` |
+| `L1-M2-DEFINITION-NOT-ACTIVE` | revision이 `ACTIVE`가 아님. `revision.reason_codes`가 있으면 그대로 전달 | `QUARANTINE` |
 | `L1-M2-DEFINITION-DRIFT` | observed와 approved digest 불일치 | `QUARANTINE` |
-| `L1-M3-CROSS-SERVER-REFERENCE` | D1이 다른 namespace Tool을 조종 | `BLOCK` |
-| `L1-M4-UNTRUSTED-PUBLISHER` | provenance/signature 정책 실패 | `QUARANTINE` |
-| `L1-M4-SIGNATURE-INVALID` | trusted publisher의 provenance 서명 누락·불일치 | `QUARANTINE` |
-| `L1-M4-PROVENANCE-DENIED` | repository·revision·build provenance 정책 실패 | `QUARANTINE` |
-| `L1-M4-EGRESS-DENIED` | runtime 목적지가 exact egress allowlist 밖 | `BLOCK`+workload 종료 |
-| `L1-M4-EGRESS-BINDING-MISMATCH` | tenant·workload·artifact·provenance·sandbox profile 불일치 | `BLOCK`+workload 종료 |
-| `L1-M4-PROCESS-TERMINATION-FAILED` | egress 차단 뒤 workload 종료 확인 실패 | `BLOCK`+Incident |
-| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | token audience/resource 불일치 | `BLOCK` |
-| `L1-M5-TOKEN-PASSTHROUGH` | 교환 없는 downstream 전달 | `BLOCK` |
-| `L1-M6-UNSAFE-AUTH-URL` | scheme/host/redirect/IP 정책 실패 | `BLOCK` |
-| `L1-M7-CONFIG-DRIFT` | runtime과 승인 config digest 불일치 | `BLOCK` |
-| `L1-M8-CREDENTIAL-DETECTED` | D3/D4/context에서 D5 fingerprint 탐지 | `SANITIZE`/`BLOCK` |
-| `L1-M9-NEW-DESTINATION` | 승인되지 않은 외부 목적지 | `HOLD` |
-| `L1-M9-SENSITIVE-EGRESS` | 민감 D7이 외부 쓰기로 이동 | `BLOCK`/`HOLD` |
-| `L1-UNDECLARED-SIDE-EFFECT` | 부작용이 ActorSpec 선언 sideEffects를 초과 | 실행 전 `BLOCK` · 실행 후 `REVOKE`+보상 |
+| `INTERLOCK-INPUT-SCHEMA-INVALID` | 인수가 revision의 input schema 검증에 실패, 없으면 `ActorSpec.input_schema`로 fallback | `BLOCK` |
+| `INTERLOCK-DATA-CLASS-DENIED` | intent가 거부 등급을 담고 있거나 `allowedDataClasses` 밖의 등급을 담고 있음 | `BLOCK` |
+| `L1-M9-SENSITIVE-EGRESS` | 위와 같은 check. *거부된* 등급이 `D7`일 때 대신 방출 | `BLOCK` |
+| `L1-M8-CREDENTIAL-DETECTED` | 인수에서 D5 fingerprint 탐지 | `secret_action` (`BLOCK`) |
+| `L1-M9-NEW-DESTINATION` | 목적지를 파싱할 수 없거나, target의 `allowedDomains` 밖이거나, 필수인데 없음 | `new_destination_action` (`HOLD`) |
+| `L1-M9-VOLUME-EXCEEDED` | 예상 레코드 수 또는 바이트가 상한 초과 (상한이 설정된 경우에만 활성화) | `volume_action` (`BLOCK`) |
+| `L1-UNDECLARED-SIDE-EFFECT` | 부작용이 ActorSpec 선언 `sideEffects`를 초과 | `undeclared_side_effect_action` (`BLOCK`) |
+| `INTERLOCK-DESTRUCTIVE-WRITE` | intent가 `DESTRUCTIVE_WRITE` | `destructive_write_action` (`BLOCK`) |
+| `INTERLOCK-TAINTED-EXTERNAL-WRITE` | `EXTERNAL_WRITE`에 taint label이 있음 | `BLOCK`, 무조건 |
+| `INTERLOCK-APPROVAL-REQUIRED` | 유효한 승인 없는 `EXTERNAL_WRITE` (`externalWriteRequiresApproval`로 활성화) | `HOLD` |
+| `L1-M5-CREDENTIAL-MISSING` | intent가 audience 또는 resource를 요구하는데 **인증된** credential이 없음 | `BLOCK` |
+| `L1-M5-TOKEN-PASSTHROUGH` | 교환 없는 downstream 전달 (`tokenPassthrough`가 false일 때 활성화) | `BLOCK` |
+| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | token audience 또는 resource 불일치 (`requireAudience`/`requireResource`로 활성화) | `BLOCK` |
+| `L1-M5-TOKEN-ACTOR-MISMATCH` | acting subject가 source Actor에 결합되지 않음 (`requireActorBinding`으로 활성화) | `BLOCK` |
+| `L1-M5-DELEGATION-DEPTH` | 위임 깊이가 `maxDelegationDepth` 초과 | `BLOCK` |
 
-`L1-Mn-*`는 특정 위협에 묶인 코드이고, `L1-UNDECLARED-*`처럼 여러 위협에 걸치는 교차 코드는 `L1-*` 형식을 쓴다. Reason code는 안정적인 분석 키다. 사람용 설명은 별도 필드로 지역화하며 code 의미를 재사용해 바꾸지 않는다.
+이 표가 담고 있지만 틀리기 쉬운 것이 셋 있다.
+
+- **`INTERLOCK-DATA-CLASS-DENIED`와 `L1-M9-SENSITIVE-EGRESS`는 하나의 check**, `_data_classes`가 두 reason key 중 하나를 고르는 것이다. `deniedDataClasses`에 `D7`이 있을 **때에만** `L1-M9-SENSITIVE-EGRESS`를 선택하며, `estimated_side_effect`는 아예 읽지 않는다. 즉 “민감 데이터가 외부 쓰기로 이동”은 이 check의 조건이 아니다. 기본 `LinkPolicy`에서 `D7`은 *허용* 쪽에 있고 거부 쪽에는 없으므로 **`L1-M9-SENSITIVE-EGRESS`는 기본 설정에서 도달할 수 없다.** D7 egress를 잡으려는 배포는 `deniedDataClasses`에 `D7`을 명시적으로 넣어야 한다.
+- **`L1-M5-TOKEN-AUDIENCE-MISMATCH`는 통제 두 개를 덮는다.** audience 비교와 resource 비교는 하나의 check id가 두 key를 방출하는 형태이며, 기존 문자열을 유지하려고 `L1-M5-TOKEN-RESOURCE-MISMATCH`를 `L1-M5-TOKEN-AUDIENCE-MISMATCH`로 rename했다. `L1-M9-VOLUME-EXCEEDED`도 레코드 수와 바이트에 대해 같은 형태다.
+- **`L1-M2-DEFINITION-NOT-ACTIVE`는 `revision.reason_codes`의 임의 registry 문자열을 그대로 전달**하므로, 이 행에서 방출되는 key 집합은 닫혀 있지 않다.
+
+### 9.2 MCP 경로의 다른 곳에서 방출되는 코드
+
+Gateway 집행 전체의 일부이지만 공유 check 표의 어떤 `Check`도 아닌 다른 컴포넌트가 만들어내는 코드다.
+
+**그중 둘은 전달(forwarding)을 통해 여전히 `payload.control.reasonCodes`에 도달한다.** `registry.py`가 `L1-M1-METADATA-INSTRUCTION`과 `L1-M3-CROSS-SERVER-REFERENCE`를 `ToolRevision.reason_codes`에 기록하고, `_definition_state`가 revision이 `ACTIVE`가 아닐 때마다 그 tuple을 그대로 전달한다. 그래서 격리된 revision은 check id `L1-M2-DEFINITION-NOT-ACTIVE` 아래에서 `reasonCodes: ["L1-M1-METADATA-INSTRUCTION"]`을 낸다. 이 표의 나머지 코드는 각자의 경로에서 방출되며 `CONTROL_EVALUATED` control 블록에는 나타나지 않는다.
+
+이 전달은 통계에 영향을 준다. 방출된 key가 그것을 만든 check id와 다를 수 있고, key 집합이 **닫혀 있지 않다** — registry가 기록한 것이 곧 key다. profile의 `reason_codes` map은 그런 문자열이 rename key와 우연히 겹치면 그대로 rename해버린다. 커버리지와 reason code의 join은 `Profile.reason_codes`를 거치고, 이 표에 대한 문자열 매칭으로 하지 않는다.
+
+| Code | 생성 주체 | 조건 | 기본 판정 |
+|---|---|---|---|
+| `L1-M1-METADATA-INSTRUCTION` | `registry.py` | D1에 기능과 무관한 명령·데이터 접근 요구 | `QUARANTINE` |
+| `L1-M3-CROSS-SERVER-REFERENCE` | `registry.py` | D1이 다른 namespace Tool을 조종 | `BLOCK` |
+| `L1-M4-UNTRUSTED-PUBLISHER` | `supply_chain.py` | provenance/signature 정책 실패 | `QUARANTINE` |
+| `L1-M4-SIGNATURE-INVALID` | `supply_chain.py` | trusted publisher의 provenance 서명 누락·불일치 | `QUARANTINE` |
+| `L1-M4-PROVENANCE-DENIED` | `supply_chain.py` | repository·revision·build provenance 정책 실패 | `QUARANTINE` |
+| `L1-M4-EGRESS-DENIED` | `egress.py` | runtime 목적지가 exact egress allowlist 밖 | `BLOCK`+workload 종료 |
+| `L1-M4-EGRESS-BINDING-MISMATCH` | `egress.py` | tenant·workload·artifact·provenance·sandbox profile 불일치 | `BLOCK`+workload 종료 |
+| `L1-M4-PROCESS-TERMINATION-FAILED` | `egress.py` | egress 차단 뒤 workload 종료 확인 실패 | `BLOCK`+Incident |
+| `L1-M6-UNSAFE-AUTH-URL` | `security.py` | scheme/host/redirect/IP 정책 실패 | `BLOCK` |
+| `L1-M7-CONFIG-DRIFT` | `config_guard.py` | runtime과 승인 config digest 불일치 | `BLOCK` |
+| `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH` | `mcp_oauth.py` | challenge가 보유한 것보다 넓은 scope를 요구 | challenge 시점에 거부 |
+
+### 9.3 Namespace와 안정성
+
+`L1-Mn-*`는 특정 위협에 묶인 코드이고, `L1-UNDECLARED-*`처럼 여러 위협에 걸치는 교차 코드는 `L1-*` 형식을 쓴다. `INTERLOCK-*`는 단일 L1 위협에 매핑되지 않는 집행 엔진 판정이다. Reason code는 안정적인 분석 키다. 사람용 설명은 별도 필드로 지역화하며 code 의미를 재사용해 바꾸지 않는다.
+
+**Reason code는 집행점마다 다르며 집행점 간에 비교할 수 없다.** A2A broker는 같은 통제를 `A2A-*` 이름으로 방출한다 — gateway의 `L1-M5-TOKEN-AUDIENCE-MISMATCH`가 broker에서는 `A2A-AUDIENCE-MISMATCH`이고, `INTERLOCK-DATA-CLASS-DENIED`와 `L1-M9-SENSITIVE-EGRESS`는 둘 다 `A2A-DATA-CLASS-DENIED` 하나로 합쳐진다. SDK는 gateway와 같은 이름을 방출하되 `L1-M9-SENSITIVE-EGRESS`를 `INTERLOCK-DATA-CLASS-DENIED`로 접어 넣고 M2 코드 2개는 전혀 방출하지 않는다. 집행점 간 비교는 canonical check id를 기준으로 집계하고, reason code와의 join은 반드시 `Profile.reason_codes`를 거친다.
 
 ## 10. 내부 API 경계
 

@@ -16,13 +16,21 @@ status: active
 - 언어: Python 3.11
 - 배포 형태: 외부 의존성이 없는 reference core + optional psycopg PostgreSQL adapter
 - 기준 명세: `03`–`05` version 1.1
-- 구현 모드: 메모리 Registry, 메모리/PostgreSQL Session·OAuth·Config Store, 메모리/PostgreSQL Ledger, A2A Broker와 bounded task orchestration
+- 구현 모드: 메모리/PostgreSQL Registry(`InMemoryRevisionStore` · `PostgreSQLRevisionStore`), 메모리/PostgreSQL Session·OAuth·Config Store, 메모리/PostgreSQL Ledger, A2A Broker와 bounded task orchestration
 
 ## 계약 추적
 
 | 계약 | 구현 | 검증 |
 |---|---|---|
-| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests` |
+| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests`(**시험 한 개** — `define`/`connect`/graph 배선만), `tests/test_sdk_profile.py`(시험 14개: `wrap()`이 실행하는 check 16개, 그 rename map, 실행 게이트) |
+| 통합 check 표·profile | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(26)·`run_checks` | `tests/test_check_table.py`(시험 20개: 표 구성, 커버리지 상태 3종, check별 `armed`, 중복 id 거부) |
+| 집행점별 profile | `GATEWAY_PROFILE`(18) · `SDK_PROFILE`(16) · `A2A_PROFILE`(16) → `A2A_LINK_PROFILE`(11)·`A2A_BOUNDARY_PROFILE`(5) | profile마다 산출되는 코드 집합만이 아니라 rename map **전체**를 고정; 방출 가능한 reason key가 모두 매핑돼 있는지 정적 감사 |
+| 판정 심각도 순서 | `models.py` `_DECISION_RANK`(`ControlDecision` 멤버 11개 전부, fallback 없음; 완전하지 않으면 import 시점에 `RuntimeError`) | `tests/test_decision_ranking.py`(시험 12개: 완전성, 충돌 쌍을 이름으로 지목하는 유일성, `BYPASSED`가 `ALLOW`보다 아래, `ERROR`가 `QUARANTINE`보다 아래) |
+| 심각도와 분리해 집계하는 실행 permit | `policy.execution_permitted`, `PolicyDecisionRecord.execution_permitted`를 `permits_execution`으로 AND 결합 | `tests/test_execution_permit.py`(시험 10개; `[ALLOW, BYPASSED]`가 실행을 허용하지 **않음**을 고정) |
+| 모드와 무관한 "정책이 이의를 제기함" | `PolicyDecisionRecord.would_block`, `!= ALLOW`가 아니라 `_DECISION_RANK`에서 유도 | `tests/test_decision_ranking.py`; 남아 있는 `!= ALLOW` 술어 5개와 `BYPASSED`에서 어긋나는 것은 **의도된 것** |
+| credential 검증은 credential 존재가 아니다 | `CredentialClaims.authenticated`(기본값 `False`); `_credential_missing`이 이를 요구 | `tests/test_check_table.py`, `tests/test_sdk_profile.py` — 검증되지 않은 claims blob은 M5 정상 통과가 아니라 `L1-M5-CREDENTIAL-MISSING`이다 |
+| Link data class를 target Actor의 grant로 제한 | `architecture.py:806-818` `ARCH-DATA-CLASS-EXCEEDS-ACTOR`(CRITICAL, compile 차단) | `tests/test_architecture.py`; **`dataAccess`가 비어 있는 Actor는 건너뛰며, 이는 모든 Studio export에 해당한다** — [07 §5.7](07-security-architecture-studio-design.ko.md) 참고 |
+| 구조 개편에 앞서 고정한 병합 이전 동작 | — | `tests/test_policy_characterization.py`, `tests/test_a2a_characterization.py`(이전에 커버되지 않던 reason code 25개) |
 | 정적 설계·단일 trace graph 데이터 | `Interlock.design_graph`, `runtime_graph` | `test_define_connect_wrap_and_graph` |
 | Canonical/raw definition digest | `canonical.py`, `registry.py` | `CanonicalizationTests`, `RegistryTests` |
 | Definition 상태와 digest pin | `DefinitionRegistry` | M2 drift 회귀 시험 |
@@ -107,7 +115,7 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.ko.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-2026-07-20 전체 회귀는 Python 454개 test 통과·12개 skip·15개 subtest 통과 + Studio 8개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+현재 전체 회귀는 CI 경로(`PYTHONPATH=src:tests python3 -m unittest discover -s tests`)에서 **`Ran 542 tests, OK (skipped=12)`**이며, 여기에 Studio 8개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)가 더해진다. 통합 판정 엔진 작업으로 시험 파일 6개 — `test_policy_characterization.py`, `test_a2a_characterization.py`, `test_check_table.py`, `test_sdk_profile.py`, `test_decision_ranking.py`, `test_execution_permit.py` — 가 추가됐고 `test_core.py`, `test_architecture.py`, `test_l1_matrix.py`, `test_scaffold.py`가 확장됐다. 이전에 게시한 454라는 숫자는 이 모든 작업보다 앞선 값이고, 수집 방식이 다른 `pytest` 경로에서 측정한 것이다. optional extra 없이 체크아웃하면 `pytest`에서는 적게 수집되므로, 인용할 숫자는 `unittest` 쪽이다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service

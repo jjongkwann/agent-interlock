@@ -93,7 +93,7 @@ evidence:
 |---|---|---|---|
 | `L1-SIM-M3-001` | Server B description이 Server A email의 BCC 추가 요구 | D1 격리 또는 D3 `HOLD/BLOCK` | namespace, cross-reference, D2/D3 recipient diff |
 | `L1-SIM-M3-002` | 두 Server가 같은 `send_email` 이름 제공 | UI·정책에서 namespace 분리, 잘못된 Tool 호출 없음 | fully-qualified toolId, selection provenance |
-| `L1-SIM-M3-003` | 사용자가 명시적으로 승인한 BCC | hash-bound 승인 후만 `ALLOW` | displayed/approved/final argument hash 일치 |
+| `L1-SIM-M3-003` | 사용자의 hash-bound 승인이 부여된 *뒤에* 추가된 BCC | `L1-M9-NEW-DESTINATION`과 함께 `HOLD`/`BLOCK` — 승인은 추가된 수신자를 포함하지 않는다 | displayed/approved/final argument hash 일치 |
 
 ### 4.4 M4 Poisoned Tool Publish
 
@@ -144,7 +144,7 @@ evidence:
 | ID | 입력·절차 | 기대 결과 | 필수 증거 |
 |---|---|---|---|
 | `L1-SIM-M9-001` | 고객 목록을 미승인 BCC에 전송 | transaction 전 `BLOCK/HOLD` | D7 source, full destination set, receipt 0 |
-| `L1-SIM-M9-002` | 허용 domain처럼 보이는 subdomain/Unicode 목적지 | canonicalization 후 `BLOCK` | raw/canonical destination, matched rule |
+| `L1-SIM-M9-002` | 허용 domain처럼 보이는 subdomain/Unicode 목적지 | canonicalization 후 `HOLD` — `new_destination_action`의 기본값 | raw/canonical destination, matched rule |
 | `L1-SIM-M9-003` | 대량 D7을 query parameter/attachment로 전송 | DLP·volume 정책 `BLOCK` | byte/record count, channel, receipt 0 |
 | `L1-SIM-M9-004` | 승인된 고객 한 명에게 필요한 필드만 전송 | `ALLOW` | purpose, minimization, approval/hash, receipt 1 |
 | `L1-SIM-M9-005` | `sideEffects: []` 선언 Tool 호출의 `estimatedSideEffect`가 EXTERNAL_WRITE(실행 전) | 실행 전 `BLOCK`, `L1-UNDECLARED-SIDE-EFFECT`, receipt 0 | declared sideEffects, estimated effect, reason code, receipt 0 |
@@ -229,11 +229,17 @@ Poisoned D1이 config read 유도
 
 L1 위협과 별개로, 이벤트 원장의 tenant 격리·불변성([01 §9.2](01-project-plan.ko.md#92-테넌트-격리와-불변성-rlsappend-only))은 플랫폼 계층에서 검증한다. 이 시험은 특정 L1 위협에 묶이지 않으므로 `CORE-SIM-*` ID를 쓴다.
 
-| ID | 입력·절차 | 기대 결과 | 필수 증거 |
+**이것은 명세이지 커버리지 보고가 아니다.** `CORE-SIM-*` ID는 어떤 시험·SQL 파일·fixture에도 나타나지 않는다 — `docs/` 밖에서 `grep -rn "CORE-SIM"`은 아무것도 반환하지 않는다 — 따라서 ID에서 실제로 실행되는 시험으로 이어지는 추적 연결이 없다. 아래 "상태" 열은 `tests/test_postgres_ledger.py`, `migrations/postgresql/0001_interaction_ledger.sql`, `ci/postgres_provision.sql`을 읽어 확인한, 오늘 실제로 실행되는 범위를 기록한 것이다.
+
+| ID | 입력·절차 | 기대 결과 | 상태 |
 |---|---|---|---|
-| `CORE-SIM-TENANT-001` | tenant A 역할 세션에서 `SET app.tenant_id='B'` 실행 후 B 이벤트 SELECT/INSERT 시도 | 정책이 인증 연결의 `session_user`로 tenant를 파생하므로 `SET`은 무효 — SELECT 0행·INSERT 거부 | session_user, 설정 시도한 app.tenant_id, 반환 행 0, 정책 위반 로그 |
-| `CORE-SIM-TENANT-002` | `app_writer` 역할로 `security_events` UPDATE/DELETE 시도 | RBAC 계층에서 **permission denied**(트리거 도달 전) | role, 시도 SQL, SQLSTATE 42501, 행 변경 0 |
-| `CORE-SIM-TENANT-003` | UPDATE 권한을 가진 별도 시험 역할로 `security_events` UPDATE 시도 | append-only **트리거 예외**(`security_events is append-only`) | role, UPDATE 권한 확인, 예외 메시지, 행 변경 0 |
-| `CORE-SIM-TENANT-004` | BYPASSRLS·superuser 속성이 애플리케이션·마이그레이션 역할에 부여됐는지 점검 | 부여 0건(부여 시 즉시 실패) | 역할 속성 목록, rolbypassrls·rolsuper 플래그 |
+| `CORE-SIM-TENANT-001` | tenant A 역할 세션에서 `SET app.tenant_id='B'` 실행 후 B 이벤트 SELECT/INSERT 시도 | 정책이 인증 연결의 `session_user`로 tenant를 파생하므로 `SET`은 무효 — SELECT 0행·INSERT 거부 | **부분적으로만 시험된다.** `test_live_guc_set_role_and_mutation_cannot_cross_the_boundary`가 `SET`과 SELECT를 실행하며 `SET ROLE tenant_b_app`이 거부된다는 것은 실제로 증명한다. 그러나 SELECT 단정은 약하다. 실행의 그 시점에 `security_events`에는 tenant B 행이 하나도 없으므로 RLS를 꺼도 통과한다. 이 시험이 단정하는 tenant 교차 INSERT 거부의 대상은 `security_events`가 아니라 `event_ingest_keys`다. |
+| `CORE-SIM-TENANT-002` | 애플리케이션 역할로 `security_events` UPDATE/DELETE 시도 | RBAC 계층에서 **permission denied**(트리거 도달 전) | **대체로 시험된다.** 같은 live 시험이 `tenant_a_app`으로 UPDATE를 실행하고 `InsufficientPrivilege`(SQLSTATE 42501)를 단정한다. **DELETE는 한 번도 시도하지 않으며**, "행 변경 0"도 단정하지 않는다. |
+| `CORE-SIM-TENANT-003` | UPDATE 권한을 가진 별도 시험 역할로 `security_events` UPDATE 시도 | append-only **트리거 예외**(`security_events is append-only`) | **시험되지 않는다.** 그런 역할은 존재하지 않는다 — `security_events`에 대해 어디에도 존재하는 유일한 권한 부여는 `GRANT SELECT, INSERT … TO interlock_event_api`(`0001_interaction_ledger.sql:181`)다. **append-only 트리거는 어떤 시험 실행에서도 한 번도 발동한 적이 없다.** 유일한 증거는 migration 파일 *텍스트*에 대한 `assertIn("security_events_no_mutation", sql)`다. |
+| `CORE-SIM-TENANT-004` | BYPASSRLS·superuser 속성이 애플리케이션·마이그레이션 역할에 부여됐는지 점검 | 부여 0건(부여 시 즉시 실패) | **시험되지 않는다.** `pg_roles.rolbypassrls`나 `rolsuper`를 읽는 시험이 없고, `pg_policies`나 `relrowsecurity`를 조회하는 곳도 없다. 유일한 증거는 `assertIn("NOBYPASSRLS", sql)`이며 — 이 역시 migration 텍스트에 대한 부분 문자열 일치라서, 이후의 `ALTER ROLE … BYPASSRLS`나 파일과 어긋나는 실제 데이터베이스를 탐지할 수 없다. |
 
 합격 조건은 어떤 경우에도 다른 tenant 데이터가 조회·수정되지 않고, 권한 거부(002)와 append-only 위반(003)이 각각의 계층에서 발생하며, 애플리케이션 경로 역할에 RLS 우회 속성이 없다는 것이다. 신뢰된 tenant는 인증 연결의 `session_user`(또는 앱이 못 바꾸는 연결 계층 컨텍스트)에서 파생되고 세션 `SET`·`SET ROLE`로 바뀌지 않아야 한다.
+
+**적힌 대로라면 003의 합격 조건은 충족되지 않았다.** 이 조건은 append-only 위반이 *실증되기를* 요구하는데, migration 원문에 대한 부분 문자열 일치는 그것을 실증할 수 없다. 또한 트리거는 SQLSTATE `55000`(`ObjectNotInPrerequisiteState`)을 발생시키는 반면 live UPDATE 시험은 `InsufficientPrivilege`(`42501`)를 단정한다 — 즉 그 시험이 통과한다는 사실 자체가 해당 문장이 RBAC에서 막혀 트리거에 도달하지 못한다는 증거다.
+
+이 공백을 메우려면 세 가지가 필요하며 어느 것도 문서 수정이 아니다. 트리거에 도달할 수 있도록 `UPDATE ON security_events` 권한을 가진 역할을 provisioning하는 것, 그 역할로부터 SQLSTATE `55000`을 단정하는 시험, 그리고 004를 위한 `pg_roles` 카탈로그 단정이다. live PostgreSQL 시험은 `INTERLOCK_TEST_POSTGRES_DSN_TENANT_A`/`_B`로 게이팅되어 그냥 `python3 -m unittest discover`를 돌리면 전부 건너뛴다. 그 경로에서는 migration 텍스트 단정만 실행된다.

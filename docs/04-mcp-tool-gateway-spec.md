@@ -108,7 +108,7 @@ spec:
   type: TOOL
   identity: spiffe://prod.example/mcp/trusted-mail/send-email
   capabilities: [EMAIL_SEND]
-  dataAccess: [CUSTOMER_NAME, CUSTOMER_EMAIL]
+  dataAccess: [D2, D3, D7]
   sideEffects: [EXTERNAL_WRITE]
   tenantMode: REQUIRED
   failureMode: FAIL_CLOSED
@@ -130,6 +130,8 @@ spec:
 ```
 
 `definitionDigest` points to the approved revision. The digest actually observed from `tools/list` is managed by the Registry, and the two are compared before execution.
+
+`dataAccess` uses the `D1`–`D9` codes from [03 §4](03-l1-mcp-tool-security-profile.md), the same vocabulary as the LinkPolicy `data.allowedClasses` below. It must be a **superset** of every link policy that targets this Actor, or `ARCH-DATA-CLASS-EXCEEDS-ACTOR` refuses the compile. Note it is a design-time declaration only: no runtime check reads `ActorSpec.data_access`.
 
 ## 6. LinkPolicy Extension
 
@@ -170,6 +172,10 @@ spec:
 ```
 
 Even if the Tool description asserts it is safe, the policy independently evaluates D3 and the actual destination. `mode` is one of `OBSERVE`, `SHADOW`, or `ENFORCE`, and events record both the evaluation mode and whether enforcement actually occurred.
+
+> **Which of these the loader actually reads.** There is no `kind: LinkPolicy` manifest loader in `src/`. The only path from a document to a `LinkPolicy` is an Architecture manifest's `edge.policy` block, parsed by `_parse_edge` (`architecture.py:1236-1261`), and it reads a fixed key list: `id`, `version`, `mode`, `relationship`, `allowedPurposes`, `allowedDataClasses`, `deniedDataClasses`, `requireActiveDefinition`, `requireDigestPin`, `requireExplicitDestination`, `newDestinationAction`, `tokenPassthrough`, `requireAudience`, `requireResource`, `requireActorBinding`, `maxDelegationDepth`, `externalWriteRequiresApproval`, `failureMode`, `decisionTtlSeconds`.
+>
+> Everything else in the YAML above is **silently ignored** — `data.secretAction`, `data.propagateTaint`, `toolDefinition.allowCrossServerReferences`, and the whole `sideEffects` block. Those controls exist and run, but only at their Python defaults (`secret_action=BLOCK`, `destructive_write_action=BLOCK`, `undeclared_side_effect_action=BLOCK`), and the volume caps `max_export_records`/`max_export_bytes` default to `0`, which leaves `L1-M9-VOLUME-EXCEEDED` **disarmed** on any policy built from a manifest. Writing `secretAction: ALLOW` here does not disable the secret control, and writing `undeclared: BLOCK` does not enable anything that was not already on. Set these by constructing `LinkPolicy` in Python until the parser and `schemas/architecture.schema.json` carry them.
 
 ## 7. Processing Pipeline
 
@@ -298,27 +304,65 @@ Events are grouped by the same `interaction_id`, and internal Server transaction
 
 ## 9. Reason Codes
 
+### 9.1 Emitted by the gateway's policy engine
+
+These are the complete set `GATEWAY_PROFILE` can put on the wire — 18 checks producing 19 codes (`policy.py`). "Default verdict" is what the check returns under a default `LinkPolicy`; where an operator-configurable `LinkPolicy` action field governs it, that field is named in its Python spelling, because most of them cannot be set from a manifest at all (see §6).
+
 | Code | Condition | Default Verdict |
 |---|---|---|
-| `L1-M1-METADATA-INSTRUCTION` | D1 requests commands or data access unrelated to its function | `QUARANTINE` |
+| `INTERLOCK-ACTOR-TYPE-DENIED` | Source or target Actor type is outside `sourceTypes`/`targetTypes` | `BLOCK` |
+| `INTERLOCK-PURPOSE-DENIED` | Purpose is outside `allowedPurposes` (armed only when that set is non-empty) | `BLOCK` |
+| `L1-M2-DEFINITION-NOT-ACTIVE` | Revision is not `ACTIVE`; forwards `revision.reason_codes` when it carries any | `QUARANTINE` |
 | `L1-M2-DEFINITION-DRIFT` | Mismatch between observed and approved digest | `QUARANTINE` |
-| `L1-M3-CROSS-SERVER-REFERENCE` | D1 manipulates a Tool in another namespace | `BLOCK` |
-| `L1-M4-UNTRUSTED-PUBLISHER` | provenance/signature policy failure | `QUARANTINE` |
-| `L1-M4-SIGNATURE-INVALID` | Missing or mismatched provenance signature from a trusted publisher | `QUARANTINE` |
-| `L1-M4-PROVENANCE-DENIED` | repository/revision/build provenance policy failure | `QUARANTINE` |
-| `L1-M4-EGRESS-DENIED` | Runtime destination is outside the exact egress allowlist | `BLOCK`+workload termination |
-| `L1-M4-EGRESS-BINDING-MISMATCH` | Mismatch among tenant/workload/artifact/provenance/sandbox profile | `BLOCK`+workload termination |
-| `L1-M4-PROCESS-TERMINATION-FAILED` | Failure to confirm workload termination after egress block | `BLOCK`+Incident |
-| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | Token audience/resource mismatch | `BLOCK` |
-| `L1-M5-TOKEN-PASSTHROUGH` | Downstream forwarding without exchange | `BLOCK` |
-| `L1-M6-UNSAFE-AUTH-URL` | scheme/host/redirect/IP policy failure | `BLOCK` |
-| `L1-M7-CONFIG-DRIFT` | Mismatch between runtime and approved config digest | `BLOCK` |
-| `L1-M8-CREDENTIAL-DETECTED` | D5 fingerprint detected in D3/D4/context | `SANITIZE`/`BLOCK` |
-| `L1-M9-NEW-DESTINATION` | Unapproved external destination | `HOLD` |
-| `L1-M9-SENSITIVE-EGRESS` | Sensitive D7 moves via an external write | `BLOCK`/`HOLD` |
-| `L1-UNDECLARED-SIDE-EFFECT` | Side effect exceeds the ActorSpec's declared sideEffects | Pre-execution `BLOCK` · post-execution `REVOKE`+compensation |
+| `INTERLOCK-INPUT-SCHEMA-INVALID` | Arguments fail the revision's input schema, falling back to `ActorSpec.input_schema` | `BLOCK` |
+| `INTERLOCK-DATA-CLASS-DENIED` | Intent carries a denied class, or one outside `allowedDataClasses` | `BLOCK` |
+| `L1-M9-SENSITIVE-EGRESS` | Same check as above, emitted instead when the *denied* class is `D7` | `BLOCK` |
+| `L1-M8-CREDENTIAL-DETECTED` | D5 fingerprint detected in the arguments | `secret_action` (`BLOCK`) |
+| `L1-M9-NEW-DESTINATION` | Destination unparseable, outside the target's `allowedDomains`, or absent when required | `new_destination_action` (`HOLD`) |
+| `L1-M9-VOLUME-EXCEEDED` | Estimated records or bytes exceed the cap (armed only when a cap is set) | `volume_action` (`BLOCK`) |
+| `L1-UNDECLARED-SIDE-EFFECT` | Side effect exceeds the ActorSpec's declared `sideEffects` | `undeclared_side_effect_action` (`BLOCK`) |
+| `INTERLOCK-DESTRUCTIVE-WRITE` | Intent is a `DESTRUCTIVE_WRITE` | `destructive_write_action` (`BLOCK`) |
+| `INTERLOCK-TAINTED-EXTERNAL-WRITE` | Taint labels present on an `EXTERNAL_WRITE` | `BLOCK`, unconditional |
+| `INTERLOCK-APPROVAL-REQUIRED` | `EXTERNAL_WRITE` with no valid approval (armed by `externalWriteRequiresApproval`) | `HOLD` |
+| `L1-M5-CREDENTIAL-MISSING` | Intent expects an audience or resource and no **authenticated** credential is present | `BLOCK` |
+| `L1-M5-TOKEN-PASSTHROUGH` | Downstream forwarding without exchange (armed when `tokenPassthrough` is false) | `BLOCK` |
+| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | Token audience or resource mismatch (armed by `requireAudience`/`requireResource`) | `BLOCK` |
+| `L1-M5-TOKEN-ACTOR-MISMATCH` | Acting subject not bound to the source Actor (armed by `requireActorBinding`) | `BLOCK` |
+| `L1-M5-DELEGATION-DEPTH` | Delegation depth exceeds `maxDelegationDepth` | `BLOCK` |
 
-`L1-Mn-*` codes are tied to a specific threat, while cross-cutting codes spanning multiple threats, like `L1-UNDECLARED-*`, use the `L1-*` format. Reason codes are stable analytic keys. Human-readable descriptions are localized in a separate field, and the meaning of a code is never reused or changed.
+Three things this table encodes that are easy to get wrong:
+
+- **`INTERLOCK-DATA-CLASS-DENIED` and `L1-M9-SENSITIVE-EGRESS` are one check**, `_data_classes`, choosing between two reason keys. It selects `L1-M9-SENSITIVE-EGRESS` **iff `D7` is in `deniedDataClasses`** — it never reads `estimated_side_effect`, so "sensitive data moving via an external write" is not its condition. Under the default `LinkPolicy`, `D7` is in *allowed* and not in denied, which means **`L1-M9-SENSITIVE-EGRESS` is unreachable out of the box.** A deployment that wants D7 egress caught must put `D7` in `deniedDataClasses` explicitly.
+- **`L1-M5-TOKEN-AUDIENCE-MISMATCH` covers two controls.** The audience and resource comparisons are one check id emitting two keys, with `L1-M5-TOKEN-RESOURCE-MISMATCH` renamed onto `L1-M5-TOKEN-AUDIENCE-MISMATCH` to preserve the historical string. `L1-M9-VOLUME-EXCEEDED` has the same shape over records and bytes.
+- **`L1-M2-DEFINITION-NOT-ACTIVE` forwards arbitrary registry strings** from `revision.reason_codes`, so the emitted key set for that row is not closed.
+
+### 9.2 Emitted elsewhere in the MCP path
+
+These are part of the gateway's overall enforcement story but are produced by other components, not by any `Check` in the shared table.
+
+**Two of them still reach `payload.control.reasonCodes`, by forwarding.** `registry.py` writes `L1-M1-METADATA-INSTRUCTION` and `L1-M3-CROSS-SERVER-REFERENCE` into `ToolRevision.reason_codes`, and `_definition_state` forwards that tuple verbatim whenever the revision is not `ACTIVE` — so a quarantined revision yields `reasonCodes: ["L1-M1-METADATA-INSTRUCTION"]` under check id `L1-M2-DEFINITION-NOT-ACTIVE`. The remaining codes in this table are emitted on their own paths and never appear in a `CONTROL_EVALUATED` control block.
+
+The forwarding has a consequence for statistics: the emitted key can differ from the check id that produced it, and the key set is **unbounded** — it is whatever the registry wrote. A profile's `reason_codes` map renames such a string blindly if it happens to collide with a rename key. Join coverage to reason codes through `Profile.reason_codes`, never by matching the string against this table.
+
+| Code | Producer | Condition | Default Verdict |
+|---|---|---|---|
+| `L1-M1-METADATA-INSTRUCTION` | `registry.py` | D1 requests commands or data access unrelated to its function | `QUARANTINE` |
+| `L1-M3-CROSS-SERVER-REFERENCE` | `registry.py` | D1 manipulates a Tool in another namespace | `BLOCK` |
+| `L1-M4-UNTRUSTED-PUBLISHER` | `supply_chain.py` | provenance/signature policy failure | `QUARANTINE` |
+| `L1-M4-SIGNATURE-INVALID` | `supply_chain.py` | Missing or mismatched provenance signature from a trusted publisher | `QUARANTINE` |
+| `L1-M4-PROVENANCE-DENIED` | `supply_chain.py` | repository/revision/build provenance policy failure | `QUARANTINE` |
+| `L1-M4-EGRESS-DENIED` | `egress.py` | Runtime destination is outside the exact egress allowlist | `BLOCK`+workload termination |
+| `L1-M4-EGRESS-BINDING-MISMATCH` | `egress.py` | Mismatch among tenant/workload/artifact/provenance/sandbox profile | `BLOCK`+workload termination |
+| `L1-M4-PROCESS-TERMINATION-FAILED` | `egress.py` | Failure to confirm workload termination after egress block | `BLOCK`+Incident |
+| `L1-M6-UNSAFE-AUTH-URL` | `security.py` | scheme/host/redirect/IP policy failure | `BLOCK` |
+| `L1-M7-CONFIG-DRIFT` | `config_guard.py` | Mismatch between runtime and approved config digest | `BLOCK` |
+| `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH` | `mcp_oauth.py` | Challenge requests a scope broader than the one held | rejected at challenge time |
+
+### 9.3 Namespaces and stability
+
+`L1-Mn-*` codes are tied to a specific threat, while cross-cutting codes spanning multiple threats, like `L1-UNDECLARED-*`, use the `L1-*` format. `INTERLOCK-*` codes are enforcement-engine findings not mapped to a single L1 threat. Reason codes are stable analytic keys. Human-readable descriptions are localized in a separate field, and the meaning of a code is never reused or changed.
+
+**Reason codes are per-enforcement-point and are not comparable across points.** The A2A broker emits the same controls under `A2A-*` names — `L1-M5-TOKEN-AUDIENCE-MISMATCH` there is `A2A-AUDIENCE-MISMATCH`, and both `INTERLOCK-DATA-CLASS-DENIED` and `L1-M9-SENSITIVE-EGRESS` collapse to `A2A-DATA-CLASS-DENIED`. The SDK emits the gateway's names except that it folds `L1-M9-SENSITIVE-EGRESS` into `INTERLOCK-DATA-CLASS-DENIED` and never emits the two M2 codes. Aggregate on the canonical check id for cross-point comparison, and join to reason codes only through `Profile.reason_codes`.
 
 ## 10. Internal API Boundary
 

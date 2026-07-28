@@ -136,6 +136,10 @@ MCP Host는 사용자의 의도와 모델 컨텍스트를 소유하고, MCP Clie
 
 **통제.** token passthrough를 금지하고 hop별 token exchange/downscope를 사용한다. issuer·audience·resource·scope·tenant·actor binding을 모두 검증하며 OAuth state는 세션에 결합하고 일회 사용한다.
 
+> **참조 코어가 실제로 비교하는 것.** 위 여섯 필드 중 `policy.py`의 M5 check가 읽는 것은 **audience**, **resource**, **actor**, **delegation depth**와 exchange flag다. `CredentialClaims.scopes`와 `.subject`는 **읽지 않는다** — 두 필드 모두 `src/`에 읽는 곳이 단 하나도 없다. `.issuer`는 `gateway.py:541` 한 군데에서만 읽으며, 그것도 ledger payload에 기록하기 위해서일 뿐 비교하는 곳은 없다. `.tenant_id`는 A2A 경계 check(`policy.py:387`)가 한 번 읽을 뿐 MCP gateway에서는 전혀 읽지 않는다.
+>
+> scope 확대가 잡히기는 하지만 다른 곳에서 다른 메커니즘으로 잡힌다. `mcp_oauth.py`가 OAuth challenge 시점에 `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH`로 거부한다. 공유 표의 어떤 `Check`도 이를 집행하지 않으므로 `CONTROL_EVALUATED`의 사유 목록에는 결코 나타나지 않는다. issuer와 subject 검증은 `CredentialClaims`가 만들어지기 전에 token verifier가 할 일이고, 그것을 기록하는 값이 `CredentialClaims.authenticated`이며, 이 값이 false일 때 이제 `L1-M5-CREDENTIAL-MISSING`이 거부한다.
+
 ### 6.6 M6 — Malicious/Compromised MCP Server → Client/Host Compromise
 
 **동작.** Server가 authorization endpoint, redirect, tool result, resource URL 같은 D1/D4에 위험 scheme, shell metacharacter, 로컬 파일 또는 내부 주소를 넣는다. Client가 이를 shell 명령·브라우저·취약 parser에 전달하면 Host에서 process 실행, SSRF 또는 파일 접근이 발생한다.
@@ -197,7 +201,7 @@ Agent Host --INVOKES--> MCP Tool --SENDS/READS/WRITES--> External Resource
 |---|---|---|
 | P0 | definition canonicalization·digest pin·drift quarantine | M1, M2, M3 |
 | P0 | Tool 인수 schema·목적지·민감도·부작용 판정 | M1, M3, M8, M9 |
-| P0 | audience/scope/resource/tenant 검증과 token passthrough 금지 | M5 |
+| P0 | audience/resource/actor binding 검증과 token passthrough 금지, 그리고 *인증된* credential 요구(scope는 `Check`가 아니라 OAuth challenge 시점에 집행한다 — §6.5 참고) | M5 |
 | P0 | URL 검증, Connector sandbox, process/network 관측 | M4, M6 |
 | P0 | source-to-destination egress policy와 transaction 전 차단 | M9 |
 | P0 | 부작용·목적지가 ActorSpec 선언을 초과하면 실행 전 차단·실행 후 회수(선언–관측 대사) | M1, M4, M9 |

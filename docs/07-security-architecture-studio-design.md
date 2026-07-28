@@ -86,27 +86,88 @@ At admission, the actual Sub-Agent instance is checked against the selector and 
 
 ## 5. Current Security Lint
 
-- Missing required enforcement point per relationship
-- A relationship with no Control
-- Missing audit evidence
-- `DECLARED`-only control
-- A post-execution control mislabeled as `PREVENT`
-- D5 credential data allowed
-- OBSERVE-only · FAIL_OPEN on a high-risk Edge
-- RAG tenant left optional
-- Missing Tool digest pin
-- Weakened A2A actor/audience/resource binding
-- Delegation depth greater than the Actor's
-- cross-tenant dynamic delegation
-- Dynamic delegation with an empty capability or an unbounded ID pattern
-- delegation cycle
-- Missing egress destination allowlist · explicit destination
-- Missing exact Trust Zone membership for the Actor
-- Missing directional Trust Boundary · enforcement · data contract on a cross-zone Edge
-- Missing identity · tenant binding · fail-closed on an A2A boundary
-- Missing transport Edge · acceptance criteria · high-risk approval · DAG · budget on a workflow task
+`ArchitectureLinter` emits 39 codes. `architecture.py` is authoritative; the tables below are the complete set as of this revision, grouped by area.
 
-If there is a CRITICAL finding, the compiler refuses to generate ActorSpec/LinkPolicy.
+### 5.1 Trust zones and boundaries
+
+| Code | Severity | Condition |
+|---|---|---|
+| `ARCH-NODE-ZONE-MISSING` | CRITICAL | An Actor belongs to no explicit Trust Zone while zones are declared |
+| `ARCH-BOUNDARY-MISSING` | CRITICAL | An Edge crosses zones with no Trust Boundary |
+| `ARCH-BOUNDARY-DIRECTION-MISMATCH` | CRITICAL | Edge direction does not match the referenced Boundary |
+| `ARCH-BOUNDARY-RELATIONSHIP-DENIED` | CRITICAL | The Boundary does not allow the Edge's relationship |
+| `ARCH-BOUNDARY-DATA-CLASS-DENIED` | CRITICAL | The Edge policy allows data classes outside the Boundary's data contract |
+| `ARCH-BOUNDARY-ENFORCEMENT-MISMATCH` | CRITICAL | The Boundary is not enforced at the required enforcement point |
+| `ARCH-BOUNDARY-FAIL-OPEN` | CRITICAL | A Trust-Zone Boundary is configured FAIL_OPEN |
+| `ARCH-A2A-BOUNDARY-BINDING-WEAK` | CRITICAL | An A2A Boundary crossing does not bind both identity and tenant |
+| `ARCH-BOUNDARY-OBSERVE-ONLY` | HIGH | A Trust-Zone crossing is OBSERVE-only |
+| `ARCH-BOUNDARY-UNNECESSARY` | WARNING | The Edge references a Boundary but both Actors are in the same zone |
+
+### 5.2 Controls and enforcement points
+
+| Code | Severity | Condition |
+|---|---|---|
+| `ARCH-CONTROL-MISSING` | CRITICAL | The relationship declares no security control |
+| `ARCH-ENFORCEMENT-POINT-MISSING` | CRITICAL | The relationship's required enforcement point is missing or not `enforced` assurance |
+| `ARCH-PREVENT-AFTER-EXECUTION` | CRITICAL | A post-execution control is labelled `PREVENT` |
+| `ARCH-RELATIONSHIP-ID-MISMATCH` | CRITICAL | `relationshipId` and the declared relationship disagree |
+| `ARCH-RELATIONSHIP-TYPE-MISMATCH` | CRITICAL | Source/target Actor types are wrong for this `relationshipId` |
+| `ARCH-AUDIT-GAP` | WARNING | The relationship declares no explicit audit-evidence control |
+| `ARCH-DECLARED-ONLY` | WARNING | A control is `DECLARED` with no runtime assurance |
+
+### 5.3 Data classes
+
+| Code | Severity | Condition |
+|---|---|---|
+| `ARCH-CREDENTIAL-DATA-ALLOWED` | CRITICAL | Credential data class D5 is allowed across the relationship |
+| `ARCH-DATA-CLASS-EXCEEDS-ACTOR` | CRITICAL | `edge.policy.allowedDataClasses` is not a subset of the target Actor's `dataAccess` |
+| `ARCH-RAG-TENANT-OPTIONAL` | CRITICAL | A RAG security boundary does not require a tenant |
+
+### 5.4 Risk posture, Tool pinning, egress
+
+| Code | Severity | Condition |
+|---|---|---|
+| `ARCH-HIGH-RISK-FAIL-OPEN` | CRITICAL | A high-risk relationship fails open |
+| `ARCH-TOOL-DIGEST-UNPINNED` | CRITICAL | A Tool relationship requires digest pinning but the Tool has no definition digest |
+| `ARCH-EGRESS-DESTINATION-UNBOUNDED` | CRITICAL | An external destination has no allowed-domain boundary |
+| `ARCH-EGRESS-DESTINATION-IMPLICIT` | CRITICAL | An external write does not require an explicit destination |
+| `ARCH-HIGH-RISK-OBSERVE-ONLY` | HIGH | A high-risk relationship is OBSERVE-only |
+
+### 5.5 Delegation
+
+| Code | Severity | Condition |
+|---|---|---|
+| `ARCH-DELEGATION-DISABLED` | CRITICAL | A delegation Edge sets `maxDelegationDepth` below one |
+| `ARCH-DELEGATION-DEPTH-EXCEEDS-ACTOR` | CRITICAL | LinkPolicy delegation depth exceeds the source Actor's limit |
+| `ARCH-DELEGATION-BINDING-WEAK` | CRITICAL | Delegation does not bind actor, audience, and resource |
+| `ARCH-DYNAMIC-CAPABILITY-UNBOUNDED` | CRITICAL | A dynamic delegation selector has no required-capability boundary |
+| `ARCH-DYNAMIC-TARGET-UNBOUNDED` | CRITICAL | A dynamic delegation target ID pattern is unbounded |
+| `ARCH-DYNAMIC-DELEGATION-CROSS-TENANT` | CRITICAL | Dynamic delegation permits a target outside the source tenant |
+| `ARCH-DYNAMIC-DELEGATION-TYPE` | CRITICAL | A dynamic delegation selector admits a non-Agent Actor type |
+| `ARCH-DYNAMIC-CAPABILITY-TEMPLATE-MISMATCH` | CRITICAL | Dynamic selector capabilities are not declared by the target template |
+| `ARCH-DELEGATION-CYCLE` | HIGH | A delegation cycle is detected |
+
+### 5.6 Orchestration
+
+| Code | Severity | Condition |
+|---|---|---|
+| `ARCH-ORCHESTRATOR-TYPE` | CRITICAL | The orchestration coordinator is not an Agent, Sub-Agent, or Scheduler |
+| `ARCH-TASK-TRANSPORT-EDGE-MISSING` | CRITICAL | A task has no declared transport Edge for its relationship |
+| `ARCH-TASK-DATA-CLASS-DENIED` | CRITICAL | A task uses data classes outside its Edge policy |
+| `ARCH-TASK-APPROVAL-MISSING` | CRITICAL | A high-risk task has no approval gate |
+| `ARCH-TASK-ACCEPTANCE-MISSING` | WARNING | A task has no explicit acceptance criteria |
+
+If there is a CRITICAL finding, the compiler refuses to generate ActorSpec/LinkPolicy (`ArchitectureLinter.compile` raises `ArchitectureCompileError`; `reject_critical` defaults to `True`).
+
+Two things this list does **not** cover. A workflow task's dependency **DAG** and its message **budget** are not lint findings: an orchestration dependency cycle is a parse-time `ValueError` from `_validate_acyclic_tasks`, raised before the linter ever runs, and the message budget is enforced at execution time by `orchestration.py` (`ORCH-MESSAGE-BUDGET`), not checked at design time at all.
+
+### 5.7 Studio cannot surface `ARCH-DATA-CLASS-EXCEEDS-ACTOR`
+
+`ARCH-DATA-CLASS-EXCEEDS-ACTOR` compares `edge.policy.allowedDataClasses` against the target Actor's `dataAccess`, and the rule **skips any Actor whose `dataAccess` is empty** — an Actor that declares no data access is undeclared, not declared to hold nothing.
+
+The Studio canvas does not model the field. `grep -rn dataAccess studio/` returns exactly one hit — `studio/app/page.tsx:1106` — and it is a literal `dataAccess: []` inside `exportManifest()`'s `nodes.map(...)`, so **every** Actor in **every** Studio export carries an empty grant and the rule skips all of them by design. There is currently no way for a Studio author to express either a grant or "holds nothing."
+
+The consequence is a split between the two surfaces: **a draft that passes Studio's security check can still be refused by the CLI**, with a CRITICAL that the UI has no way to have shown. Until the authoring surface models `dataAccess`, treat `interlock architecture lint` — not the Studio panel — as the authority on this rule.
 
 ## 6. How to Run
 

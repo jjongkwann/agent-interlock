@@ -101,11 +101,11 @@ flowchart LR
 
 | 컴포넌트 | 책임 | MVP 구현 |
 |---|---|---|
-| Sensor/SDK | Agent 프레임워크 내부 단계 관측 | Python/TypeScript SDK, OpenTelemetry hook |
+| Sensor/SDK | Agent 프레임워크 내부 단계 관측 **및 집행**: `wrap()`이 `SDK_PROFILE`의 check 16개를 실행하고(`sdk.py:152`), `ENFORCE`에서는 `GatewayError`를 raise한다(`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
 | Security Gateway | 관계별 요청 중계·차단 | HTTP/gRPC middleware, Tool/RAG adapter |
 | Event Normalizer | 공급자별 로그를 공통 스키마로 변환 | Stateless service |
 | Policy Decision Point | 정책·권한·위험 점수 판정 | 정책 엔진 + 결정론적 규칙 |
-| Policy Enforcement Point | 차단·보류·정제·회수 실행 | 각 Gateway에 내장 |
+| Policy Enforcement Point | 차단·보류·정제·회수 실행 | 각 Gateway **및 SDK**에 내장 — 현재 공유 check 표를 실행하는 집행점은 셋이다: MCP gateway(check 18개), SDK(16개), A2A broker(16개). 셋은 동등하지 않다. §4.2 참고 |
 | Event Bus | 비동기 전송·재처리 | MVP는 DB 직접 기록 또는 경량 queue, 확장 시 Kafka 호환 |
 | Event Store | 검색·통계·상관분석 데이터 | PostgreSQL 파티셔닝 |
 | Evidence Store | 암호화 원문·파일·대용량 payload | S3 호환 Object Storage |
@@ -113,6 +113,26 @@ flowchart LR
 | Incident Manager | 이벤트를 사건으로 병합 | trace·actor·resource 기반 correlation |
 | Response Orchestrator | 토큰 회수·trace kill·격리 | 승인 가능한 runbook executor |
 | Dashboard/API | 검색·통계·정책 운영 | REST API + 운영 UI |
+
+### 4.2 세 집행점은 메커니즘을 공유할 뿐, 범위를 공유하지 않는다
+
+정책 판정은 `policy.py`의 `CHECKS` 표(check 26개)에 한 번만 선언된다. 집행점은 `Profile`이다. 즉 어떤 check id를 실행하고 각각에 대해 어떤 reason code를 방출하는지의 조합이다. 통합된 것은 이게 전부다 — **커버리지가 아니라 메커니즘이다.**
+
+| 집행점 | Profile | check 수 | 방출 namespace |
+|---|---|---|---|
+| MCP gateway | `GATEWAY_PROFILE` | 18 | `INTERLOCK-*`, `L1-*` |
+| SDK (`wrap()`) | `SDK_PROFILE` | 16 | `INTERLOCK-*`, `L1-*` |
+| A2A broker | `A2A_PROFILE`(`A2A_LINK_PROFILE` 11개 + `A2A_BOUNDARY_PROFILE` 5개로 분리) | 16 | `A2A-*` |
+
+셋은 같은 것을 검사하지 **않으며**, 어떤 통계도 셋이 같다는 전제로 읽어서는 안 된다.
+
+- SDK는 M2 definition check 2개를 실행하지 않는다. SDK는 `ToolRevision`을 보유하지 않기 때문이다. 이 둘은 SDK에서 "통과"가 아니라 ABSENT다.
+- broker는 check 16개 중 gateway와 공유하는 것이 **8개**뿐이고, 나머지 8개는 자체 통제다(identity binding, message-part schema, payload 존재, boundary check 5개). gateway 통제 10개는 broker에 대응물이 아예 없다 — egress 목적지·export 용량·side effect·taint·approval·schema 통제가 **하나도** 없다.
+- 각 집행점은 방출하는 이름을 각자 바꾼다. 같은 통제가 gateway에서는 `L1-M5-TOKEN-AUDIENCE-MISMATCH`, broker에서는 `A2A-AUDIENCE-MISMATCH`로 나타난다. 따라서 reason code를 키로 한 집계는 집행점 간에 비교 **불가**하고, canonical check id를 키로 한 집계는 비교 가능하다. 둘 사이의 join은 반드시 `Profile.reason_codes`를 거쳐야 하며 문자열 매칭으로 해서는 안 된다.
+
+이름만 바뀐 게 아니라 실제로 다른 비교가 둘 있는데, 그 차이는 별도의 check가 아니라 매개변수다. 두 집행점 모두 `intent.expected_audience`·`intent.expected_resource`를 상대로 같은 술어를 실행한다. 다만 broker는 그 필드를 각각 `target.identity`와 `a2a://{target.id}`로 *채우는* 쪽이고(`a2a.py:650-651`), MCP gateway는 호출자가 선언한 intent에서 그대로 가져온다.
+
+설계와 그 명시적 한계 — 특히 커버리지는 안전이 아니라는 점 — 은 [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md)를 참고한다.
 
 ---
 
@@ -123,8 +143,8 @@ flowchart LR
 | 관계 ID | 흐름 | 집행점 | 우선 탐지 |
 |---|---|---|---|
 | REL-01 | User → Agent | INPUT_GATEWAY | Prompt Injection, 세션 혼선, 사용자 사칭 |
-| REL-03 | Agent → RAG | RETRIEVAL_GATEWAY | cross-tenant 조회, RAG 오염, 대량 검색 |
-| REL-05 | Agent → Tool/MCP | TOOL_GATEWAY | 비신뢰 입력 기반 호출, 권한 초과, Tool drift |
+| REL-03 | Agent → RAG | RAG_GATEWAY | cross-tenant 조회, RAG 오염, 대량 검색 |
+| REL-05 | Agent → Tool/MCP | MCP_GATEWAY | 비신뢰 입력 기반 호출, 권한 초과, Tool drift |
 | REL-07 | Agent → External | EGRESS_GATEWAY | 비밀 유출, 새 목적지, 송금·삭제·메일 발송 |
 | REL-12 | All → Observability | AUDIT_SINK | 로그 누락, Gateway 우회, trace 단절 |
 
@@ -140,6 +160,8 @@ flowchart LR
 | REL-10 | Agent → Orchestrator | STATE_MACHINE |
 | REL-11 | Tool → Runtime/Host | SANDBOX |
 | REL-13 | Supply Chain → Runtime | DEPLOY_GATE |
+
+`EnforcementPoint` enum(`architecture.py:31-47`)에는 단일 관계에 묶이지 않는 `DESIGN_LINTER`, `SDK`, `RESPONSE_ORCHESTRATOR`도 있다. linter는 컴파일 시점에 그래프 전체를 대상으로 돌고, SDK는 자신의 `wrap()`이 감싼 link가 무엇이든 in-process로 집행하며, response orchestrator는 판정 이후에 동작한다. `RETRIEVAL_GATEWAY`나 `TOOL_GATEWAY`는 존재하지 않는다. 각각 `RAG_GATEWAY`와 `MCP_GATEWAY`다.
 
 ---
 
@@ -247,22 +269,44 @@ SECURITY_OUTCOME
   "relationship_type": "INVOKES",
   "relationship_id": "REL-05",
   "tg_ids": ["TG07", "TG08", "TG20", "TG22"],
-  "severity": "HIGH",
+  "severity": "INFO",
   "payload": {
-    "operation": "send_email",
-    "purpose": "customer_refund_notice",
-    "arguments_hash": "sha256:...",
-    "destination": "external:new-domain.example",
-    "data_classes": ["PII", "CUSTOMER_RECORD"],
-    "estimated_side_effect": "EXTERNAL_WRITE",
-    "taint_labels": ["UNTRUSTED_RAG_CONTENT"],
-    "raw_evidence_ref": "evidence://prod/2026/07/15/evt-..."
+    "mcp": {
+      "method": "tools/call",
+      "serverId": "tenant-a/prod/trusted-mail"
+    },
+    "toolDefinition": {
+      "toolId": "tenant-a/prod/trusted-mail:send_email",
+      "revisionId": "tenant-a/prod/trusted-mail:send_email@sha256:db69ee4e..."
+    },
+    "invocation": {
+      "purpose": "reply",
+      "argumentsHash": "sha256:d65a89b1083ffc3eab7484b78bb20db3d40b0fb42b39d4ae66dd561394b8e892"
+    }
   },
   "integrity_hash": "sha256:..."
 }
 ```
 
+payload 키는 **lowerCamelCase**이며, intent의 data class·목적지·taint label·content hash는 이 이벤트에 없다. 같은 `interaction_id` 아래 바로 뒤따르는 별도의 `DATA_FLOW_OBSERVED`에 있다.
+
+```json
+{
+  "event_type": "DATA_FLOW_OBSERVED",
+  "payload": {
+    "dataClasses": ["D7"],
+    "destinations": ["user@attacker.example"],
+    "taintLabels": ["UNTRUSTED_RAG_CONTENT"],
+    "contentHash": "sha256:d65a89b1..."
+  }
+}
+```
+
+SDK는 같은 이벤트 타입 둘을 방출하지만 `INTERACTION_REQUESTED` payload가 더 **좁다**. `{"argumentsHash": …, "purpose": …}`뿐이며(`sdk.py:139`), `mcp`나 `toolDefinition` 블록이 없다. SDK가 `ToolRevision`을 보유하지 않기 때문이다. `DATA_FLOW_OBSERVED`의 형태는 gateway와 동일하다.
+
 ### 7.2 통제 판정
+
+실제 실행에서 캡처한 것이다. `mode: ENFORCE`에서 미등록 목적지로 향하는 오염된 `EXTERNAL_WRITE`.
 
 ```json
 {
@@ -270,22 +314,42 @@ SECURITY_OUTCOME
   "trace_id": "trace-4cf8",
   "interaction_id": "019ba1d0-08cd-7a04-b918-840b8e52cc02",
   "relationship_id": "REL-05",
+  "severity": "HIGH",
   "payload": {
-    "control_instance_id": "CTRL-TOOL-GW-PROD-01",
-    "policy_id": "tool-egress-policy",
-    "policy_version": "27",
-    "decision": "HOLD",
-    "reason_codes": [
-      "UNTRUSTED_DATA_TO_EXTERNAL_WRITE",
-      "NEW_DESTINATION",
-      "PII_PRESENT"
-    ],
-    "risk_score": 92,
-    "evaluation_ms": 8,
-    "required_action": "OPERATOR_APPROVAL"
+    "toolDefinition": {
+      "toolId": "tenant-a/prod/trusted-mail:send_email",
+      "revisionId": "tenant-a/prod/trusted-mail:send_email@sha256:db69ee4e...",
+      "observedDigest": "sha256:db69ee4e...",
+      "approvedDigest": "sha256:db69ee4e...",
+      "state": "ACTIVE"
+    },
+    "authorization": {
+      "credentialFingerprint": "[REDACTED]",
+      "issuer": null,
+      "audience": null,
+      "resource": null
+    },
+    "control": {
+      "policyId": "mcp-tool-invoke-default",
+      "policyVersion": "1.0.0",
+      "mode": "ENFORCE",
+      "decision": "BLOCK",
+      "reasonCodes": [
+        "L1-M9-NEW-DESTINATION",
+        "INTERLOCK-TAINTED-EXTERNAL-WRITE"
+      ],
+      "actualEnforced": true
+    }
   }
 }
 ```
+
+기억이 아니라 이 이벤트에서 읽어내야 할 것이 넷이다.
+
+- **판정은 payload 최상위가 아니라 `payload.control` 아래에 중첩된다.** `mode`(정책이 무엇을 하도록 설정됐는가)와 `actualEnforced`(실제로 무엇이 집행됐는가)는 별개 필드라서, SHADOW 평가와 실제 집행된 평가를 다른 무엇을 조합하지 않고도 구분할 수 있다.
+- **`reasonCodes`는 실제로 방출되는 문자열이다.** `risk_score`, `evaluation_ms`, `control_instance_id`, `required_action` 필드는 없다. 이 문서의 이전 판본은 `UNTRUSTED_DATA_TO_EXTERNAL_WRITE`, `NEW_DESTINATION`, `PII_PRESENT`를 보여줬는데, 이 문자열들은 `src/` 어디에도 존재하지 않는다.
+- **`INTERLOCK-TAINTED-EXTERNAL-WRITE`는 이 브랜치에서 gateway에 새로 도달 가능해졌다.** 이전에는 SDK에만 존재했다.
+- **SDK도 같은 중첩 `payload.control` 블록을 방출**해서 reducer 하나가 둘 다 처리하지만, `toolDefinition`이나 `authorization` 형제 블록은 **없다**. 같은 호출을 `wrap()`으로 통과시키면 `reasonCodes: ["L1-M9-NEW-DESTINATION", "INTERLOCK-TAINTED-EXTERNAL-WRITE", "INTERLOCK-APPROVAL-REQUIRED"]`가 나온다. 세 번째 코드가 붙는 이유는 SDK가 승인을 충족시킬 수 없기 때문이다. [02 개발자 프레임워크 설계](02-developer-framework-design.ko.md) §3.4 참고.
 
 ### 7.3 조치 실패와 공격 성공
 
@@ -295,10 +359,9 @@ SECURITY_OUTCOME
   "trace_id": "trace-4cf8",
   "interaction_id": "019ba1d0-08cd-7a04-b918-840b8e52cc02",
   "payload": {
-    "decision": "BLOCK",
-    "action": "CANCEL_TOOL_INVOCATION",
-    "action_result": "FAILED",
-    "failure_reason": "TOOL_CALL_ALREADY_DISPATCHED"
+    "result": "FAILED",
+    "connectorExecutionId": "8f2c1e40-...",
+    "failure": "connector timed out after 30s"
   }
 }
 ```
@@ -308,12 +371,15 @@ SECURITY_OUTCOME
   "event_type": "SECURITY_OUTCOME_SET",
   "trace_id": "trace-4cf8",
   "payload": {
-    "security_outcome": "PARTIALLY_EXECUTED",
-    "effects": ["EMAIL_SENT", "PII_EXPOSED"],
-    "compensation_required": true
+    "securityOutcome": "PARTIALLY_EXECUTED",
+    "connectorExecutionId": "8f2c1e40-..."
   }
 }
 ```
+
+`result`는 `ActionResult`(`COMPLETED`, `FAILED`, `TIMED_OUT`, `PARTIAL`, `NOT_APPLICABLE`), `securityOutcome`은 `SecurityOutcome`(`ATTEMPTED`, `BLOCKED`, `PARTIALLY_EXECUTED`, `SUCCEEDED`, `UNKNOWN`, `FALSE_POSITIVE`, `SIMULATED`)이며 둘 다 `models.py`에 있다. `_append_outcome`은 임의의 `**extra` 키를 받으므로 effect 목록이나 보상 필요 플래그를 실어 보낼 수는 있지만, 어느 쪽도 고정 필드가 아니며 현재 `src/`가 채우지도 않는다.
+
+> **알려진 보고 결함, SDK 경로 한정.** `wrap()`이 호출을 거부할 때, `SECURITY_OUTCOME_SET: BLOCKED`를 남기고 raise하기 전에 `{"result": "COMPLETED", "connectorExecutionId": null}`인 `ACTION_EXECUTED`를 먼저 append한다(`sdk.py:193-199`). 그 조치는 실행된 적이 없다. 이는 통합 판정 엔진 작업보다 앞선 문제이며(`8ef67b0`에서 들어왔다), 여기서 짚는 이유는 DET-012 — "BLOCK 판정 뒤 downstream 성공 이벤트" — 가 바로 이 형태에 걸리는 규칙이기 때문이다. 둘은 `connectorExecutionId`로 구분한다. 이 값이 `null`인 것은 거부 경로뿐이다. SDK의 `result: COMPLETED`만으로 실행됐다고 판단해서는 안 된다.
 
 ---
 
@@ -663,7 +729,7 @@ CREATE TRIGGER security_events_no_mutation
 
 - `tenant_id`가 없는 이벤트는 ingest에서 거부하고 `ingest_errors`에 남긴다.
 - evidence 조회도 tenant 경계를 넘지 못하며(§15.2), 조회 자체가 별도 보안 이벤트로 기록된다.
-- 이 격리와 우회 방지는 [05 L1 검증 계획](05-l1-security-validation-plan.ko.md) §10의 `CORE-SIM-TENANT-001`(`SET app.tenant_id` 무효)·`002`(권한 회수)·`003`(append-only trigger)·`004`(RLS 우회 속성) 회귀 시험으로 검증한다.
+- 이 격리의 커버리지는 **부분적**이며, 그 공백은 [05 L1 검증 계획](05-l1-security-validation-plan.ko.md) §10에 정확히 적혀 있다. 요약하면 `CORE-SIM-TENANT-001`과 `002`는 `tests/test_postgres_ledger.py`가 실제 PostgreSQL을 대상으로 실행하지만, `003`(append-only trigger)과 `004`(RLS 우회 속성)은 **전혀 시험되지 않는다**. 이 둘의 유일한 증거는 migration 파일 텍스트에 대한 부분 문자열 일치다. append-only trigger를 검증된 것으로 읽어서는 안 된다.
 
 ---
 
@@ -755,7 +821,7 @@ flowchart TD
 | DET-001 | REL-01 | 비신뢰 콘텐츠의 명령 패턴 + 고위험 의도 | taint, HOLD | TG01 |
 | DET-002 | REL-03 | subject tenant와 검색 tenant 불일치 | BLOCK | TG06·TG18 |
 | DET-003 | REL-03 | 짧은 시간에 광범위 문서/벡터 열거 | rate limit, HOLD | TG06·TG22 |
-| DET-004 | REL-05 | 비신뢰 taint가 쓰기 Tool 인수로 전달 | BLOCK/승인 | TG09·TG20 |
+| DET-004 | REL-05 | 비신뢰 taint가 `EXTERNAL_WRITE` Tool 인수로 전달 | BLOCK(§12.1 참고) | TG09·TG20 |
 | DET-005 | REL-05 | 승인 manifest digest와 실행 digest 불일치 | QUARANTINE | TG07·TG08 |
 | DET-006 | REL-05 | Agent 권한보다 넓은 Tool scope 요청 | BLOCK | TG13 |
 | DET-007 | REL-07 | 새로운 외부 목적지 + PII/SECRET | BLOCK/승인 | TG20·TG22 |
@@ -767,10 +833,32 @@ flowchart TD
 
 ### 12.1 규칙 정의 예시
 
+아래는 선언적 규칙 정의의 **목표** 형태다. 규칙 언어는 아직 존재하지 않고, DET-004는 현재 하드코딩된 check로 구현돼 있으며 둘은 서로 다르다. 구현된 동작을 먼저 읽어야 한다.
+
+**구현된 형태** — `_tainted_external_write`(`policy.py:238-243`), check id `INTERLOCK-TAINTED-EXTERNAL-WRITE`:
+
+```python
+if context.intent.estimated_side_effect != SideEffect.EXTERNAL_WRITE:
+    return None                     # DESTRUCTIVE_WRITE는 이 통제의 대상이 아니다
+if not context.intent.taint_labels:
+    return ()
+return (("INTERLOCK-TAINTED-EXTERNAL-WRITE", ControlDecision.BLOCK),)
+```
+
+아래 목표 형태와 다른 점이 셋이고, 각각 운영상 의미가 있다.
+
+1. **판정은 `HOLD`가 아니라 `BLOCK`이다.** 무조건적이며 `LinkPolicy`의 action 필드로 설정할 수 없다. 가역적 대기도, 승인할 대상도 없다.
+2. **`approval_valid`를 전혀 읽지 않는다.** `unless: valid_operator_approval` 절은 이 통제가 구현하지 않는다. 보류 후 승인 흐름은 *다른* check인 `INTERLOCK-APPROVAL-REQUIRED`(`_approval`, `policy.py:246-249`)가 담당하며, 이쪽은 `approval_valid`를 읽고 `HOLD`를 방출한다.
+3. **`DESTRUCTIVE_WRITE`는 다루지 않는다.** 이 check는 `EXTERNAL_WRITE` 이외의 모든 side effect에 대해 `None`을 반환하므로, 오염된 destructive write는 여기서 차단이 아니라 INAPPLICABLE이다.
+
+이 통제는 MCP gateway에서 **새로 활성화됐다**. 이전에는 `sdk.py`에만 있었으나, 공유 표로 승격되면서 `GATEWAY_PROFILE`에 들어갔고, `mcp_transport.py:148`이 호출자가 준 `taint_labels`를 intent로 전달하기 때문에 운영에서 도달 가능하다. 이전에는 gateway를 통과하던 오염된 외부 쓰기가 이제 차단된다.
+
+**목표 형태**(미구현 — 이 파일을 소비하는 규칙 엔진은 없다):
+
 ```yaml
 rule_id: DET-004
 version: 1.0.0
-status: SHADOW
+status: PROPOSED          # 이 파일을 읽는 규칙 엔진은 없다
 relationship_ids: [REL-05]
 when:
   all:
@@ -779,7 +867,7 @@ when:
 unless:
   - valid_operator_approval == true
 decision: HOLD
-reason_code: UNTRUSTED_DATA_TO_HIGH_IMPACT_TOOL
+reason_code: UNTRUSTED_DATA_TO_HIGH_IMPACT_TOOL   # src/ 어디에서도 방출되지 않는다
 tg_ids: [TG09, TG20]
 test_cases:
   - SIM-DET-004-ALLOW-001
@@ -843,6 +931,10 @@ sequenceDiagram
 | RESP-07 | `ROLLBACK_MEMORY` | 안전 snapshot 존재 | 오염 파생 데이터 제거 |
 | RESP-08 | `BLOCK_DESTINATION` | egress gateway 제어 가능 | DNS/IP/URL 우회 시험 |
 | RESP-09 | `DEGRADE_READ_ONLY` | 관측·정책 장애 | 쓰기·외부 송신 0 |
+
+현재 RESP-02를 실제로 뒷받침하는 것에 대해 두 가지. 승인 상태를 근거로 `HOLD`를 방출하는 통제는 `INTERLOCK-APPROVAL-REQUIRED`(`_approval`, `policy.py:246-249`) 하나뿐이고, 승인을 부여하는 API는 `MCPToolGateway.grant_approval`(`gateway.py:140`) 하나뿐이다. `INTERLOCK-TAINTED-EXTERNAL-WRITE`는 DET-004의 서술과 달리 이 runbook에 **속하지 않는다**. 무조건 `BLOCK`을 반환하며 `approval_valid`를 읽지 않는다(§12.1 참고).
+
+RESP-09의 `DEGRADE_READ_ONLY`는 선언 가능한 `FailureMode` 값이지만 **`src/`에 소비자가 없다**. `LinkPolicy.failure_mode`를 실행 시점에 읽는 곳은 정확히 한 군데, `egress.py:145`이며 여기서는 `FAIL_CLOSED`인지만 검사한다. 나머지 참조는 전부 설계 시점 lint이거나 직렬화다. link에 `DEGRADE_READ_ONLY`를 선언해도 현재 실행 시점 동작은 전혀 바뀌지 않는다.
 
 자동 대응은 `decision`을 기록하는 것에서 끝나지 않는다. 각 Runbook은 `action_result`와 독립 검증 이벤트를 생성해야 한다.
 
@@ -929,10 +1021,14 @@ FROM control_decisions d
 JOIN interactions i USING (interaction_id)
 LEFT JOIN action_results a USING (interaction_id)
 LEFT JOIN security_outcomes o USING (interaction_id)
-WHERE d.decision IN ('BLOCK', 'QUARANTINE', 'KILL')
+WHERE d.decision <> 'ALLOW'
   AND (a.action_result IS DISTINCT FROM 'COMPLETED'
        OR o.outcome IN ('PARTIALLY_EXECUTED', 'SUCCEEDED'));
 ```
+
+> **왜 decision allowlist가 아니라 `<> 'ALLOW'`인가.** 코드에서 차단 계열은 부정으로 정의된다. `analytics.py:69`(`block_decision`)를 비롯해 `src/`의 모든 유사 술어가 `!= ALLOW`를 검사한다. 열거 목록은 판정을 소리 없이 누락시킨다. 이 질의의 이전 판본은 `('BLOCK','QUARANTINE','KILL')`을 나열했는데, 여기에는 **`HOLD`** — `new_destination_action`의 기본값(`models.py:179`)이자 `INTERLOCK-APPROVAL-REQUIRED`의 하드코딩된 판정 — 이 빠져 있었고, `REVOKE`·`CHALLENGE`·`SANITIZE`·`DEGRADE`·`ERROR`도 빠져 있었으며, 반대로 `src/`의 어떤 코드도 생성하지 않는 `KILL`을 포함하고 있었다. `HOLD`는 이 플랫폼이 방출하는 non-ALLOW 판정 중 단연 가장 흔하므로, 이 누락은 패널이 다루려던 대상의 대부분을 가리고 있었다.
+>
+> 이 질의가 표현할 수 없는 단서가 하나 있다. `PolicyDecisionRecord.would_block`은 `!= ALLOW`가 아니라 rank map을 읽으므로, 이것과 나머지 `!= ALLOW` 술어 다섯 개는 **`BYPASSED`에서 서로 어긋난다**. `BYPASSED`는 `ALLOW`보다 낮은 rank이기 때문이다. `BYPASSED`는 현재 `src/`에 생성자가 없고 `LinkPolicy`의 action 필드 다섯 개를 운영자가 설정해야만 도달 가능하다. 두 해석을 어떻게 일치시킬지는 Plan 2의 미결 과제다.
 
 ```sql
 -- Actor 관계별 위험 이벤트와 차단률
@@ -1057,7 +1153,7 @@ Kafka-compatible Event Bus
 | Test ID | 시나리오 | 기대 결과 |
 |---|---|---|
 | SIM-001 | 외부 문서의 Prompt Injection이 이메일 Tool 호출 유도 | taint 유지, HOLD/BLOCK |
-| SIM-002 | 다른 tenant의 RAG 문서 검색 | RETRIEVAL_GATEWAY 차단 |
+| SIM-002 | 다른 tenant의 RAG 문서 검색 | RAG_GATEWAY 차단 |
 | SIM-003 | 승인 후 Tool manifest 변경 | Tool quarantine |
 | SIM-004 | 악성 MCP endpoint가 connector에서 shell 실행 유도 | endpoint 차단, workload 격리 |
 | SIM-005 | 위임 토큰을 다른 audience에서 재사용 | 인증 거부, lineage 회수 |

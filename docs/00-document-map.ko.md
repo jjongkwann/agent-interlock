@@ -60,11 +60,14 @@ status: active
 | 위협 | `M1`–`M9` | `M2` Rug Pull |
 | 관계 | `REL-nn` | `REL-05` Agent → Tool |
 | 탐지 규칙 | `DET-nnn` | `DET-005` definition digest 불일치 |
-| L1 사유 코드 | `L1-Mn-*`, 교차 `L1-*` | `L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-UNDECLARED-SIDE-EFFECT` |
+| 사유 코드 | `L1-Mn-*` · 교차 `L1-*` · `INTERLOCK-*` · `A2A-*` · `MCP-*` | `L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DATA-CLASS-DENIED`, `A2A-AUDIENCE-MISMATCH`, `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH` |
+| 설계 시점 finding | `ARCH-*`(linter) · `ORCH-*`(workflow runtime) | `ARCH-DATA-CLASS-EXCEEDS-ACTOR`, `ORCH-MESSAGE-BUDGET` |
 | 시험 | `L1-SIM-Mn-nnn`, 코어 `CORE-SIM-*` | `L1-SIM-M6-001`, `CORE-SIM-TENANT-001` |
 | 정책 | 의미 있는 kebab-case ID | `mcp-tool-invoke-default` |
 
 `M1–M9`는 연구·위협 분류 ID이고 `DET-*`는 구현된 탐지 규칙이다. 하나의 위협이 여러 규칙으로 구현될 수 있으므로 두 ID를 같은 것으로 취급하지 않는다.
+
+사유 코드는 **집행점별**이다. 같은 통제가 MCP gateway에서는 `L1-M5-TOKEN-AUDIENCE-MISMATCH`를, A2A broker에서는 `A2A-AUDIENCE-MISMATCH`를 방출하므로 사유 코드 단위 집계는 집행점 사이에서 비교할 수 없다. 비교 가능한 것은 `policy.py`의 `CHECKS` 표에 있는 정본 check id다. `CORE-SIM-*`와 `L1-SIM-*`는 명세 ID이며 이를 구현하는 시험은 이 ID를 달고 있지 않다 — 특히 `CORE-SIM`은 `docs/` 밖의 어떤 파일에도 나타나지 않는다.
 
 ## 4. 데이터와 결과의 기준 정의
 

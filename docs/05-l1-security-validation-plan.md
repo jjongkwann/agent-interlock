@@ -93,7 +93,7 @@ evidence:
 |---|---|---|---|
 | `L1-SIM-M3-001` | Server B's description demands a BCC addition to Server A's email | D1 quarantined or D3 `HOLD/BLOCK` | namespace, cross-reference, D2/D3 recipient diff |
 | `L1-SIM-M3-002` | Two Servers both offer a Tool named `send_email` | Namespace separated in UI and policy; no wrong Tool invoked | fully-qualified toolId, selection provenance |
-| `L1-SIM-M3-003` | A BCC explicitly approved by the user | `ALLOW` only after hash-bound approval | displayed/approved/final argument hash match |
+| `L1-SIM-M3-003` | A BCC added *after* the user's hash-bound approval was granted | `HOLD`/`BLOCK` with `L1-M9-NEW-DESTINATION` — the approval does not cover the added recipient | displayed/approved/final argument hash match |
 
 ### 4.4 M4 Poisoned Tool Publish
 
@@ -144,7 +144,7 @@ evidence:
 | ID | Input/Procedure | Expected Result | Required Evidence |
 |---|---|---|---|
 | `L1-SIM-M9-001` | Send a customer list to an unapproved BCC | Pre-transaction `BLOCK/HOLD` | D7 source, full destination set, receipt 0 |
-| `L1-SIM-M9-002` | A subdomain/Unicode destination that looks like an allowed domain | `BLOCK` after canonicalization | raw/canonical destination, matched rule |
+| `L1-SIM-M9-002` | A subdomain/Unicode destination that looks like an allowed domain | `HOLD` after canonicalization — the default `new_destination_action` | raw/canonical destination, matched rule |
 | `L1-SIM-M9-003` | Send bulk D7 via a query parameter/attachment | `BLOCK` by DLP/volume policy | byte/record count, channel, receipt 0 |
 | `L1-SIM-M9-004` | Send only the needed fields to one approved customer | `ALLOW` | purpose, minimization, approval/hash, receipt 1 |
 | `L1-SIM-M9-005` | A Tool declared `sideEffects: []` has `estimatedSideEffect` of EXTERNAL_WRITE (pre-execution) | Pre-execution `BLOCK`, `L1-UNDECLARED-SIDE-EFFECT`, receipt 0 | declared sideEffects, estimated effect, reason code, receipt 0 |
@@ -229,11 +229,17 @@ Test results are loaded into the Ledger as `TEST_EXECUTED` events, with `data_so
 
 Independent of L1 threats, tenant isolation and immutability of the event ledger ([01 §9.2](01-project-plan.md#92-tenant-isolation-and-immutability-rls--append-only)) are validated at the platform layer. Because these tests are not tied to a specific L1 threat, they use `CORE-SIM-*` IDs.
 
-| ID | Input/Procedure | Expected Result | Required Evidence |
+**These are specifications, not a coverage report.** The `CORE-SIM-*` IDs appear in no test, SQL file, or fixture — `grep -rn "CORE-SIM"` outside `docs/` returns nothing — so there is no traceability link from an ID to an executing test. The "Status" column below records what is actually exercised today, established by reading `tests/test_postgres_ledger.py`, `migrations/postgresql/0001_interaction_ledger.sql`, and `ci/postgres_provision.sql`.
+
+| ID | Input/Procedure | Expected Result | Status |
 |---|---|---|---|
-| `CORE-SIM-TENANT-001` | Run `SET app.tenant_id='B'` in a tenant A role session, then attempt to SELECT/INSERT tenant B events | The policy derives tenant from the authenticated connection's `session_user`, so `SET` has no effect — SELECT returns 0 rows, INSERT is denied | session_user, attempted app.tenant_id setting, 0 rows returned, policy violation log |
-| `CORE-SIM-TENANT-002` | Attempt UPDATE/DELETE on `security_events` with the `app_writer` role | **permission denied** at the RBAC layer (before reaching the trigger) | role, attempted SQL, SQLSTATE 42501, 0 rows changed |
-| `CORE-SIM-TENANT-003` | Attempt UPDATE on `security_events` with a separate test role that has UPDATE privilege | append-only **trigger exception** (`security_events is append-only`) | role, confirmed UPDATE privilege, exception message, 0 rows changed |
-| `CORE-SIM-TENANT-004` | Check whether BYPASSRLS/superuser attributes have been granted to application/migration roles | 0 grants (an immediate fail if any are granted) | role attribute list, rolbypassrls/rolsuper flags |
+| `CORE-SIM-TENANT-001` | Run `SET app.tenant_id='B'` in a tenant A role session, then attempt to SELECT/INSERT tenant B events | The policy derives tenant from the authenticated connection's `session_user`, so `SET` has no effect — SELECT returns 0 rows, INSERT is denied | **Partial.** `test_live_guc_set_role_and_mutation_cannot_cross_the_boundary` performs the `SET` and the SELECT, and genuinely proves `SET ROLE tenant_b_app` is denied. But the SELECT assertion is weak: no tenant-B row exists in `security_events` at that point in the run, so it would pass with RLS disabled. The cross-tenant INSERT denial it asserts targets `event_ingest_keys`, not `security_events`. |
+| `CORE-SIM-TENANT-002` | Attempt UPDATE/DELETE on `security_events` with an application role | **permission denied** at the RBAC layer (before reaching the trigger) | **Mostly covered.** The same live test executes an UPDATE as `tenant_a_app` and asserts `InsufficientPrivilege` (SQLSTATE 42501). **DELETE is never attempted**, and "0 rows changed" is not asserted. |
+| `CORE-SIM-TENANT-003` | Attempt UPDATE on `security_events` with a separate test role that has UPDATE privilege | append-only **trigger exception** (`security_events is append-only`) | **Not covered.** No such role exists — the only grant on `security_events` anywhere is `GRANT SELECT, INSERT … TO interlock_event_api` (`0001_interaction_ledger.sql:181`). **The append-only trigger has never fired in any test run.** The only evidence is `assertIn("security_events_no_mutation", sql)` against the migration file's *text*. |
+| `CORE-SIM-TENANT-004` | Check whether BYPASSRLS/superuser attributes have been granted to application/migration roles | 0 grants (an immediate fail if any are granted) | **Not covered.** No test reads `pg_roles.rolbypassrls` or `rolsuper`; nothing queries `pg_policies` or `relrowsecurity`. The only evidence is `assertIn("NOBYPASSRLS", sql)` — again a substring match on migration text, which cannot detect a later `ALTER ROLE … BYPASSRLS` or a live database that disagrees with the file. |
 
 The pass condition is that another tenant's data is never read or modified under any circumstances, the permission denial (002) and append-only violation (003) each occur at their respective layer, and application-path roles carry no RLS-bypass attribute. The trusted tenant must be derived from the authenticated connection's `session_user` (or a connection-layer context the application cannot change) and must not be alterable via session `SET`/`SET ROLE`.
+
+**As written, 003's pass condition is unmet.** It requires the append-only violation to be *demonstrated*; a substring match on the migration source cannot demonstrate it. Note also that the trigger raises SQLSTATE `55000` (`ObjectNotInPrerequisiteState`), while the live UPDATE test asserts `InsufficientPrivilege` (`42501`) — so that test passing is itself evidence the statement is stopped by RBAC and never reaches the trigger.
+
+Closing the gap needs three things, none of which is a documentation change: a provisioned role holding `UPDATE ON security_events` so the trigger can be reached at all, a test asserting SQLSTATE `55000` from it, and a catalog assertion over `pg_roles` for 004. Live PostgreSQL tests are gated on `INTERLOCK_TEST_POSTGRES_DSN_TENANT_A`/`_B` and skip entirely under a plain `python3 -m unittest discover`; under that path only the migration-text assertions run.

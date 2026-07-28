@@ -86,27 +86,88 @@ policy:
 
 ## 5. 현재 Security lint
 
-- 관계별 필수 집행점 누락
-- Control 없는 관계
-- audit evidence 누락
-- `DECLARED` only 통제
-- 실행 후 `PREVENT`로 잘못 표시한 통제
-- D5 credential data 허용
-- 고위험 Edge의 OBSERVE only·FAIL_OPEN
-- RAG tenant optional
-- Tool digest pin 누락
-- A2A actor/audience/resource binding 약화
-- Actor보다 큰 delegation depth
-- cross-tenant dynamic delegation
-- capability가 비어 있거나 ID pattern이 무제한인 dynamic delegation
-- delegation cycle
-- Egress 목적지 allowlist·명시 목적지 누락
-- Actor의 정확한 Trust Zone 소속 누락
-- cross-zone Edge의 방향성 Trust Boundary·enforcement·data contract 누락
-- A2A boundary의 identity·tenant binding·fail-closed 누락
-- workflow task의 transport Edge·acceptance criteria·고위험 승인·DAG·budget 누락
+`ArchitectureLinter`는 39개 코드를 방출한다. 권위 있는 정의는 `architecture.py`이며, 아래 표들은 이 판본 기준 전체 집합을 영역별로 묶은 것이다.
 
-CRITICAL finding이 있으면 compiler는 ActorSpec·LinkPolicy 생성을 거부한다.
+### 5.1 Trust Zone과 Boundary
+
+| 코드 | 심각도 | 조건 |
+|---|---|---|
+| `ARCH-NODE-ZONE-MISSING` | CRITICAL | Zone이 선언된 상태에서 Actor가 명시적 Trust Zone에 속하지 않음 |
+| `ARCH-BOUNDARY-MISSING` | CRITICAL | Edge가 Zone을 넘는데 Trust Boundary가 없음 |
+| `ARCH-BOUNDARY-DIRECTION-MISMATCH` | CRITICAL | Edge 방향이 참조된 Boundary와 불일치 |
+| `ARCH-BOUNDARY-RELATIONSHIP-DENIED` | CRITICAL | Boundary가 해당 Edge의 relationship을 허용하지 않음 |
+| `ARCH-BOUNDARY-DATA-CLASS-DENIED` | CRITICAL | Edge policy가 Boundary data contract 밖의 data class를 허용 |
+| `ARCH-BOUNDARY-ENFORCEMENT-MISMATCH` | CRITICAL | Boundary가 요구된 집행점에서 집행되지 않음 |
+| `ARCH-BOUNDARY-FAIL-OPEN` | CRITICAL | Trust Zone Boundary가 FAIL_OPEN으로 설정됨 |
+| `ARCH-A2A-BOUNDARY-BINDING-WEAK` | CRITICAL | A2A Boundary 교차가 identity와 tenant를 모두 bind하지 않음 |
+| `ARCH-BOUNDARY-OBSERVE-ONLY` | HIGH | Trust Zone 교차가 OBSERVE only |
+| `ARCH-BOUNDARY-UNNECESSARY` | WARNING | Edge가 Boundary를 참조하지만 두 Actor가 같은 Zone에 있음 |
+
+### 5.2 Control과 집행점
+
+| 코드 | 심각도 | 조건 |
+|---|---|---|
+| `ARCH-CONTROL-MISSING` | CRITICAL | 관계에 선언된 보안 통제가 없음 |
+| `ARCH-ENFORCEMENT-POINT-MISSING` | CRITICAL | 관계별 필수 집행점이 없거나 `enforced` assurance가 아님 |
+| `ARCH-PREVENT-AFTER-EXECUTION` | CRITICAL | 실행 후 통제가 `PREVENT`로 표시됨 |
+| `ARCH-RELATIONSHIP-ID-MISMATCH` | CRITICAL | `relationshipId`와 선언된 relationship이 불일치 |
+| `ARCH-RELATIONSHIP-TYPE-MISMATCH` | CRITICAL | 해당 `relationshipId`에 대해 source/target Actor type이 잘못됨 |
+| `ARCH-AUDIT-GAP` | WARNING | 관계에 명시적 audit evidence 통제가 없음 |
+| `ARCH-DECLARED-ONLY` | WARNING | 통제가 `DECLARED`이고 runtime assurance가 없음 |
+
+### 5.3 Data class
+
+| 코드 | 심각도 | 조건 |
+|---|---|---|
+| `ARCH-CREDENTIAL-DATA-ALLOWED` | CRITICAL | 관계에서 credential data class D5를 허용 |
+| `ARCH-DATA-CLASS-EXCEEDS-ACTOR` | CRITICAL | `edge.policy.allowedDataClasses`가 target Actor의 `dataAccess`의 부분집합이 아님 |
+| `ARCH-RAG-TENANT-OPTIONAL` | CRITICAL | RAG security boundary가 tenant를 요구하지 않음 |
+
+### 5.4 위험 태세·Tool pin·Egress
+
+| 코드 | 심각도 | 조건 |
+|---|---|---|
+| `ARCH-HIGH-RISK-FAIL-OPEN` | CRITICAL | 고위험 관계가 fail open |
+| `ARCH-TOOL-DIGEST-UNPINNED` | CRITICAL | Tool 관계가 digest pin을 요구하지만 Tool에 definition digest가 없음 |
+| `ARCH-EGRESS-DESTINATION-UNBOUNDED` | CRITICAL | 외부 목적지에 allowed domain 경계가 없음 |
+| `ARCH-EGRESS-DESTINATION-IMPLICIT` | CRITICAL | 외부 쓰기가 명시 목적지를 요구하지 않음 |
+| `ARCH-HIGH-RISK-OBSERVE-ONLY` | HIGH | 고위험 관계가 OBSERVE only |
+
+### 5.5 Delegation
+
+| 코드 | 심각도 | 조건 |
+|---|---|---|
+| `ARCH-DELEGATION-DISABLED` | CRITICAL | delegation Edge의 `maxDelegationDepth`가 1 미만 |
+| `ARCH-DELEGATION-DEPTH-EXCEEDS-ACTOR` | CRITICAL | LinkPolicy delegation depth가 source Actor 한도를 초과 |
+| `ARCH-DELEGATION-BINDING-WEAK` | CRITICAL | delegation이 actor·audience·resource를 bind하지 않음 |
+| `ARCH-DYNAMIC-CAPABILITY-UNBOUNDED` | CRITICAL | dynamic delegation selector에 required capability 경계가 없음 |
+| `ARCH-DYNAMIC-TARGET-UNBOUNDED` | CRITICAL | dynamic delegation target ID pattern이 무제한 |
+| `ARCH-DYNAMIC-DELEGATION-CROSS-TENANT` | CRITICAL | dynamic delegation이 source tenant 밖의 target을 허용 |
+| `ARCH-DYNAMIC-DELEGATION-TYPE` | CRITICAL | dynamic delegation selector가 non-Agent Actor type을 포함 |
+| `ARCH-DYNAMIC-CAPABILITY-TEMPLATE-MISMATCH` | CRITICAL | dynamic selector capability가 target template에 선언되어 있지 않음 |
+| `ARCH-DELEGATION-CYCLE` | HIGH | delegation cycle 발견 |
+
+### 5.6 Orchestration
+
+| 코드 | 심각도 | 조건 |
+|---|---|---|
+| `ARCH-ORCHESTRATOR-TYPE` | CRITICAL | orchestration coordinator가 Agent·Sub-Agent·Scheduler가 아님 |
+| `ARCH-TASK-TRANSPORT-EDGE-MISSING` | CRITICAL | task에 해당 relationship의 transport Edge 선언이 없음 |
+| `ARCH-TASK-DATA-CLASS-DENIED` | CRITICAL | task가 Edge policy 밖의 data class를 사용 |
+| `ARCH-TASK-APPROVAL-MISSING` | CRITICAL | 고위험 task에 승인 게이트가 없음 |
+| `ARCH-TASK-ACCEPTANCE-MISSING` | WARNING | task에 명시적 acceptance criteria가 없음 |
+
+CRITICAL finding이 있으면 compiler는 ActorSpec·LinkPolicy 생성을 거부한다(`ArchitectureLinter.compile`이 `ArchitectureCompileError`를 raise하며, `reject_critical` 기본값은 `True`).
+
+이 목록이 다루지 **않는** 두 가지. workflow task의 의존 **DAG**와 message **budget**은 lint finding이 아니다. orchestration 의존 cycle은 linter가 돌기 전에 `_validate_acyclic_tasks`가 던지는 parse 시점 `ValueError`이고, message budget은 설계 시점에 전혀 검사되지 않고 실행 시점에 `orchestration.py`가 집행한다(`ORCH-MESSAGE-BUDGET`).
+
+### 5.7 Studio는 `ARCH-DATA-CLASS-EXCEEDS-ACTOR`를 드러낼 수 없다
+
+`ARCH-DATA-CLASS-EXCEEDS-ACTOR`는 `edge.policy.allowedDataClasses`를 target Actor의 `dataAccess`와 비교하며, **`dataAccess`가 비어 있는 Actor는 건너뛴다** — data access를 선언하지 않은 Actor는 "아무것도 보유하지 않는다고 선언한 것"이 아니라 "선언하지 않은 것"이기 때문이다.
+
+Studio canvas는 이 필드를 모델링하지 않는다. `grep -rn dataAccess studio/`는 정확히 한 건, `studio/app/page.tsx:1106`만 반환하며, 그것은 `exportManifest()`의 `nodes.map(...)` 안에 리터럴로 박힌 `dataAccess: []`다. 따라서 **모든** Studio export의 **모든** Actor가 빈 grant를 실어 보내고, 규칙은 설계상 전부 건너뛴다. 현재 Studio 작성자가 grant를 표현할 방법도, "아무것도 보유하지 않음"을 표현할 방법도 없다.
+
+그 결과 두 표면이 갈라진다. **Studio의 보안 검사를 통과한 초안이 CLI에서는 거부될 수 있으며**, 그 CRITICAL은 UI가 보여줄 수 없었던 것이다. 작성 표면이 `dataAccess`를 모델링하기 전까지 이 규칙의 권위는 Studio 패널이 아니라 `interlock architecture lint`다.
 
 ## 6. 실행 방법
 

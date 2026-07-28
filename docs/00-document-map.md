@@ -60,11 +60,14 @@ Use the following IDs so that documents, code, events, and test results all refe
 | Threat | `M1`–`M9` | `M2` Rug Pull |
 | Relationship | `REL-nn` | `REL-05` Agent → Tool |
 | Detection rule | `DET-nnn` | `DET-005` definition digest mismatch |
-| L1 reason code | `L1-Mn-*`, cross-cutting `L1-*` | `L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-UNDECLARED-SIDE-EFFECT` |
+| Reason code | `L1-Mn-*` · cross-cutting `L1-*` · `INTERLOCK-*` · `A2A-*` · `MCP-*` | `L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DATA-CLASS-DENIED`, `A2A-AUDIENCE-MISMATCH`, `MCP-OAUTH-CHALLENGE-SCOPE-MISMATCH` |
+| Design-time finding | `ARCH-*` (linter) · `ORCH-*` (workflow runtime) | `ARCH-DATA-CLASS-EXCEEDS-ACTOR`, `ORCH-MESSAGE-BUDGET` |
 | Test | `L1-SIM-Mn-nnn`, core `CORE-SIM-*` | `L1-SIM-M6-001`, `CORE-SIM-TENANT-001` |
 | Policy | Meaningful kebab-case ID | `mcp-tool-invoke-default` |
 
 `M1–M9` are research/threat classification IDs, while `DET-*` are implemented detection rules. A single threat can be implemented by multiple rules, so the two IDs are not treated as equivalent.
+
+Reason codes are **per enforcement point**. The same control emits `L1-M5-TOKEN-AUDIENCE-MISMATCH` at the MCP gateway and `A2A-AUDIENCE-MISMATCH` at the A2A broker, so a reason-code aggregate is not comparable across points; the canonical check id in `policy.py`'s `CHECKS` table is. `CORE-SIM-*` and `L1-SIM-*` are specification IDs and are not carried by the tests that implement them — `CORE-SIM` in particular appears in no file outside `docs/`.
 
 ## 4. Baseline Definitions for Data and Results
 

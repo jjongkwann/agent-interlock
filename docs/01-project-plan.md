@@ -101,11 +101,11 @@ flowchart LR
 
 | Component | Responsibility | MVP Implementation |
 |---|---|---|
-| Sensor/SDK | Observes internal steps within the Agent framework | Python/TypeScript SDK, OpenTelemetry hook |
+| Sensor/SDK | Observes internal steps within the Agent framework **and enforces**: `wrap()` runs `SDK_PROFILE`'s 16 checks (`sdk.py:152`) and raises `GatewayError` under `ENFORCE` (`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
 | Security Gateway | Relays/blocks requests per relationship | HTTP/gRPC middleware, Tool/RAG adapter |
 | Event Normalizer | Converts provider-specific logs into the common schema | Stateless service |
 | Policy Decision Point | Evaluates policy, authorization, and risk score | Policy engine + deterministic rules |
-| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway |
+| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway **and in the SDK** — three points run the shared check table today: MCP gateway (18 checks), SDK (16), A2A broker (16). They are not equivalent; see §4.2 |
 | Event Bus | Asynchronous delivery and reprocessing | MVP writes directly to the DB or uses a lightweight queue; Kafka-compatible at scale |
 | Event Store | Data for search, statistics, and correlation | PostgreSQL partitioning |
 | Evidence Store | Encrypted raw content, files, and large payloads | S3-compatible Object Storage |
@@ -113,6 +113,26 @@ flowchart LR
 | Incident Manager | Merges events into incidents | trace/actor/resource-based correlation |
 | Response Orchestrator | Token revocation, trace kill, quarantine | Approvable runbook executor |
 | Dashboard/API | Search, statistics, policy operations | REST API + operations UI |
+
+### 4.2 The Three Enforcement Points Share a Mechanism, Not a Scope
+
+Policy judgment is declared once, in `policy.py`'s `CHECKS` table (26 checks). An enforcement point is a `Profile`: which check ids it runs, and what reason code it emits for each. That is the whole of what was unified — **the mechanism, not the coverage.**
+
+| Point | Profile | Checks | Emitted namespace |
+|---|---|---|---|
+| MCP gateway | `GATEWAY_PROFILE` | 18 | `INTERLOCK-*`, `L1-*` |
+| SDK (`wrap()`) | `SDK_PROFILE` | 16 | `INTERLOCK-*`, `L1-*` |
+| A2A broker | `A2A_PROFILE` (split into `A2A_LINK_PROFILE` 11 + `A2A_BOUNDARY_PROFILE` 5) | 16 | `A2A-*` |
+
+The three do **not** check the same things, and no statistic should be read as if they did:
+
+- The SDK omits the two M2 definition checks — it never holds a `ToolRevision`. Those are ABSENT at the SDK, not "passed".
+- The broker shares only **8** of its 16 checks with the gateway; the other 8 are its own (identity binding, message-part schema, payload presence, and the five boundary checks). Ten gateway controls have no counterpart on the broker at all — it has **no** egress-destination, export-volume, side-effect, taint, approval or schema control.
+- Each point renames what it emits. The same control appears as `L1-M5-TOKEN-AUDIENCE-MISMATCH` at the gateway and `A2A-AUDIENCE-MISMATCH` at the broker. Aggregates keyed on reason code are therefore **not** comparable across points; aggregates keyed on the canonical check id are. Any join between the two must go through `Profile.reason_codes`, never a string match.
+
+Two comparisons genuinely differ rather than merely being renamed, and the difference is a parameter rather than a second check. Both points run the same predicate against `intent.expected_audience` and `intent.expected_resource`; the broker is what *fills those fields*, from `target.identity` and `a2a://{target.id}` respectively (`a2a.py:650-651`), where the MCP gateway takes them from the caller's declared intent.
+
+See [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md) for the design and its explicit limits — in particular that coverage is not safety.
 
 ---
 
@@ -123,8 +143,8 @@ flowchart LR
 | Relationship ID | Flow | Enforcement Point | Priority Detections |
 |---|---|---|---|
 | REL-01 | User → Agent | INPUT_GATEWAY | Prompt Injection, session confusion, user impersonation |
-| REL-03 | Agent → RAG | RETRIEVAL_GATEWAY | cross-tenant lookups, RAG poisoning, bulk search |
-| REL-05 | Agent → Tool/MCP | TOOL_GATEWAY | calls driven by untrusted input, authorization overreach, Tool drift |
+| REL-03 | Agent → RAG | RAG_GATEWAY | cross-tenant lookups, RAG poisoning, bulk search |
+| REL-05 | Agent → Tool/MCP | MCP_GATEWAY | calls driven by untrusted input, authorization overreach, Tool drift |
 | REL-07 | Agent → External | EGRESS_GATEWAY | secret exfiltration, new destinations, money transfer/deletion/email sending |
 | REL-12 | All → Observability | AUDIT_SINK | missing logs, Gateway bypass, broken trace |
 
@@ -140,6 +160,8 @@ flowchart LR
 | REL-10 | Agent → Orchestrator | STATE_MACHINE |
 | REL-11 | Tool → Runtime/Host | SANDBOX |
 | REL-13 | Supply Chain → Runtime | DEPLOY_GATE |
+
+The `EnforcementPoint` enum (`architecture.py:31-47`) additionally carries `DESIGN_LINTER`, `SDK`, and `RESPONSE_ORCHESTRATOR`, which are not tied to a single relationship: the linter runs at compile time over the whole graph, the SDK enforces in-process on whatever link its `wrap()` guards, and the response orchestrator acts after a verdict. There is no `RETRIEVAL_GATEWAY` or `TOOL_GATEWAY` — those are `RAG_GATEWAY` and `MCP_GATEWAY`.
 
 ---
 
@@ -247,22 +269,44 @@ SECURITY_OUTCOME
   "relationship_type": "INVOKES",
   "relationship_id": "REL-05",
   "tg_ids": ["TG07", "TG08", "TG20", "TG22"],
-  "severity": "HIGH",
+  "severity": "INFO",
   "payload": {
-    "operation": "send_email",
-    "purpose": "customer_refund_notice",
-    "arguments_hash": "sha256:...",
-    "destination": "external:new-domain.example",
-    "data_classes": ["PII", "CUSTOMER_RECORD"],
-    "estimated_side_effect": "EXTERNAL_WRITE",
-    "taint_labels": ["UNTRUSTED_RAG_CONTENT"],
-    "raw_evidence_ref": "evidence://prod/2026/07/15/evt-..."
+    "mcp": {
+      "method": "tools/call",
+      "serverId": "tenant-a/prod/trusted-mail"
+    },
+    "toolDefinition": {
+      "toolId": "tenant-a/prod/trusted-mail:send_email",
+      "revisionId": "tenant-a/prod/trusted-mail:send_email@sha256:db69ee4e..."
+    },
+    "invocation": {
+      "purpose": "reply",
+      "argumentsHash": "sha256:d65a89b1083ffc3eab7484b78bb20db3d40b0fb42b39d4ae66dd561394b8e892"
+    }
   },
   "integrity_hash": "sha256:..."
 }
 ```
 
+Payload keys are **lowerCamelCase**, and the intent's data classes, destinations, taint labels and content hash are not in this event — they are in the separate `DATA_FLOW_OBSERVED` that immediately follows, under the same `interaction_id`:
+
+```json
+{
+  "event_type": "DATA_FLOW_OBSERVED",
+  "payload": {
+    "dataClasses": ["D7"],
+    "destinations": ["user@attacker.example"],
+    "taintLabels": ["UNTRUSTED_RAG_CONTENT"],
+    "contentHash": "sha256:d65a89b1..."
+  }
+}
+```
+
+The SDK emits the same two event types with a **narrower** `INTERACTION_REQUESTED` payload — `{"argumentsHash": …, "purpose": …}` (`sdk.py:139`), with no `mcp` or `toolDefinition` block, because the SDK holds no `ToolRevision`. Its `DATA_FLOW_OBSERVED` is identical in shape to the gateway's.
+
 ### 7.2 Control Decision
+
+Captured from a real run: a tainted `EXTERNAL_WRITE` to an unlisted destination, under `mode: ENFORCE`.
 
 ```json
 {
@@ -270,22 +314,42 @@ SECURITY_OUTCOME
   "trace_id": "trace-4cf8",
   "interaction_id": "019ba1d0-08cd-7a04-b918-840b8e52cc02",
   "relationship_id": "REL-05",
+  "severity": "HIGH",
   "payload": {
-    "control_instance_id": "CTRL-TOOL-GW-PROD-01",
-    "policy_id": "tool-egress-policy",
-    "policy_version": "27",
-    "decision": "HOLD",
-    "reason_codes": [
-      "UNTRUSTED_DATA_TO_EXTERNAL_WRITE",
-      "NEW_DESTINATION",
-      "PII_PRESENT"
-    ],
-    "risk_score": 92,
-    "evaluation_ms": 8,
-    "required_action": "OPERATOR_APPROVAL"
+    "toolDefinition": {
+      "toolId": "tenant-a/prod/trusted-mail:send_email",
+      "revisionId": "tenant-a/prod/trusted-mail:send_email@sha256:db69ee4e...",
+      "observedDigest": "sha256:db69ee4e...",
+      "approvedDigest": "sha256:db69ee4e...",
+      "state": "ACTIVE"
+    },
+    "authorization": {
+      "credentialFingerprint": "[REDACTED]",
+      "issuer": null,
+      "audience": null,
+      "resource": null
+    },
+    "control": {
+      "policyId": "mcp-tool-invoke-default",
+      "policyVersion": "1.0.0",
+      "mode": "ENFORCE",
+      "decision": "BLOCK",
+      "reasonCodes": [
+        "L1-M9-NEW-DESTINATION",
+        "INTERLOCK-TAINTED-EXTERNAL-WRITE"
+      ],
+      "actualEnforced": true
+    }
   }
 }
 ```
+
+Four things to read off this event rather than from memory:
+
+- **The verdict nests under `payload.control`**, not at the payload root. `mode` (what the policy was configured to do) and `actualEnforced` (what was actually enforced) are separate fields, so a SHADOW evaluation is distinguishable from an enforced one without composing it from anything else.
+- **`reasonCodes` are the real emitted strings.** There is no `risk_score`, `evaluation_ms`, `control_instance_id` or `required_action` field. Earlier revisions of this document showed `UNTRUSTED_DATA_TO_EXTERNAL_WRITE`, `NEW_DESTINATION` and `PII_PRESENT`; none of those strings exists anywhere in `src/`.
+- **`INTERLOCK-TAINTED-EXTERNAL-WRITE` is newly reachable at the gateway** on this branch — it previously existed only in the SDK.
+- **The SDK emits the same nested `payload.control` block** so one reducer handles both, but with **no** `toolDefinition` or `authorization` sibling. The same call through `wrap()` yields `reasonCodes: ["L1-M9-NEW-DESTINATION", "INTERLOCK-TAINTED-EXTERNAL-WRITE", "INTERLOCK-APPROVAL-REQUIRED"]` — the third code appears because the SDK cannot satisfy an approval; see [02 Developer Framework Design](02-developer-framework-design.md) §4.2.
 
 ### 7.3 Action Failure and Attack Success
 
@@ -295,10 +359,9 @@ SECURITY_OUTCOME
   "trace_id": "trace-4cf8",
   "interaction_id": "019ba1d0-08cd-7a04-b918-840b8e52cc02",
   "payload": {
-    "decision": "BLOCK",
-    "action": "CANCEL_TOOL_INVOCATION",
-    "action_result": "FAILED",
-    "failure_reason": "TOOL_CALL_ALREADY_DISPATCHED"
+    "result": "FAILED",
+    "connectorExecutionId": "8f2c1e40-...",
+    "failure": "connector timed out after 30s"
   }
 }
 ```
@@ -308,12 +371,15 @@ SECURITY_OUTCOME
   "event_type": "SECURITY_OUTCOME_SET",
   "trace_id": "trace-4cf8",
   "payload": {
-    "security_outcome": "PARTIALLY_EXECUTED",
-    "effects": ["EMAIL_SENT", "PII_EXPOSED"],
-    "compensation_required": true
+    "securityOutcome": "PARTIALLY_EXECUTED",
+    "connectorExecutionId": "8f2c1e40-..."
   }
 }
 ```
+
+`result` is an `ActionResult` (`COMPLETED`, `FAILED`, `TIMED_OUT`, `PARTIAL`, `NOT_APPLICABLE`) and `securityOutcome` a `SecurityOutcome` (`ATTEMPTED`, `BLOCKED`, `PARTIALLY_EXECUTED`, `SUCCEEDED`, `UNKNOWN`, `FALSE_POSITIVE`, `SIMULATED`), both in `models.py`. `_append_outcome` accepts arbitrary `**extra` keys, so an effect list or compensation flag can be carried, but neither is a fixed field and neither is populated by `src/` today.
+
+> **Known reporting defect, SDK path only.** When `wrap()` refuses an invocation it appends `ACTION_EXECUTED` with `{"result": "COMPLETED", "connectorExecutionId": null}` before `SECURITY_OUTCOME_SET: BLOCKED` and raising (`sdk.py:193-199`). The action never ran. This predates the unified-engine work (it arrived with `8ef67b0`) and is called out here because DET-012 — "downstream success event after a BLOCK decision" — is exactly the rule this shape trips. Distinguish the two with `connectorExecutionId`, which is `null` only on the refused path; do not treat SDK `result: COMPLETED` alone as evidence of execution.
 
 ---
 
@@ -663,7 +729,7 @@ CREATE TRIGGER security_events_no_mutation
 
 - Events without a `tenant_id` are rejected at ingest and recorded in `ingest_errors`.
 - Evidence lookups also cannot cross the tenant boundary (§15.2); the lookup itself is recorded as a separate security event.
-- This isolation and its bypass prevention are verified by the regression tests in [05 L1 Security Validation Plan](05-l1-security-validation-plan.md) §10: `CORE-SIM-TENANT-001` (`SET app.tenant_id` has no effect), `002` (privilege revocation), `003` (append-only trigger), and `004` (RLS bypass attribute).
+- Coverage of this isolation is **partial**, and the gap is stated precisely in [05 L1 Security Validation Plan](05-l1-security-validation-plan.md) §10. In short: `CORE-SIM-TENANT-001` and `002` are exercised against a live PostgreSQL by `tests/test_postgres_ledger.py`; `003` (append-only trigger) and `004` (RLS-bypass attribute) are **not tested at all** — their only evidence is a substring match on the text of the migration file. Do not read the append-only trigger as verified.
 
 ---
 
@@ -755,7 +821,7 @@ Promotion criteria are not simply elapsed time but simulation recall, false posi
 | DET-001 | REL-01 | Command pattern in untrusted content + high-risk intent | taint, HOLD | TG01 |
 | DET-002 | REL-03 | Subject tenant and search tenant mismatch | BLOCK | TG06/TG18 |
 | DET-003 | REL-03 | Broad document/vector enumeration in a short time | rate limit, HOLD | TG06/TG22 |
-| DET-004 | REL-05 | Untrusted taint passed as a write Tool argument | BLOCK/approval | TG09/TG20 |
+| DET-004 | REL-05 | Untrusted taint passed as an `EXTERNAL_WRITE` Tool argument | BLOCK (see §12.1) | TG09/TG20 |
 | DET-005 | REL-05 | Approved manifest digest and execution digest mismatch | QUARANTINE | TG07/TG08 |
 | DET-006 | REL-05 | Tool scope requested wider than the Agent's authorization | BLOCK | TG13 |
 | DET-007 | REL-07 | New external destination + PII/SECRET | BLOCK/approval | TG20/TG22 |
@@ -767,10 +833,32 @@ Promotion criteria are not simply elapsed time but simulation recall, false posi
 
 ### 12.1 Rule Definition Example
 
+This is the **target** shape for a declarative rule definition. The rule language does not exist yet; DET-004 is implemented today as a hard-coded check, and the two differ. Read the implemented behaviour first.
+
+**As implemented** — `_tainted_external_write` (`policy.py:238-243`), check id `INTERLOCK-TAINTED-EXTERNAL-WRITE`:
+
+```python
+if context.intent.estimated_side_effect != SideEffect.EXTERNAL_WRITE:
+    return None                     # DESTRUCTIVE_WRITE is not covered by this control
+if not context.intent.taint_labels:
+    return ()
+return (("INTERLOCK-TAINTED-EXTERNAL-WRITE", ControlDecision.BLOCK),)
+```
+
+Three differences from the aspiration below, each of which matters operationally:
+
+1. **The verdict is `BLOCK`, not `HOLD`.** It is unconditional and not configurable through a `LinkPolicy` action field. There is no reversible wait and nothing to approve.
+2. **`approval_valid` is never read.** The `unless: valid_operator_approval` arm is not implemented by this control. A held-then-approved flow is served by a *different* check, `INTERLOCK-APPROVAL-REQUIRED` (`_approval`, `policy.py:246-249`), which does read `approval_valid` and does emit `HOLD`.
+3. **`DESTRUCTIVE_WRITE` is not covered.** The check returns `None` for every side effect other than `EXTERNAL_WRITE`, so a tainted destructive write is INAPPLICABLE here, not blocked.
+
+Note this control is **newly live at the MCP gateway**. It previously existed only in `sdk.py`; promoting it to the shared table put it in `GATEWAY_PROFILE`, and it is production-reachable because `mcp_transport.py:148` forwards caller-supplied `taint_labels` into the intent. A tainted external write that passed at the gateway before now blocks.
+
+**As aspired** (not implemented — no rule engine consumes this):
+
 ```yaml
 rule_id: DET-004
 version: 1.0.0
-status: SHADOW
+status: PROPOSED          # no rule engine reads this file
 relationship_ids: [REL-05]
 when:
   all:
@@ -779,7 +867,7 @@ when:
 unless:
   - valid_operator_approval == true
 decision: HOLD
-reason_code: UNTRUSTED_DATA_TO_HIGH_IMPACT_TOOL
+reason_code: UNTRUSTED_DATA_TO_HIGH_IMPACT_TOOL   # not emitted anywhere in src/
 tg_ids: [TG09, TG20]
 test_cases:
   - SIM-DET-004-ALLOW-001
@@ -843,6 +931,10 @@ sequenceDiagram
 | RESP-07 | `ROLLBACK_MEMORY` | A safe snapshot exists | Remove data derived from the poisoning |
 | RESP-08 | `BLOCK_DESTINATION` | Egress gateway control available | DNS/IP/URL bypass test |
 | RESP-09 | `DEGRADE_READ_ONLY` | Observation/policy failure | Zero writes/external sends |
+
+Two notes on what backs RESP-02 today. The only control that emits `HOLD` off an approval state is `INTERLOCK-APPROVAL-REQUIRED` (`_approval`, `policy.py:246-249`), and the only approval-granting API is `MCPToolGateway.grant_approval` (`gateway.py:140`). `INTERLOCK-TAINTED-EXTERNAL-WRITE` is **not** part of this runbook despite DET-004's wording: it returns an unconditional `BLOCK` and never reads `approval_valid` (see §12.1).
+
+RESP-09's `DEGRADE_READ_ONLY` is a declarable `FailureMode` value with **no consumer in `src/`**. `LinkPolicy.failure_mode` is read at runtime in exactly one place, `egress.py:145`, which tests for `FAIL_CLOSED`; every other reference is design-time lint or serialisation. Declaring `DEGRADE_READ_ONLY` on a link changes no runtime behaviour today.
 
 Automated response does not end with recording the `decision`. Each Runbook must generate an `action_result` and an independent verification event.
 
@@ -929,10 +1021,14 @@ FROM control_decisions d
 JOIN interactions i USING (interaction_id)
 LEFT JOIN action_results a USING (interaction_id)
 LEFT JOIN security_outcomes o USING (interaction_id)
-WHERE d.decision IN ('BLOCK', 'QUARANTINE', 'KILL')
+WHERE d.decision <> 'ALLOW'
   AND (a.action_result IS DISTINCT FROM 'COMPLETED'
        OR o.outcome IN ('PARTIALLY_EXECUTED', 'SUCCEEDED'));
 ```
+
+> **Why `<> 'ALLOW'` and not a decision allowlist.** The block family is defined negatively in the code — `analytics.py:69` (`block_decision`) and every other such predicate in `src/` test `!= ALLOW`. An enumerated list silently drops verdicts. The previous version of this query listed `('BLOCK','QUARANTINE','KILL')`, which omitted **`HOLD`** — the default `new_destination_action` (`models.py:179`) and the hard-coded verdict for `INTERLOCK-APPROVAL-REQUIRED` — as well as `REVOKE`, `CHALLENGE`, `SANITIZE`, `DEGRADE` and `ERROR`, while including `KILL`, which no code in `src/` produces. Since `HOLD` is the single most common non-ALLOW verdict this platform emits, the omission hid most of the panel's own subject.
+>
+> One caveat this query cannot express: `PolicyDecisionRecord.would_block` reads the rank map rather than `!= ALLOW`, so it and the five remaining `!= ALLOW` predicates **disagree on `BYPASSED`**, which ranks below `ALLOW`. `BYPASSED` has no producer in `src/` today and is reachable only by operator configuration of the five `LinkPolicy` action fields; reconciling the two readings is an open question for Plan 2.
 
 ```sql
 -- High-risk events and block rate by Actor relationship
@@ -1057,7 +1153,7 @@ Even as event volume grows, the synchronous decision path must not depend on the
 | Test ID | Scenario | Expected Result |
 |---|---|---|
 | SIM-001 | Prompt Injection in an external document induces an email Tool call | Taint is preserved, HOLD/BLOCK |
-| SIM-002 | Searching RAG documents belonging to another tenant | RETRIEVAL_GATEWAY blocks |
+| SIM-002 | Searching RAG documents belonging to another tenant | RAG_GATEWAY blocks |
 | SIM-003 | Tool manifest changes after approval | Tool quarantine |
 | SIM-004 | A malicious MCP endpoint induces shell execution from a connector | Endpoint blocked, workload isolated |
 | SIM-005 | A delegated token is reused with a different audience | Authentication rejected, lineage revoked |

@@ -16,13 +16,21 @@ This document is the traceability map between the design contract and the curren
 - Language: Python 3.11
 - Deployment form: dependency-free reference core + optional psycopg PostgreSQL adapter
 - Baseline specification: `03`–`05` version 1.1
-- Implementation modes: in-memory Registry, in-memory/PostgreSQL Session·OAuth·Config Store, in-memory/PostgreSQL Ledger, A2A Broker with bounded task orchestration
+- Implementation modes: in-memory/PostgreSQL Registry (`InMemoryRevisionStore` · `PostgreSQLRevisionStore`), in-memory/PostgreSQL Session·OAuth·Config Store, in-memory/PostgreSQL Ledger, A2A Broker with bounded task orchestration
 
 ## Contract Traceability
 
 | Contract | Implementation | Verification |
 |---|---|---|
-| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests` |
+| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests` (**one** test — `define`/`connect`/graph wiring only), `tests/test_sdk_profile.py` (14 tests: the 16 checks `wrap()` runs, its rename map, and its execution gate) |
+| Unified check table · profiles | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(26)·`run_checks` | `tests/test_check_table.py` (20 tests: table construction, the three coverage states, per-check `armed`, duplicate-id rejection) |
+| Per-enforcement-point profiles | `GATEWAY_PROFILE`(18) · `SDK_PROFILE`(16) · `A2A_PROFILE`(16) → `A2A_LINK_PROFILE`(11)·`A2A_BOUNDARY_PROFILE`(5) | each profile's **whole** rename map pinned, not just the code set it yields; static audit that every emittable reason key is mapped |
+| Decision severity ordering | `models.py` `_DECISION_RANK` (all 11 `ControlDecision` members, no fallback; `RuntimeError` at import if not total) | `tests/test_decision_ranking.py` (12 tests: totality, distinctness naming the colliding pair, `BYPASSED` below `ALLOW`, `ERROR` below `QUARANTINE`) |
+| Execution permit, aggregated apart from severity | `policy.execution_permitted`, `PolicyDecisionRecord.execution_permitted` ANDed into `permits_execution` | `tests/test_execution_permit.py` (10 tests; pins that `[ALLOW, BYPASSED]` does **not** permit execution) |
+| Mode-independent "policy objected" | `PolicyDecisionRecord.would_block`, derived from `_DECISION_RANK` rather than `!= ALLOW` | `tests/test_decision_ranking.py`; disagrees with the five remaining `!= ALLOW` predicates on `BYPASSED` **by design** |
+| Credential verification is not credential presence | `CredentialClaims.authenticated` (defaults `False`); `_credential_missing` requires it | `tests/test_check_table.py`, `tests/test_sdk_profile.py` — an unverified claims blob is `L1-M5-CREDENTIAL-MISSING`, not a clean M5 pass |
+| Link data classes bounded by the target Actor's grant | `architecture.py:806-818` `ARCH-DATA-CLASS-EXCEEDS-ACTOR` (CRITICAL, blocks compile) | `tests/test_architecture.py`; **skips Actors with empty `dataAccess`, which is every Studio export** — see [07 §5.7](07-security-architecture-studio-design.md) |
+| Pre-merge behaviour pinned before restructuring | — | `tests/test_policy_characterization.py`, `tests/test_a2a_characterization.py` (the 25 previously-uncovered reason codes) |
 | Static design · single trace graph data | `Interlock.design_graph`, `runtime_graph` | `test_define_connect_wrap_and_graph` |
 | Canonical/raw definition digest | `canonical.py`, `registry.py` | `CanonicalizationTests`, `RegistryTests` |
 | Definition state and digest pin | `DefinitionRegistry` | M2 drift regression test |
@@ -107,7 +115,7 @@ This document is the traceability map between the design contract and the curren
 
 `tests/test_l1_matrix.py` automates all 34 L1-SIM-M1..M9 test IDs from [05 Validation Plan](05-l1-security-validation-plan.md) as SIMULATION. M4 publisher admission · destination egress deny/allow, M5 scope broadening · callback replay, and M6 private-IP redirect · response size · safe consent paths also leave independent matrix-test and `TEST_EXECUTED` evidence. The following items are the production-integration boundary beyond reference verification.
 
-The 2026-07-20 full regression: 454 Python tests passing · 12 skipped · 15 subtests passing, plus 8 Studio tests (`npm test`, including build · golden · Unicode · boundary/orchestration contracts). Current skips are the Linux+bwrap live and DSN-less PostgreSQL live families; the seccomp BPF logic is verified in-test with a classic-BPF interpreter, while real-kernel enforcement is verified by the CI `sandbox-live` job.
+The current full regression: **`Ran 542 tests, OK (skipped=12)`** on the CI path (`PYTHONPATH=src:tests python3 -m unittest discover -s tests`), plus 8 Studio tests (`npm test`, including build · golden · Unicode · boundary/orchestration contracts). The unified-judgment-engine work added six test files — `test_policy_characterization.py`, `test_a2a_characterization.py`, `test_check_table.py`, `test_sdk_profile.py`, `test_decision_ranking.py`, `test_execution_permit.py` — and extended `test_core.py`, `test_architecture.py`, `test_l1_matrix.py` and `test_scaffold.py`. The previously published figure of 454 predates all of it and was measured on the `pytest` path, which collects differently; quote the `unittest` number, since a checkout without the optional extras under-collects under `pytest`. Current skips are the Linux+bwrap live and DSN-less PostgreSQL live families; the seccomp BPF logic is verified in-test with a classic-BPF interpreter, while real-kernel enforcement is verified by the CI `sandbox-live` job.
 
 - Sigstore/Rekor network verification (asymmetric signing · KMS adapter point are implemented) and real egress proxy/sidecar socket · kill-telemetry operational wiring (DNS · connect-IP pinning is implemented via `PinnedSocketEgressBackend`)
 - OTLP gRPC (:4317) streaming receiver (the HTTP JSON receiver and Langfuse/LangSmith adapters are implemented), Incident/response service

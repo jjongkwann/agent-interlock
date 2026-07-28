@@ -23,6 +23,8 @@ Agent Interlock is not just a product for security teams to analyze operational 
 
 The Runtime enforces this declaration against actual calls, the Ledger records the verdict and outcome, and the Graph shows the gap between the declared relationships and actual execution.
 
+**One exception, and it is load-bearing.** `dataAccess` on an ActorSpec is **not** enforced at runtime. The SDK was its last runtime consumer; since the judgment engines merged, the data-class check compares the intent's classes against the *link policy's* `allowedDataClasses`/`deniedDataClasses`, not against the target Actor's grant. `ActorSpec.data_access` is now read only by the design-time linter (`ARCH-DATA-CLASS-EXCEEDS-ACTOR`) and by `scaffold.py`'s test generator. Declare it — the linter needs it, and it is the only thing that keeps a link policy from being widened past its target — but do not expect a runtime block from it.
+
 ## 2. Developer Experience
 
 ```mermaid
@@ -46,7 +48,7 @@ const supportAgent = interlock.defineActor({
   owner: "customer-platform",
   tenantMode: "REQUIRED",
   capabilities: ["CUSTOMER_LOOKUP", "SUPPORT_REPLY"],
-  dataAccess: ["CUSTOMER_PII"],
+  dataAccess: ["D2", "D3", "D7"],
   maxDelegationDepth: 2,
 });
 
@@ -64,13 +66,20 @@ export const secureSendEmail = emailTool.wrap(sendEmail);
 supportAgent.connect(emailTool, {
   relationship: "INVOKES",
   allowedPurposes: ["SUPPORT_REPLY", "REFUND_NOTICE"],
-  allowedData: ["CUSTOMER_NAME", "CUSTOMER_EMAIL"],
-  destinationPolicy: "KNOWN_CUSTOMER_ONLY",
-  approvalRequiredWhen: ["NEW_DESTINATION", "BULK_SEND"],
-  maxCallsPerTrace: 3,
+  allowedDataClasses: ["D2", "D3"],
+  deniedDataClasses: ["D5", "D8"],
+  requireExplicitDestination: true,
+  newDestinationAction: "HOLD",
+  externalWriteRequiresApproval: true,
   failureMode: "FAIL_CLOSED"
 });
 ```
+
+Two notes on reading this example.
+
+**Data classes are the `D1`–`D9` codes**, not symbolic names. `allowedDataClasses` and `deniedDataClasses` are compared as sets against `InvocationIntent.data_classes`, and the comparison is a literal set operation — a symbolic value such as `CUSTOMER_PII` is simply a class the target Actor does not hold. Substituting the symbolic vocabulary into the shipped `examples/secure_multi_agent_architecture.json` turns a clean lint into **four CRITICAL `ARCH-DATA-CLASS-EXCEEDS-ACTOR` findings**, and `interlock architecture compile` then refuses the graph. See [03 L1 MCP Tool Security Profile](03-l1-mcp-tool-security-profile.md) for the code definitions.
+
+**This is the intended TypeScript surface, which does not exist yet.** The shipped SDK is Python (`src/agent_interlock/sdk.py`); `defineActor` appears nowhere in the repository. The field names above are the real `LinkPolicy` fields in their JSON spelling (`architecture.py` `_policy_value`) so the example stays checkable against the schema, but `destinationPolicy`, `approvalRequiredWhen` and `maxCallsPerTrace` — shown in earlier revisions — are not `LinkPolicy` fields and never were.
 
 ## 3. ActorSpec
 
@@ -105,7 +114,7 @@ supportAgent.connect(emailTool, {
 ### 3.3 Manifest Representation
 
 ```yaml
-apiVersion: interlock.dev/v1
+apiVersion: interlock.dev/v1alpha1
 kind: Actor
 metadata:
   id: tool.send-email
@@ -114,7 +123,7 @@ spec:
   type: TOOL
   identity: spiffe://prod.example/tool/send-email
   capabilities: [EMAIL_SEND]
-  dataAccess: [CUSTOMER_NAME, CUSTOMER_EMAIL]
+  dataAccess: [D2, D3]
   sideEffects: [EXTERNAL_WRITE]
   tenantMode: REQUIRED
   schemas:
@@ -125,6 +134,8 @@ spec:
     timeoutMs: 5000
   failureMode: FAIL_CLOSED
 ```
+
+`interlock.dev/v1alpha1` is the only version the loader accepts: `ArchitectureGraph.from_dict` (`architecture.py:333-334`) rejects anything else with a `ValueError`, and [04 MCP Tool Gateway Spec](04-mcp-tool-gateway-spec.md) uses the same string throughout. `schemas/actor.schema.json` also permits `interlock.dev/v1`, but nothing in `src/` reads that schema, so it does not make `v1` loadable.
 
 ## 4. ActorGuard
 
@@ -152,6 +163,26 @@ Receive input
 | Gateway | MCP, A2A, RAG, Egress | Centralized policy and enforcement |
 
 Even without an SDK, a Proxy can observe communication, but semantics such as plan steps, memory provenance, and sub-agent trees can only be captured accurately with an SDK.
+
+### 4.2 `wrap()` Enforces, and It Cannot Approve
+
+`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 16 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses (`sdk.py:199`). The call does not happen. Sixteen of the gateway's eighteen checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
+
+**A wrapped Tool cannot perform an external write under a stock `LinkPolicy`.** `external_write_requires_approval` defaults `True`, so `INTERLOCK-APPROVAL-REQUIRED` fires on every `EXTERNAL_WRITE` intent unless `approval_valid` is set — and the SDK path never sets it. `CheckContext.approval_valid` defaults `False` (`policy.py:81`), `_invoke` does not pass it, and neither `Interlock` nor `Actor` exposes an approval API; `grant_approval` exists only on `MCPToolGateway` (`gateway.py:140`).
+
+This is reachable with everything declared correctly — an approved destination, a declared side effect, no taint:
+
+```python
+agent.connect(tool, LinkPolicy(id="p", version="1", mode=PolicyMode.ENFORCE))
+send = tool.wrap(send_email)
+send({"to": "user@customer.example"}, source=agent, tenant_id="t",
+     intent=InvocationIntent(purpose="reply",
+                             destinations=("user@customer.example",),
+                             estimated_side_effect=SideEffect.EXTERNAL_WRITE))
+# GatewayError: actor invocation blocked: INTERLOCK-APPROVAL-REQUIRED
+```
+
+The behaviour is fail-closed, which is the right direction, but the approval path is **unreachable by design** rather than merely unimplemented. Until the SDK gains an approval surface, an in-process external write needs either `LinkPolicy(external_write_requires_approval=False)` — an explicit, auditable decision to drop the control — or routing through `MCPToolGateway`, which can hold an approval. Do not work around it by declaring the side effect as something other than `EXTERNAL_WRITE`; that trades a visible block for a silent `L1-UNDECLARED-SIDE-EFFECT` at best and an undetected write at worst.
 
 ## 5. InterlockLink and LinkPolicy
 
@@ -207,6 +238,8 @@ sequenceDiagram
 ```
 
 The behavior when the policy engine fails is not chosen arbitrarily by the Runtime; it follows the `failureMode` in the LinkPolicy.
+
+**As shipped, that is narrower than it sounds.** `LinkPolicy.failure_mode` has exactly one runtime reader in `src/`: `egress.py:145`, which tests for `FAIL_CLOSED`. No policy-decision path consults it, and `DEGRADE_READ_ONLY` has no consumer at all. Everywhere else the field appears it is design-time lint (`ARCH-BOUNDARY-FAIL-OPEN`, `ARCH-HIGH-RISK-FAIL-OPEN`) or manifest serialisation. Declaring `FAIL_CLOSED` is still correct and is what the linter requires; just do not read it as a runtime switch across the whole engine yet.
 
 ## 7. Interlock Ledger
 
@@ -333,13 +366,13 @@ No Gateway event + Target event exists   → CONTROL_BYPASS
 ## 11. MVP Completion Criteria
 
 - A developer can declare two Actors and create a relationship with `connect()`.
-- An existing Tool can be `wrap()`ped to enforce policy before the call.
+- An existing Tool can be `wrap()`ped to enforce policy before the call. *(Met, with one dead end — an external write cannot be approved from the SDK; see §4.2.)*
 - Every call generates a trace and an Interaction Event.
 - Undeclared Actor relationships are detected.
 - HOLD/BLOCK is applied when untrusted input is passed to an external-write Tool.
 - The static design graph and a single-trace execution graph are displayed.
 - Blocking verdicts and actual enforcement results can be queried separately.
-- On Runtime failure, the per-relationship failureMode takes effect.
+- On Runtime failure, the per-relationship failureMode takes effect. *(Partially met — see §6: only `egress.py` reads it today.)*
 
 ## 12. Product Naming Scheme
 
