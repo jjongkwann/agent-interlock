@@ -375,8 +375,21 @@ with two different answers, and must reconcile them rather than add a seventh.
 **Amended by §6a — five, not six.** `sdk.py:189` has left the list. It was the
 one of the six that *gated execution*, and an execution gate is not a `!= ALLOW`
 question at all; it now calls `policy.execution_permitted`. The five that remain
-— `analytics.py:69`, `gateway.py:259/315/530`, `config_guard.py:412` — set
-severity, outcome or log level, and none of them decides whether a call runs.
+are `analytics.py:69`, `gateway.py:259/315/530` and `config_guard.py:412`, and
+none of them decides whether a call runs.
+
+**Amended again by §6c — and the summary of those five was wrong about one of
+them.** They do not all "set severity, outcome or log level". `gateway.py:259`
+is an *admission* gate: `_config_preflight` returns the config guard's verdict
+only when it is not `ALLOW`, so that predicate decides whether a second decision
+source reaches the record at all. It is fail-closed in the direction that matters
+— any sub-`ALLOW` member is admitted, `BYPASSED` included — but it is the one of
+the five whose answer changes what the record contains rather than how it is
+labelled, and §6c is what stops that admission from widening a permit.
+`gateway.py:315` sets the security outcome, `gateway.py:530` the event severity,
+`config_guard.py:412` the config event's severity, and `analytics.py:69` feeds
+the block counters — see §6c for a second, independent reason that last one must
+change.
 
 ### 6a. Execution permission is aggregated separately from severity
 
@@ -442,15 +455,119 @@ credential that is present.
 The check is shared, so this lands at the gateway as well as the SDK. At the
 gateway it closes a weakness inherited from `main`, which had no `authenticated`
 field at all; at the SDK it closes one Plan 1 created, by giving `wrap()` M5 checks
-that read only self-asserted fields. The three coverage states stay honest and the
-unverified case is `RAN_FLAGGED`, not `INAPPLICABLE` and not an empty-subject
-`RAN_CLEAN`.
+that read only self-asserted fields.
+
+**Corrected: the coverage claim held for this check and not for its family.** The
+sentence that stood here — "the three coverage states stay honest and the
+unverified case is `RAN_FLAGGED`" — was true of `_credential_missing` alone. Its
+four siblings (`_token_passthrough`, `_token_audience`, `_token_actor`,
+`_delegation_depth`) still keyed on `credential is None`, each deferring to a
+definition that had just changed underneath it, so the fix *widened* the
+asymmetry it was closing: an absent credential left those four INAPPLICABLE while
+a forged one made them `RAN_CLEAN`, and the forgery therefore read as **better
+examined** than the absence in the coverage channel. See §6d.
 
 The only producer in `src/` that legitimately sets the flag is
 `MCPAuthorizationCodeTokenClient.exchange` (`mcp_oauth.py`), which runs the claims
 verifier first. `A2APrincipal.authenticated` still defaults `True` — see *Known and
 accepted* — but that value reaches `_identity_binding` only, on `A2A_PROFILE`,
 which does not carry `L1-M5-CREDENTIAL-MISSING`.
+
+### 6c. The permit crosses the merge site, and the ledger records it
+
+*Added after §6a shipped, closing two findings from the same review pass.*
+
+**The merge site.** `evaluate()` is not the gateway's only decision source.
+`gateway.py:236-240` merges the config guard's verdict into the finished record
+with `replace(...)`, updating `decision` and `reason_codes` — and, before this
+change, not `execution_permitted`. That is §6a's defect verbatim at the one place
+a decision is composed outside `evaluate()`: a config verdict of `BYPASSED`
+merged into an `ALLOW` record produced `decision = ALLOW`,
+`execution_permitted = True`, `permits_execution = True`, and the connector ran.
+
+The safety that held in practice was not structural. It rested on
+`ConfigGuard.check_runtime` (`config_guard.py:386`) happening to emit
+`QUARANTINE` for drift and nothing ranked below `ALLOW` — a fact about a
+different module, asserted nowhere, and false for any future producer. The merge
+now ANDs `policy.execution_permitted` over the merged verdict, so a config
+verdict can only ever *narrow* the permit. It is deliberately **not** written as
+`config_decision.decision != ALLOW` and deliberately does **not** lean on
+`_config_preflight` already filtering `ALLOW`: relying on the filter is the same
+unasserted cross-module fact one line further up.
+
+`tests/test_execution_permit.py` pins it with a duck-typed config guard that
+returns each `ControlDecision` in turn, so the property is a property of the
+merge and not of today's producer, and with a source-level audit that fails on
+any `replace(...)` rewriting a decision record without carrying the permit.
+
+**The ledger.** §6a left the control record self-contradictory. On its own
+reproduction the call is denied and `SECURITY_OUTCOME_SET` records `BLOCKED`,
+while `CONTROL_EVALUATED` records `decision: "ALLOW", actualEnforced: true` — and
+the payload carried nothing that said the invocation was refused. Before §6a that
+configuration executed, so `ALLOW`/`SUCCEEDED` was consistent; the fix created a
+record no reader can reconcile. Both shared enforcement points now emit
+`control.executionPermitted` beside `actualEnforced`. Purely additive: no reason
+code moves, and a reader that does not know the key sees what it saw before. The
+A2A broker does not emit it — it derives `decision` from `reasons` and never
+produces a sub-`ALLOW` verdict, so its record was never contradictory, and a
+reducer must read a missing key as `true`, matching
+`PolicyDecisionRecord.execution_permitted`'s default.
+
+**What Plan 2 must do, because `analytics.py` is outside this plan's write set.**
+The ledger now carries the evidence and the reducer still ignores it. On the same
+reproduction `summarize_security_statistics` reports `blockDecisionCount: 0`,
+`enforcedBlockCount: 0`, `shadowWouldBlockCount: 0` for a real enforced block;
+the identical scenario with plain `BLOCK` actions reports `1 / 1 / 0`. Required:
+
+1. `InteractionRecord` gains an `execution_permitted` field, reduced as the AND
+   of `control.executionPermitted` over every `CONTROL_EVALUATED` in the
+   interaction, **defaulting `True` when the key is absent** so A2A records and
+   every event written before this change are unaffected.
+2. `analytics.py:69` `block_decision` becomes
+   `decision != ALLOW or not execution_permitted`. `enforced_block` and
+   `shadow_would_block` are derived from it and need no further edit. This is the
+   same predicate §6 already flags as disagreeing with `would_block` on
+   `BYPASSED`; the two reasons are independent and one change settles both.
+3. `studio/app/analytics.mjs:158-161` mirrors it, plus the `actualEnforced`
+   typedef in `analytics.mjs:23` and `analytics.d.ts:18` — the offline importer
+   must produce byte-identical statistics, which is a golden contract test on
+   both sides.
+4. `schemas/security-statistics.schema.json:132,137` describes both counters as
+   "Non-ALLOW decisions"; that wording stops being accurate the moment (2) lands.
+5. The shared fixture pair `schemas/fixtures/analytics-events.json` /
+   `analytics-statistics.json` needs a row carrying a denied permit under an
+   `ALLOW` decision, or the parity test cannot see the new field at all.
+
+### 6d. The M5 family shares one definition of a usable credential
+
+*Added in the same pass, closing the asymmetry §6b widened.*
+
+`_usable_credential(credential)` — presented, and marked `authenticated` by a
+producer that ran a verifier — is now the single definition the whole M5 family
+reads. The four comparison checks return `None` (INAPPLICABLE) when it is false:
+on a credential nobody verified, `actor`, `audience`, `resource`,
+`delegation_depth` and `exchanged` are all attacker-chosen, so those checks can
+only compare a forgery against itself, and reporting that as `RAN_CLEAN` is the
+"checked and clean" lie this document exists to eliminate. Absence and forgery now
+produce identical coverage vectors.
+
+Deferring is only honest if somebody still owns the verdict, so
+`_credential_missing` was widened to own it wherever a credential is presented,
+not only when the intent named an audience or resource. Without that half, a
+forged credential under an intent naming neither would have been refused solely
+by whichever sibling its attacker-chosen fields happened to trip — which is the
+attacker declining to set a field, not a control — and the coverage fix would have
+handed back a permit. `A2A_PROFILE` does not carry `L1-M5-CREDENTIAL-MISSING`;
+there `_identity_binding` owns it and already flagged an unauthenticated
+credential, so it does not defer. `tests/test_check_table.py` asserts per profile
+that an unusable credential still emits a code, rather than assuming the
+cross-profile fact.
+
+**No new reason code and no code renamed or reordered.** What does change is which
+code an unverified credential trips: `L1-M5-CREDENTIAL-MISSING` now, in place of
+whichever sibling the forged fields happened to hit. That is the point — the
+family reaches one verdict for one condition — and the invocation is denied either
+way.
 
 ### 7. Mode composition
 
@@ -658,11 +775,20 @@ under-reports:
    at least one part, so `payload_bytes >= 2`).
 7. **`assertNotIn(id, ran)` passes vacuously** if that id is dropped from the
    profile entirely — audit profile membership, not just the predicate.
+8. **The reducer must count a denied permit as a block.** `control.executionPermitted`
+   now reaches the ledger from both shared enforcement points (§6c); until
+   `analytics.py` and `studio/app/analytics.mjs` read it, a real enforced block
+   whose `decision` reduced to `ALLOW` counts as zero in `blockDecisionCount`,
+   `enforcedBlockCount` and `shadowWouldBlockCount`. §6c lists the five edits.
+   This is the first item in this list that has a fixture to reproduce it.
 
 **Reconcile before adding consumers.** Six predicates test `!= ALLOW` and so
 disagree with `would_block` on `BYPASSED`: `analytics.py:69`, `sdk.py:189`,
 `gateway.py:259/315/530`, `config_guard.py:412`. (§6a removed `sdk.py:189` from
-that list; five remain and none of them gates execution.) Separately,
+that list; five remain and none of them gates execution. §6c corrects what those
+five do — `gateway.py:259` admits a second decision source into the record rather
+than setting a label — and gives `analytics.py:69` a second, independent reason to
+change.) Separately,
 `analytics.py:147`
 picks `chosen` as the first control matching the strongest decision and takes
 `policyId`, `mode` and `actualEnforced` from it — **Plan 1's re-ranking already
