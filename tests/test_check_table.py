@@ -183,13 +183,15 @@ EMITTED_KEYS = {
     "L1-M8-CREDENTIAL-DETECTED": frozenset({"L1-M8-CREDENTIAL-DETECTED"}),
     "L1-M9-NEW-DESTINATION": frozenset({"L1-M9-NEW-DESTINATION"}),
     "L1-M9-VOLUME-EXCEEDED": frozenset({"L1-M9-VOLUME-EXCEEDED"}),
+    "L1-M9-VOLUME-BYTES-EXCEEDED": frozenset({"L1-M9-VOLUME-BYTES-EXCEEDED"}),
     "L1-UNDECLARED-SIDE-EFFECT": frozenset({"L1-UNDECLARED-SIDE-EFFECT"}),
     "INTERLOCK-DESTRUCTIVE-WRITE": frozenset({"INTERLOCK-DESTRUCTIVE-WRITE"}),
     "INTERLOCK-TAINTED-EXTERNAL-WRITE": frozenset({"INTERLOCK-TAINTED-EXTERNAL-WRITE"}),
     "INTERLOCK-APPROVAL-REQUIRED": frozenset({"INTERLOCK-APPROVAL-REQUIRED"}),
     "L1-M5-CREDENTIAL-MISSING": frozenset({"L1-M5-CREDENTIAL-MISSING"}),
     "L1-M5-TOKEN-PASSTHROUGH": frozenset({"L1-M5-TOKEN-PASSTHROUGH"}),
-    "L1-M5-TOKEN-AUDIENCE-MISMATCH": frozenset({"L1-M5-TOKEN-AUDIENCE-MISMATCH", "L1-M5-TOKEN-RESOURCE-MISMATCH"}),
+    "L1-M5-TOKEN-AUDIENCE-MISMATCH": frozenset({"L1-M5-TOKEN-AUDIENCE-MISMATCH"}),
+    "L1-M5-TOKEN-RESOURCE-MISMATCH": frozenset({"L1-M5-TOKEN-RESOURCE-MISMATCH"}),
     "L1-M5-TOKEN-ACTOR-MISMATCH": frozenset({"L1-M5-TOKEN-ACTOR-MISMATCH"}),
     "L1-M5-DELEGATION-DEPTH": frozenset({"L1-M5-DELEGATION-DEPTH"}),
     "A2A-IDENTITY-BINDING-MISMATCH": frozenset({"A2A-IDENTITY-BINDING-MISMATCH"}),
@@ -244,12 +246,14 @@ PROFILE_EMITTED_CODES = {
         "L1-M2-DEFINITION-NOT-ACTIVE": "L1-M2-DEFINITION-NOT-ACTIVE",
         "L1-M2-DEFINITION-DRIFT": "L1-M2-DEFINITION-DRIFT",
         "L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M9-VOLUME-BYTES-EXCEEDED": "L1-M9-VOLUME-EXCEEDED",
     },
     "SDK_PROFILE": {
         **{key: key for key in _SELF},
         # the one divergence from the gateway, and the reason this profile needs its own map
         "L1-M9-SENSITIVE-EGRESS": "INTERLOCK-DATA-CLASS-DENIED",
         "L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M9-VOLUME-BYTES-EXCEEDED": "L1-M9-VOLUME-EXCEEDED",
     },
     "A2A_PROFILE": {
         "A2A-IDENTITY-BINDING-MISMATCH": "A2A-IDENTITY-BINDING-MISMATCH",
@@ -359,8 +363,8 @@ A2A_RECIPES = (
     ("L1-M5-TOKEN-ACTOR-MISMATCH", "the credential names another actor", _credential(actor="agent.impersonator")),
     ("L1-M5-TOKEN-AUDIENCE-MISMATCH", "the audience does not match", _credential(audience="spiffe://wrong")),
     (
-        "L1-M5-TOKEN-AUDIENCE-MISMATCH",
-        "the resource takes the second branch and emits L1-M5-TOKEN-RESOURCE-MISMATCH",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH",
+        "the resource comparison, its own check since it carries its own policy flag",
         _credential(resource="a2a://wrong"),
     ),
     ("L1-M5-TOKEN-PASSTHROUGH", "the token was not exchanged", _credential(exchanged=False)),
@@ -390,9 +394,9 @@ class CheckTableTests(unittest.TestCase):
 
     def test_clean_case_runs_the_check_and_finds_nothing(self):
         policy, context = clean_case()
-        reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
-        self.assertEqual(reasons, [])
-        self.assertIn("INTERLOCK-ACTOR-TYPE-DENIED", ran)
+        outcome = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertEqual(outcome.reasons, [])
+        self.assertIn("INTERLOCK-ACTOR-TYPE-DENIED", outcome.ran)
 
     def test_profile_renames_the_emitted_reason_code(self):
         policy, context = clean_case()
@@ -402,16 +406,16 @@ class CheckTableTests(unittest.TestCase):
             checks=("INTERLOCK-ACTOR-TYPE-DENIED",),
             reason_codes={"INTERLOCK-ACTOR-TYPE-DENIED": "A2A-ACTOR-TYPE-DENIED"},
         )
-        reasons, decisions, ran = run_checks(policy, context, profile)
-        self.assertEqual(reasons, ["A2A-ACTOR-TYPE-DENIED"])
-        self.assertEqual(decisions, [ControlDecision.BLOCK])
-        self.assertIn("INTERLOCK-ACTOR-TYPE-DENIED", ran)
+        outcome = run_checks(policy, context, profile)
+        self.assertEqual(outcome.reasons, ["A2A-ACTOR-TYPE-DENIED"])
+        self.assertEqual(outcome.decisions, [ControlDecision.BLOCK])
+        self.assertIn("INTERLOCK-ACTOR-TYPE-DENIED", outcome.ran)
 
     def test_a_check_absent_from_the_profile_does_not_run(self):
         policy, context = clean_case()
         profile = Profile(enforcement_point="SDK", checks=(), reason_codes={})
-        _, _, ran = run_checks(policy, context, profile)
-        self.assertEqual(ran, set())
+        outcome = run_checks(policy, context, profile)
+        self.assertEqual(outcome.ran, set())
 
     def test_unarmed_and_inapplicable_checks_are_both_excluded_from_ran(self):
         """The three-way split (ran / armed-but-skipped / unarmed) is the whole point of
@@ -421,23 +425,28 @@ class CheckTableTests(unittest.TestCase):
             "STUB-UNARMED": Check(
                 id="STUB-UNARMED",
                 scope=CheckScope.ACTOR,
-                armed=lambda policy: False,
+                armed=lambda policy, context: False,
                 run=lambda policy, context: (("STUB-UNARMED", ControlDecision.BLOCK),),
             ),
             "STUB-INAPPLICABLE": Check(
                 id="STUB-INAPPLICABLE",
                 scope=CheckScope.ACTOR,
-                armed=lambda policy: True,
+                armed=lambda policy, context: True,
                 run=lambda policy, context: None,
             ),
         }
         profile = Profile(enforcement_point="TEST", checks=("STUB-UNARMED", "STUB-INAPPLICABLE"))
         policy, context = clean_case()
         with patch.dict(policy_module.CHECKS, stub_checks):
-            reasons, decisions, ran = run_checks(policy, context, profile)
-        self.assertEqual(reasons, [])
-        self.assertEqual(decisions, [])
-        self.assertEqual(ran, set())
+            outcome = run_checks(policy, context, profile)
+        self.assertEqual(outcome.reasons, [])
+        self.assertEqual(outcome.decisions, [])
+        self.assertEqual(outcome.ran, set())
+        # `ran` cannot tell the two apart -- that is what `armed` is for. ABSENT and INAPPLICABLE
+        # are different facts about a control, and collapsing them is the defect this branch exists
+        # to remove.
+        self.assertEqual(outcome.armed, ("STUB-INAPPLICABLE",))
+        self.assertEqual(outcome.flagged, set())
 
     def test_build_check_table_raises_on_duplicate_id(self):
         """Task 4 registers nineteen more checks into a table keyed by id; a collision must
@@ -465,15 +474,15 @@ class CheckTableTests(unittest.TestCase):
         `return ()` and the whole suite would stay green -- while Plan 2's coverage statistic
         started reporting a control as run-and-passed on invocations it never examined."""
         policy, context = clean_case()
-        _, _, ran = run_checks(policy, replace(context, revision=None), GATEWAY_PROFILE)
-        self.assertNotIn("L1-M2-DEFINITION-NOT-ACTIVE", ran)
-        self.assertNotIn("L1-M2-DEFINITION-DRIFT", ran)
-        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
+        outcome = run_checks(policy, replace(context, revision=None), GATEWAY_PROFILE)
+        self.assertNotIn("L1-M2-DEFINITION-NOT-ACTIVE", outcome.ran)
+        self.assertNotIn("L1-M2-DEFINITION-DRIFT", outcome.ran)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", outcome.ran)
         # clean_case()'s tool ships input_schema={}, and validate_schema short-circuits on an empty
         # schema -- so the schema check must stay out of `ran` here too, revision or no revision.
-        _, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
-        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
-        self.assertIn("L1-M2-DEFINITION-DRIFT", ran)  # not vacuous: the same check runs when it applies
+        outcome = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", outcome.ran)
+        self.assertIn("L1-M2-DEFINITION-DRIFT", outcome.ran)  # not vacuous: the same check runs when it applies
 
     def test_a_malformed_allowlist_entry_denies_the_destination_instead_of_raising(self):
         """A target whose allowed_domains holds something that is not a domain must still reach a
@@ -494,9 +503,9 @@ class CheckTableTests(unittest.TestCase):
             target=replace(context.target, allowed_domains=frozenset({"x" * 70})),
             intent=replace(context.intent, destinations=("https://evil.example",)),
         )
-        reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
-        self.assertEqual(reasons, ["L1-M9-NEW-DESTINATION"])
-        self.assertIn("L1-M9-NEW-DESTINATION", ran)
+        outcome = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertEqual(outcome.reasons, ["L1-M9-NEW-DESTINATION"])
+        self.assertIn("L1-M9-NEW-DESTINATION", outcome.ran)
 
     def test_a_malformed_allowlist_entry_does_not_disarm_its_well_formed_siblings(self):
         """Dropping the bad entry has to be entry-scoped, not check-scoped. Discarding the whole
@@ -509,9 +518,9 @@ class CheckTableTests(unittest.TestCase):
             target=replace(context.target, allowed_domains=frozenset({"x" * 70, "good.example"})),
             intent=replace(context.intent, destinations=("https://good.example",)),
         )
-        reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
-        self.assertEqual(reasons, [])
-        self.assertIn("L1-M9-NEW-DESTINATION", ran)  # not vacuous: the check ran and cleared it
+        outcome = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertEqual(outcome.reasons, [])
+        self.assertIn("L1-M9-NEW-DESTINATION", outcome.ran)  # not vacuous: the check ran and cleared it
 
     def test_a_malformed_allowlist_with_no_destination_declared_stays_inapplicable(self):
         """No destination declared means the destination control has no subject, malformed
@@ -522,9 +531,9 @@ class CheckTableTests(unittest.TestCase):
         not a runtime-enforcement one."""
         policy, context = clean_case()
         context = replace(context, target=replace(context.target, allowed_domains=frozenset({"x" * 70})))
-        reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
-        self.assertEqual(reasons, [])
-        self.assertNotIn("L1-M9-NEW-DESTINATION", ran)
+        outcome = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertEqual(outcome.reasons, [])
+        self.assertNotIn("L1-M9-NEW-DESTINATION", outcome.ran)
 
     def test_a_resolved_revision_shadows_the_actor_schema_even_when_it_declares_none(self):
         """_input_schema falls back to ActorSpec.input_schema only when no revision is resolved.
@@ -540,9 +549,9 @@ class CheckTableTests(unittest.TestCase):
             arguments={"wrong": 1},
         )
         self.assertEqual(context.revision.definition.input_schema, {})  # the discriminating operand
-        reasons, _, ran = run_checks(policy, context, GATEWAY_PROFILE)
-        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
-        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", reasons)
+        outcome = run_checks(policy, context, GATEWAY_PROFILE)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", outcome.ran)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", outcome.reasons)
 
     def test_a_credential_that_declares_no_authentication_reads_as_unauthenticated(self):
         """CredentialClaims.authenticated defaults to False, and a producer that did not verify the
@@ -555,9 +564,9 @@ class CheckTableTests(unittest.TestCase):
         self.assertFalse(bare.authenticated)  # the class default, not the fixture's
         profile = replace(A2A_PROFILE, checks=("A2A-IDENTITY-BINDING-MISMATCH",))
         unauthenticated = replace(context, credential=replace(context.credential, authenticated=False))
-        reasons, _, _ = run_checks(policy, unauthenticated, profile)
-        self.assertEqual(reasons, ["A2A-IDENTITY-BINDING-MISMATCH"])
-        self.assertEqual(run_checks(policy, context, profile)[0], [])
+        outcome = run_checks(policy, unauthenticated, profile)
+        self.assertEqual(outcome.reasons, ["A2A-IDENTITY-BINDING-MISMATCH"])
+        self.assertEqual(run_checks(policy, context, profile).reasons, [])
 
     def test_the_m5_presence_check_reads_authentication_not_the_object(self):
         """All three coverage states of L1-M5-CREDENTIAL-MISSING, at both shared enforcement points.
@@ -590,9 +599,9 @@ class CheckTableTests(unittest.TestCase):
             for label, case, expected_ran, expected_reasons in cases:
                 with self.subTest(enforcement_point=profile.enforcement_point, case=label):
                     single = replace(profile, checks=("L1-M5-CREDENTIAL-MISSING",))
-                    reasons, _, ran = run_checks(policy, case, single)
-                    self.assertEqual(reasons, expected_reasons)
-                    self.assertEqual("L1-M5-CREDENTIAL-MISSING" in ran, expected_ran)
+                    outcome = run_checks(policy, case, single)
+                    self.assertEqual(outcome.reasons, expected_reasons)
+                    self.assertEqual("L1-M5-CREDENTIAL-MISSING" in outcome.ran, expected_ran)
 
     def test_a_forged_credential_does_not_permit_execution_at_the_gateway(self):
         """The check is shared, so the SDK's hole and the gateway's close together.
@@ -647,12 +656,12 @@ class CheckTableTests(unittest.TestCase):
         for check_id in M5_CREDENTIAL_SIBLINGS:
             with self.subTest(check=check_id):
                 single = replace(GATEWAY_PROFILE, checks=(check_id,))
-                forged_ran = check_id in run_checks(policy, forged, single)[2]
-                absent_ran = check_id in run_checks(policy, absent, single)[2]
+                forged_ran = check_id in run_checks(policy, forged, single).ran
+                absent_ran = check_id in run_checks(policy, absent, single).ran
                 self.assertEqual(forged_ran, absent_ran)
                 self.assertFalse(forged_ran)  # a check with nothing to examine is INAPPLICABLE ...
                 verified = replace(bound, credential=replace(forged.credential, authenticated=True))
-                self.assertIn(check_id, run_checks(policy, verified, single)[2])  # ... and not always
+                self.assertIn(check_id, run_checks(policy, verified, single).ran)  # ... and not always
 
     def test_no_enforcement_point_loses_its_verdict_on_an_unusable_credential(self):
         """The siblings defer, so somebody in every profile that carries them has to own the verdict.
@@ -668,12 +677,12 @@ class CheckTableTests(unittest.TestCase):
         unusable = replace(base, credential=replace(base.credential, authenticated=False))
         for profile in (GATEWAY_PROFILE, SDK_PROFILE):
             with self.subTest(enforcement_point=profile.enforcement_point):
-                reasons, _, _ = run_checks(policy, unusable, profile)
-                self.assertEqual(reasons, ["L1-M5-CREDENTIAL-MISSING"])
+                outcome = run_checks(policy, unusable, profile)
+                self.assertEqual(outcome.reasons, ["L1-M5-CREDENTIAL-MISSING"])
         a2a_policy, a2a_context = a2a_case()
         a2a_unusable = replace(a2a_context, credential=replace(a2a_context.credential, authenticated=False))
-        reasons, _, _ = run_checks(a2a_policy, a2a_unusable, A2A_PROFILE)
-        self.assertEqual(reasons, ["A2A-IDENTITY-BINDING-MISMATCH", "A2A-BOUNDARY-IDENTITY-REQUIRED"])
+        outcome = run_checks(a2a_policy, a2a_unusable, A2A_PROFILE)
+        self.assertEqual(outcome.reasons, ["A2A-IDENTITY-BINDING-MISMATCH", "A2A-BOUNDARY-IDENTITY-REQUIRED"])
 
     def test_a_forged_credential_is_refused_even_when_the_intent_names_nothing(self):
         """The case where deferring would otherwise open a permit.
@@ -711,11 +720,13 @@ class CheckTableTests(unittest.TestCase):
         )
         for profile in (GATEWAY_PROFILE, SDK_PROFILE):
             with self.subTest(enforcement_point=profile.enforcement_point):
-                reasons, _, _ = run_checks(policy, context, profile)
-                self.assertEqual(reasons, ["L1-M5-TOKEN-AUDIENCE-MISMATCH"])
-        a2a_only = replace(A2A_PROFILE, checks=("L1-M5-TOKEN-AUDIENCE-MISMATCH",))
-        reasons, _, _ = run_checks(policy, context, a2a_only)
-        self.assertEqual(reasons, ["A2A-RESOURCE-MISMATCH"])
+                outcome = run_checks(policy, context, profile)
+                self.assertEqual(outcome.reasons, ["L1-M5-TOKEN-AUDIENCE-MISMATCH"])
+        a2a_only = replace(
+            A2A_PROFILE, checks=("L1-M5-TOKEN-AUDIENCE-MISMATCH", "L1-M5-TOKEN-RESOURCE-MISMATCH")
+        )
+        outcome = run_checks(policy, context, a2a_only)
+        self.assertEqual(outcome.reasons, ["A2A-RESOURCE-MISMATCH"])
 
     def test_every_check_emits_exactly_the_reason_keys_pinned_for_it(self):
         """The emitted-key domain of the whole table, pinned.
@@ -794,19 +805,19 @@ class CheckTableTests(unittest.TestCase):
         restatement of it.
         """
         policy, context = a2a_case()
-        reasons, _, ran = run_checks(policy, context, A2A_PROFILE)
-        self.assertEqual(reasons, [])
-        self.assertEqual(ran, set(A2A_PROFILE.checks))
+        outcome = run_checks(policy, context, A2A_PROFILE)
+        self.assertEqual(outcome.reasons, [])
+        self.assertEqual(outcome.ran, set(A2A_PROFILE.checks))
         self.assertEqual(set(A2A_PROFILE.checks) - {check_id for check_id, _, _ in A2A_RECIPES}, set())
         pinned = PROFILE_EMITTED_CODES["A2A_PROFILE"]
         for check_id, condition, perturb in A2A_RECIPES:
             with self.subTest(check=check_id, condition=condition):
                 policy, context = perturb(*a2a_case())
-                reasons, _, ran = run_checks(policy, context, replace(A2A_PROFILE, checks=(check_id,)))
-                self.assertEqual(ran, {check_id})  # armed and applicable ...
-                self.assertNotEqual(reasons, [])  # ... and the recipe still trips it
+                outcome = run_checks(policy, context, replace(A2A_PROFILE, checks=(check_id,)))
+                self.assertEqual(outcome.ran, {check_id})  # armed and applicable ...
+                self.assertNotEqual(outcome.reasons, [])  # ... and the recipe still trips it
                 # every code this check is pinned to be able to emit, and nothing else
-                self.assertEqual(set(reasons) - {pinned[key] for key in EMITTED_KEYS[check_id]}, set())
+                self.assertEqual(set(outcome.reasons) - {pinned[key] for key in EMITTED_KEYS[check_id]}, set())
 
     def test_evaluate_with_revision_none_under_default_policy_is_a_known_silent_allow(self):
         """Documents a known gap, does not bless it: default LinkPolicy() has both M2 gates

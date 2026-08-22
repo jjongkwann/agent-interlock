@@ -10,7 +10,7 @@ from typing import Any
 
 from .canonical import canonical_digest
 from .config_guard import ConfigDecision, ConfigGuard, ConfigPrincipal, ConfigRole, RuntimeConfigProbe
-from .ledger import InMemoryLedger, Ledger
+from .ledger import InMemoryLedger, Ledger, declare_coverage
 from .models import (
     ActionResult,
     ActorSpec,
@@ -93,6 +93,8 @@ class MCPToolGateway:
         self._tool_actors: dict[str, ActorSpec] = {}
         self._policies: dict[tuple[str, str], LinkPolicy] = {}
         self._decisions: dict[str, _Pending] = {}
+        # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
+        self._declared_coverage: set[str] = set()
         self._approvals: dict[str, Approval] = {}
         self._idempotency: dict[tuple[str, str], tuple[str, InvocationResult]] = {}
         self._execution_decisions: dict[str, str] = {}
@@ -570,11 +572,25 @@ class MCPToolGateway:
                     # Additive: it moves no reason code, and a reader that does not know the key
                     # sees exactly what it saw before.
                     "executionPermitted": decision.execution_permitted,
+                    **(decision.coverage.event_fields() if decision.coverage is not None else {}),
                 },
             },
             environment=pending.environment,
             data_source=pending.data_source,
         )
+        if decision.coverage is not None:
+            declare_coverage(
+                self.ledger,
+                self._declared_coverage,
+                decision.coverage,
+                tenant_id=pending.tenant_id,
+                trace_id=decision.trace_id,
+                span_id=decision.span_id,
+                source_actor_id=pending.source.id,
+                target_actor_id=pending.target.id,
+                environment=pending.environment,
+                data_source=pending.data_source,
+            )
 
     def _append_action(
         self,

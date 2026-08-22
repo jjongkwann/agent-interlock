@@ -194,6 +194,40 @@ class LinkPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class ControlCoverage:
+    """Which controls were switched on, which looked, and which flagged, for one decision.
+
+    Rides on PolicyDecisionRecord because the gateway composes its ledger event from the record
+    alone. ``declaration`` is the whole CONTROL_COVERAGE_DECLARED payload, digest included, built
+    once by policy.coverage_declaration; ``digest`` is the same value lifted out so the per-event
+    field does not have to index into a mapping.
+
+    Only ``flagged`` is per-invocation. The other two are properties of the link, which is why the
+    declaration is emitted once per digest instead of on every event.
+    """
+
+    enforcement_point: str
+    digest: str
+    flagged: tuple[str, ...]
+    declaration: Mapping[str, Any]
+
+    def event_fields(self) -> dict[str, Any]:
+        """The three keys this adds to ``payload.control`` on CONTROL_EVALUATED.
+
+        Defined once so the three enforcement points cannot spell the wire differently, which is
+        the failure mode `executionPermitted` already hit: the A2A broker does not carry it and a
+        reducer has to know that. ``flaggedChecks`` carries check ids because
+        ``Profile.reason_codes`` is not injective -- two reason keys can rename onto one code -- so
+        a reader cannot recover which check fired from the codes it emitted.
+        """
+        return {
+            "enforcementPoint": self.enforcement_point,
+            "evaluatedProfile": self.digest,
+            "flaggedChecks": list(self.flagged),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ToolDefinition:
     server_id: str
     tool_name: str
@@ -285,6 +319,7 @@ class PolicyDecisionRecord:
     # hand-built record behaves exactly as it did before this field existed -- permits_execution
     # ANDs the two, so the field can only ever narrow a permit, never widen one.
     execution_permitted: bool = True
+    coverage: ControlCoverage | None = None
 
     @property
     def permits_execution(self) -> bool:

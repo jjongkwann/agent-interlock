@@ -10,9 +10,9 @@ from typing import Any
 
 from .canonical import canonical_digest, canonical_json
 from .gateway import GatewayError
-from .ledger import InMemoryLedger, Ledger
+from .ledger import InMemoryLedger, Ledger, declare_coverage
 from .models import ActorSpec, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode
-from .policy import SDK_PROFILE, CheckContext, execution_permitted, run_checks, strongest_decision
+from .policy import SDK_PROFILE, CheckContext, control_coverage, execution_permitted, run_checks, strongest_decision
 from .security import validate_schema
 
 
@@ -58,6 +58,8 @@ class Interlock:
         self.ledger = ledger or InMemoryLedger()
         self._actors: dict[str, Actor] = {}
         self._links: dict[tuple[str, str], LinkPolicy] = {}
+        # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
+        self._declared_coverage: set[str] = set()
 
     def define_actor(self, spec: ActorSpec) -> Actor:
         if spec.id in self._actors:
@@ -149,7 +151,7 @@ class Interlock:
             },
             **common,
         )
-        reasons, decisions, _ = run_checks(
+        outcome = run_checks(
             policy,
             CheckContext(
                 source=source.spec,
@@ -165,6 +167,8 @@ class Interlock:
             ),
             SDK_PROFILE,
         )
+        reasons, decisions = outcome.reasons, outcome.decisions
+        coverage = control_coverage(policy, SDK_PROFILE, outcome)
         decision = strongest_decision(decisions)
         # Same de-duplication evaluate() applies, so a reducer counting reason codes sees the same
         # cardinality from both enforcement points for identical inputs.
@@ -185,11 +189,13 @@ class Interlock:
                     # See gateway._append_control: the permission aggregate beside the severity
                     # reduction, so a denied invocation does not record an unexplained ALLOW.
                     "executionPermitted": permitted,
+                    **coverage.event_fields(),
                 }
             },
             severity="HIGH" if reasons else "INFO",
             **common,
         )
+        declare_coverage(self.ledger, self._declared_coverage, coverage, **common)
         # The execution gate is the separate permission aggregate, not the severity reduction:
         # strongest_decision annihilates BYPASSED, so `decision != ALLOW` executed a call whose
         # findings were [ALLOW, BYPASSED]. `decision` above still supplies what the ledger records.

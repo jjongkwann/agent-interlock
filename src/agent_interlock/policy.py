@@ -13,6 +13,7 @@ from .canonical import canonical_digest
 from .models import (
     _DECISION_RANK,
     ActorSpec,
+    ControlCoverage,
     ControlDecision,
     CredentialClaims,
     DefinitionState,
@@ -23,7 +24,13 @@ from .models import (
     SideEffect,
 )
 from .registry import ToolRevision
-from .security import canonical_destination, contains_secret, destination_domain, validate_schema
+from .security import (
+    canonical_destination,
+    contains_secret,
+    destination_domain,
+    has_scannable_text,
+    validate_schema,
+)
 
 
 class CheckScope(StrEnum):
@@ -54,9 +61,24 @@ Findings = tuple[tuple[str, ControlDecision], ...]
 
 @dataclass(frozen=True, slots=True)
 class Check:
+    """One control, declared once and selected by profile.
+
+    ``armed`` answers "is this control switched on for this link at all" and ``run`` answers "what
+    did it find on this invocation". The split is what separates ABSENT from INAPPLICABLE: a
+    control the operator turned off never had a subject, while one that is on but met an
+    invocation it does not apply to did.
+
+    ``armed`` is handed the whole context but may read only the **link-constant** half of it --
+    ``policy``, ``source``, ``target``, ``boundary``, ``revision``, ``relationship``. Reading
+    ``intent``, ``arguments``, ``credential``, ``approval_valid`` or ``payload_bytes`` would make
+    the armed set vary per invocation, and the armed set is declared once per coverage digest
+    rather than recorded per event. ``test_check_table`` pins the invariant over every check by
+    varying exactly the per-invocation fields.
+    """
+
     id: str
     scope: CheckScope
-    armed: Callable[[LinkPolicy], bool]
+    armed: Callable[[LinkPolicy, "CheckContext"], bool]
     run: Callable[[LinkPolicy, "CheckContext"], Findings | None]
 
 
@@ -124,14 +146,26 @@ def _definition_drift(policy: LinkPolicy, context: CheckContext) -> Findings | N
     return (("L1-M2-DEFINITION-DRIFT", ControlDecision.QUARANTINE),)
 
 
+def _effective_schema(context: CheckContext) -> Mapping[str, Any]:
+    """The schema _input_schema validates against: the resolved revision's, or the actor's own.
+
+    Falls back to the actor when no revision is resolved -- unlike the M2 checks, a missing
+    revision does not make this control inapplicable; the SDK never builds one, and skipping here
+    silently dropped schema validation from every wrap() call. Shared with `armed` so the two
+    cannot disagree about whether there is a schema: arming on the actor alone would report ABSENT
+    for a gateway call whose revision carries one, and the check would then run while declared off.
+    """
+    if context.revision is not None:
+        return context.revision.definition.input_schema
+    return context.target.input_schema
+
+
 def _input_schema(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    # Falls back to the actor's own schema when no revision is resolved: unlike the M2 checks, a
-    # missing revision does not make this control inapplicable -- the SDK never builds one, and
-    # skipping here silently dropped schema validation from every wrap() call.
-    schema = context.revision.definition.input_schema if context.revision is not None else context.target.input_schema
-    # A tool that ships no input schema: INAPPLICABLE, see _definition_state. validate_schema
-    # short-circuits on an empty schema, so () here would report a clean pass over a validation that
-    # never happened -- on a fleet of schema-less tools, near-total coverage of nothing.
+    # A tool that ships no input schema switches this control off for the link -- `armed` reads the
+    # same helper, so this branch is reached only from a directly-built context. validate_schema
+    # short-circuits on an empty schema, so () here would report a clean pass over a validation
+    # that never happened -- on a fleet of schema-less tools, near-total coverage of nothing.
+    schema = _effective_schema(context)
     if not schema:
         return None
     if not validate_schema(context.arguments, schema):
@@ -142,6 +176,8 @@ def _input_schema(policy: LinkPolicy, context: CheckContext) -> Findings | None:
 def _data_classes(policy: LinkPolicy, context: CheckContext) -> Findings | None:
     """One check, two reason keys: which one is emitted depends on the classes involved, so a
     profile renaming this check has to map both (see run_checks)."""
+    if not context.intent.data_classes:
+        return None  # nothing declared to classify: INAPPLICABLE, see _definition_state
     denied = context.intent.data_classes & policy.denied_data_classes
     unexpected = context.intent.data_classes - policy.allowed_data_classes
     if not denied and not unexpected:
@@ -151,6 +187,10 @@ def _data_classes(policy: LinkPolicy, context: CheckContext) -> Findings | None:
 
 
 def _secret(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    # contains_secret is False both for "scanned, clean" and for "there was nothing to scan".
+    # Only the first is RAN_CLEAN; a numeric-only argument map is INAPPLICABLE.
+    if not has_scannable_text(context.arguments):
+        return None
     if not contains_secret(context.arguments):
         return ()
     return (("L1-M8-CREDENTIAL-DETECTED", policy.secret_action),)
@@ -215,11 +255,27 @@ def _new_destination(policy: LinkPolicy, context: CheckContext) -> Findings | No
     return tuple(findings)
 
 
-def _volume(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if (policy.max_export_records and context.intent.estimated_record_count > policy.max_export_records) or (
-        policy.max_export_bytes and context.intent.estimated_byte_count > policy.max_export_bytes
-    ):
+def _volume_records(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """The record half of the volume cap.
+
+    Split from the byte half because each carries its own policy field: as one check armed on
+    `max_export_records or max_export_bytes`, a link that caps bytes only reported the record
+    control as RAN_CLEAN on every invocation -- a control that is off, reported as one that ran and
+    found nothing. Both halves keep emitting L1-M9-VOLUME-EXCEEDED; only the check id splits, and
+    every profile maps the byte key back onto the wire code the point has always emitted.
+    """
+    if context.intent.estimated_record_count <= 0:
+        return None  # no estimate to compare the cap against
+    if context.intent.estimated_record_count > policy.max_export_records:
         return (("L1-M9-VOLUME-EXCEEDED", policy.volume_action),)
+    return ()
+
+
+def _volume_bytes(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    if context.intent.estimated_byte_count <= 0:
+        return None
+    if context.intent.estimated_byte_count > policy.max_export_bytes:
+        return (("L1-M9-VOLUME-BYTES-EXCEEDED", policy.volume_action),)
     return ()
 
 
@@ -230,8 +286,12 @@ def _side_effect_declared(policy: LinkPolicy, context: CheckContext) -> Findings
 
 
 def _destructive_write(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    # One convention across the three side-effect checks: the side effect a check governs IS its
+    # subject, so a different one means INAPPLICABLE, not a clean pass. Two of the three used to
+    # return () here, so read-only traffic showed _tainted_external_write near 100% INAPPLICABLE
+    # and these two near 100% RAN_CLEAN -- the same situation, opposite statistic.
     if context.intent.estimated_side_effect != SideEffect.DESTRUCTIVE_WRITE:
-        return ()
+        return None
     return (("INTERLOCK-DESTRUCTIVE-WRITE", policy.destructive_write_action),)
 
 
@@ -244,7 +304,9 @@ def _tainted_external_write(policy: LinkPolicy, context: CheckContext) -> Findin
 
 
 def _approval(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if context.intent.estimated_side_effect == SideEffect.EXTERNAL_WRITE and not context.approval_valid:
+    if context.intent.estimated_side_effect != SideEffect.EXTERNAL_WRITE:
+        return None  # one convention, see _destructive_write
+    if not context.approval_valid:
         return (("INTERLOCK-APPROVAL-REQUIRED", ControlDecision.HOLD),)
     return ()
 
@@ -309,24 +371,36 @@ def _token_passthrough(policy: LinkPolicy, context: CheckContext) -> Findings | 
 
 
 def _token_audience(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    """One check, two reason keys. The audience comparison and the resource comparison stay two
-    conditions inside one check because each carries its own policy flag, and they emit distinct
-    keys because the A2A broker has always reported them as two separate codes. GATEWAY_PROFILE
-    and SDK_PROFILE map the resource key back onto the audience one, which is the single code
-    those two points have always emitted for both."""
+    """The audience comparison, armed by `require_audience` alone.
+
+    Was one check with the resource comparison, armed on `require_audience or require_resource`.
+    That bundling is why the split exists: with require_audience off, require_resource on and a
+    wrong audience, the pair reported RAN_CLEAN -- the audience control switched off, the audience
+    wrong, and the statistic saying the check ran and found nothing. Each half now answers to its
+    own flag. The two still emit distinct reason keys, because the A2A broker has always reported
+    them as two codes; GATEWAY_PROFILE and SDK_PROFILE map the resource key back onto the audience
+    one, the single code those two points have always emitted for both.
+    """
     credential = context.credential
     if not _usable_credential(credential):  # nothing to compare against, see _token_passthrough
         return None
-    audience = context.intent.expected_audience if policy.require_audience else ""
-    resource = context.intent.expected_resource if policy.require_resource else ""
-    if not audience and not resource:
-        return None  # the intent declares nothing to compare the credential against
-    findings: list[tuple[str, ControlDecision]] = []
-    if audience and credential.audience != audience:
-        findings.append(("L1-M5-TOKEN-AUDIENCE-MISMATCH", ControlDecision.BLOCK))
-    if resource and credential.resource != resource:
-        findings.append(("L1-M5-TOKEN-RESOURCE-MISMATCH", ControlDecision.BLOCK))
-    return tuple(findings)
+    if not context.intent.expected_audience:
+        return None  # the intent declares no audience to compare the credential against
+    if credential.audience != context.intent.expected_audience:
+        return (("L1-M5-TOKEN-AUDIENCE-MISMATCH", ControlDecision.BLOCK),)
+    return ()
+
+
+def _token_resource(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """The resource comparison, armed by `require_resource` alone. See _token_audience."""
+    credential = context.credential
+    if not _usable_credential(credential):
+        return None
+    if not context.intent.expected_resource:
+        return None
+    if credential.resource != context.intent.expected_resource:
+        return (("L1-M5-TOKEN-RESOURCE-MISMATCH", ControlDecision.BLOCK),)
+    return ()
 
 
 def _token_actor(policy: LinkPolicy, context: CheckContext) -> Findings | None:
@@ -380,6 +454,12 @@ def _message_parts_schema(policy: LinkPolicy, context: CheckContext) -> Findings
 
 
 def _payload_present(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """Unsatisfiable through A2ABroker: A2AMessage.__post_init__ requires at least one part, so
+    payload_bytes is never below 2 on the live path and this check reports RAN_CLEAN on every
+    message. Kept rather than deleted -- the constructor is what enforces the invariant today, and
+    a second producer that builds a CheckContext directly would meet no guard at all. Read its
+    byCheck row as "the constructor held", not as a control that was exercised;
+    test_check_table pins both halves of that sentence."""
     if context.payload_bytes >= 1:
         return ()
     return (("A2A-PAYLOAD-INVALID", ControlDecision.BLOCK),)
@@ -397,6 +477,8 @@ def _boundary_data_classes(policy: LinkPolicy, context: CheckContext) -> Finding
     if context.boundary is None:
         return None
     classes = context.intent.data_classes
+    if not classes:
+        return None  # nothing declared to classify, see _data_classes
     denied = classes & context.boundary.denied_data_classes
     unexpected = classes - context.boundary.allowed_data_classes
     if not denied and not unexpected:
@@ -416,6 +498,9 @@ def _boundary_identity(policy: LinkPolicy, context: CheckContext) -> Findings | 
 
 
 def _boundary_tenant(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """Unsatisfiable through A2ABroker for the same reason as _payload_present:
+    A2APrincipal.__post_init__ rejects an empty tenant, so the credential the broker builds always
+    carries one. Read its byCheck row accordingly."""
     if context.boundary is None or not context.boundary.require_tenant_binding:
         return None
     if context.credential is not None and context.credential.tenant_id:
@@ -447,169 +532,208 @@ CHECKS: dict[str, Check] = _build_check_table(
         Check(
             id="INTERLOCK-ACTOR-TYPE-DENIED",
             scope=CheckScope.PAIR,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_actor_type,
         ),
         Check(
             id="INTERLOCK-PURPOSE-DENIED",
             scope=CheckScope.PAIR,
-            armed=lambda policy: bool(policy.allowed_purposes),
+            armed=lambda policy, context: bool(policy.allowed_purposes),
             run=_purpose,
         ),
         Check(
             id="L1-M2-DEFINITION-NOT-ACTIVE",
             scope=CheckScope.ACTOR,
-            armed=lambda policy: policy.require_active_definition,
+            armed=lambda policy, context: policy.require_active_definition,
             run=_definition_state,
         ),
         Check(
             id="L1-M2-DEFINITION-DRIFT",
             scope=CheckScope.ACTOR,
-            armed=lambda policy: policy.require_digest_pin,
+            armed=lambda policy, context: policy.require_digest_pin,
             run=_definition_drift,
         ),
         Check(
             id="INTERLOCK-INPUT-SCHEMA-INVALID",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            # An actor property, not a policy switch: a tool that ships no schema has this control
+            # off for every call on the link, which is ABSENT, not INAPPLICABLE per invocation.
+            armed=lambda policy, context: bool(_effective_schema(context)),
             run=_input_schema,
         ),
         Check(
             id="INTERLOCK-DATA-CLASS-DENIED",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_data_classes,
         ),
         Check(
             id="L1-M8-CREDENTIAL-DETECTED",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_secret,
         ),
         Check(
             id="L1-M9-NEW-DESTINATION",
             scope=CheckScope.ACTOR,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_new_destination,
         ),
         Check(
             id="L1-M9-VOLUME-EXCEEDED",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: bool(policy.max_export_records or policy.max_export_bytes),
-            run=_volume,
+            armed=lambda policy, context: bool(policy.max_export_records),
+            run=_volume_records,
+        ),
+        Check(
+            id="L1-M9-VOLUME-BYTES-EXCEEDED",
+            scope=CheckScope.PAYLOAD,
+            armed=lambda policy, context: bool(policy.max_export_bytes),
+            run=_volume_bytes,
         ),
         Check(
             id="L1-UNDECLARED-SIDE-EFFECT",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_side_effect_declared,
         ),
         Check(
             id="INTERLOCK-DESTRUCTIVE-WRITE",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_destructive_write,
         ),
         Check(
             id="INTERLOCK-TAINTED-EXTERNAL-WRITE",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_tainted_external_write,
         ),
         Check(
             id="INTERLOCK-APPROVAL-REQUIRED",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: policy.external_write_requires_approval,
+            armed=lambda policy, context: policy.external_write_requires_approval,
             run=_approval,
         ),
         Check(
             id="L1-M5-CREDENTIAL-MISSING",
             scope=CheckScope.PAIR,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_credential_missing,
         ),
         Check(
             id="L1-M5-TOKEN-PASSTHROUGH",
             scope=CheckScope.PAIR,
-            armed=lambda policy: not policy.token_passthrough,
+            armed=lambda policy, context: not policy.token_passthrough,
             run=_token_passthrough,
         ),
         Check(
             id="L1-M5-TOKEN-AUDIENCE-MISMATCH",
             scope=CheckScope.PAIR,
-            armed=lambda policy: policy.require_audience or policy.require_resource,
+            armed=lambda policy, context: policy.require_audience,
             run=_token_audience,
+        ),
+        Check(
+            id="L1-M5-TOKEN-RESOURCE-MISMATCH",
+            scope=CheckScope.PAIR,
+            armed=lambda policy, context: policy.require_resource,
+            run=_token_resource,
         ),
         Check(
             id="L1-M5-TOKEN-ACTOR-MISMATCH",
             scope=CheckScope.PAIR,
-            armed=lambda policy: policy.require_actor_binding,
+            armed=lambda policy, context: policy.require_actor_binding,
             run=_token_actor,
         ),
         Check(
             id="L1-M5-DELEGATION-DEPTH",
             scope=CheckScope.PAIR,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_delegation_depth,
         ),
         Check(
             id="A2A-IDENTITY-BINDING-MISMATCH",
             scope=CheckScope.PAIR,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_identity_binding,
         ),
         Check(
             id="A2A-INPUT-SCHEMA-INVALID",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: bool(context.target.input_schema),
             run=_message_parts_schema,
         ),
         Check(
             id="A2A-PAYLOAD-INVALID",
             scope=CheckScope.PAYLOAD,
-            armed=lambda policy: True,
+            armed=lambda policy, context: True,
             run=_payload_present,
         ),
         Check(
             id="A2A-BOUNDARY-RELATIONSHIP-DENIED",
             scope=CheckScope.BOUNDARY,
-            armed=lambda policy: True,
+            armed=lambda policy, context: context.boundary is not None,
             run=_boundary_relationship,
         ),
         Check(
             id="A2A-BOUNDARY-DATA-CLASS-DENIED",
             scope=CheckScope.BOUNDARY,
-            armed=lambda policy: True,
+            armed=lambda policy, context: context.boundary is not None,
             run=_boundary_data_classes,
         ),
         Check(
             id="A2A-BOUNDARY-IDENTITY-REQUIRED",
             scope=CheckScope.BOUNDARY,
-            armed=lambda policy: True,
+            armed=lambda policy, context: context.boundary is not None and context.boundary.require_identity,
             run=_boundary_identity,
         ),
         Check(
             id="A2A-BOUNDARY-TENANT-REQUIRED",
             scope=CheckScope.BOUNDARY,
-            armed=lambda policy: True,
+            armed=lambda policy, context: context.boundary is not None and context.boundary.require_tenant_binding,
             run=_boundary_tenant,
         ),
         Check(
             id="A2A-BOUNDARY-PAYLOAD-TOO-LARGE",
             scope=CheckScope.BOUNDARY,
-            armed=lambda policy: True,
+            armed=lambda policy, context: context.boundary is not None,
             run=_boundary_payload_size,
         ),
     )
 )
 
 
+@dataclass(frozen=True, slots=True)
+class CheckOutcome:
+    """What one profile's checks did on one invocation.
+
+    ``reasons`` and ``decisions`` are the verdict; the other three are the coverage channel, and
+    they are what separates "no control objected" from "no control looked".
+
+    - ``armed`` -- ids switched on for this link, in profile order. Ids in the profile but absent
+      here are ABSENT: the operator turned the control off, or the point never carried it.
+    - ``ran`` -- armed ids whose ``run`` returned findings (empty or not). Armed but not here is
+      INAPPLICABLE: the control is on and this invocation gave it nothing to judge.
+    - ``flagged`` -- ids that returned at least one finding. In ``ran`` but not here is RAN_CLEAN.
+
+    ``flagged`` carries check ids rather than leaving consumers to invert ``profile.reason_codes``:
+    that map is not injective -- L1-M9-SENSITIVE-EGRESS and INTERLOCK-DATA-CLASS-DENIED both emit
+    A2A-DATA-CLASS-DENIED -- so a reason code cannot name the check that produced it.
+    """
+
+    reasons: list[str]
+    decisions: list[ControlDecision]
+    ran: set[str]
+    armed: tuple[str, ...]
+    flagged: set[str]
+
+
 def run_checks(
     policy: LinkPolicy,
     context: CheckContext,
     profile: Profile,
-) -> tuple[list[str], list[ControlDecision], set[str]]:
-    """Run a profile's checks. Returns emitted reason codes, decisions, and the ids that ran.
+) -> CheckOutcome:
+    """Run a profile's checks, returning the verdict and the coverage channel.
 
     `profile.reason_codes` is keyed on the reason key a check's `run` emits, not on the check's
     id: a single check can emit more than one distinct reason key (see policy.py's own
@@ -619,18 +743,70 @@ def run_checks(
     reasons: list[str] = []
     decisions: list[ControlDecision] = []
     ran: set[str] = set()
+    armed: list[str] = []
+    flagged: set[str] = set()
     for check_id in profile.checks:
         check = CHECKS[check_id]
-        if not check.armed(policy):
+        if not check.armed(policy, context):
             continue
+        armed.append(check_id)
         findings = check.run(policy, context)
         if findings is None:
             continue
         ran.add(check_id)
+        if findings:
+            flagged.add(check_id)
         for key, decision in findings:
             reasons.append(profile.reason_codes.get(key, key))
             decisions.append(decision)
-    return reasons, decisions, ran
+    return CheckOutcome(
+        reasons=reasons,
+        decisions=decisions,
+        ran=ran,
+        armed=tuple(armed),
+        flagged=flagged,
+    )
+
+
+def coverage_declaration(
+    policy: LinkPolicy,
+    profile: Profile,
+    *outcomes: CheckOutcome,
+) -> dict[str, Any]:
+    """The CONTROL_COVERAGE_DECLARED payload for one coverage shape, digest included.
+
+    The digest covers the whole payload, not just ``evaluated``: two invocations can run the same
+    checks with different sets armed, and keying on the evaluated set alone would let the first
+    declaration seen speak for both. Since the digest is over everything the payload says, a
+    reader can recompute it from the event and a producer emitting a second, different declaration
+    under one digest is not expressible.
+    """
+    armed = [check_id for outcome in outcomes for check_id in outcome.armed]
+    evaluated = sorted({check_id for outcome in outcomes for check_id in outcome.ran})
+    body = {
+        "enforcementPoint": profile.enforcement_point,
+        "policyId": policy.id,
+        "policyVersion": policy.version,
+        "armed": [{"id": check_id, "scope": CHECKS[check_id].scope.value} for check_id in armed],
+        "evaluated": evaluated,
+    }
+    return {"profileDigest": canonical_digest(body), **body}
+
+
+def control_coverage(policy: LinkPolicy, profile: Profile, *outcomes: CheckOutcome) -> ControlCoverage:
+    """The coverage a decision was reached under, ready for both the event and the declaration.
+
+    Takes several outcomes because the A2A broker runs two profiles over one message -- link scope
+    against the edge's mode, boundary scope against the boundary's -- and records one
+    CONTROL_EVALUATED. Their check sets are disjoint by scope, so the union is exactly A2A_PROFILE.
+    """
+    declaration = coverage_declaration(policy, profile, *outcomes)
+    return ControlCoverage(
+        enforcement_point=profile.enforcement_point,
+        digest=declaration["profileDigest"],
+        flagged=tuple(sorted({check_id for outcome in outcomes for check_id in outcome.flagged})),
+        declaration=declaration,
+    )
 
 
 GATEWAY_PROFILE = Profile(
@@ -645,6 +821,7 @@ GATEWAY_PROFILE = Profile(
         "L1-M8-CREDENTIAL-DETECTED",
         "L1-M9-NEW-DESTINATION",
         "L1-M9-VOLUME-EXCEEDED",
+        "L1-M9-VOLUME-BYTES-EXCEEDED",
         "L1-UNDECLARED-SIDE-EFFECT",
         "INTERLOCK-DESTRUCTIVE-WRITE",
         # Sits with the other estimated_side_effect checks. Its slot used to be verdict-bearing --
@@ -656,12 +833,17 @@ GATEWAY_PROFILE = Profile(
         "L1-M5-CREDENTIAL-MISSING",
         "L1-M5-TOKEN-PASSTHROUGH",
         "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH",
         "L1-M5-TOKEN-ACTOR-MISMATCH",
         "L1-M5-DELEGATION-DEPTH",
     ),
-    # _token_audience emits a separate key for the resource comparison so the A2A broker can keep
-    # reporting the two as two codes. This point has always emitted one code for both.
-    reason_codes={"L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH"},
+    # Both splits keep the wire unchanged: the resource comparison and the byte half of the volume
+    # cap are separate check ids so each can be armed and counted on its own, and each maps back
+    # onto the single code this point has always emitted for both halves.
+    reason_codes={
+        "L1-M5-TOKEN-RESOURCE-MISMATCH": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M9-VOLUME-BYTES-EXCEEDED": "L1-M9-VOLUME-EXCEEDED",
+    },
 )
 
 
@@ -702,6 +884,7 @@ A2A_PROFILE = Profile(
         "L1-M8-CREDENTIAL-DETECTED",
         "L1-M5-TOKEN-ACTOR-MISMATCH",
         "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+        "L1-M5-TOKEN-RESOURCE-MISMATCH",
         "L1-M5-TOKEN-PASSTHROUGH",
         "L1-M5-DELEGATION-DEPTH",
         "A2A-INPUT-SCHEMA-INVALID",
@@ -745,7 +928,8 @@ A2A_BOUNDARY_PROFILE = replace(
 
 
 def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
-    reasons, decisions, _ = run_checks(policy, value, GATEWAY_PROFILE)
+    outcome = run_checks(policy, value, GATEWAY_PROFILE)
+    reasons, decisions = outcome.reasons, outcome.decisions
     canonical_destinations = _canonical_destinations(value.intent.destinations)
     return PolicyDecisionRecord(
         decision_id=str(uuid.uuid4()),
@@ -762,6 +946,7 @@ def evaluate(policy: LinkPolicy, value: CheckContext) -> PolicyDecisionRecord:
         trace_id=value.trace_id,
         span_id=value.span_id,
         execution_permitted=execution_permitted(decisions),
+        coverage=control_coverage(policy, GATEWAY_PROFILE, outcome),
     )
 
 

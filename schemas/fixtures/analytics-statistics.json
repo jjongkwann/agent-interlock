@@ -1,6 +1,6 @@
 {
   "apiVersion": "interlock.dev/v1alpha1",
-  "interactionCount": 8,
+  "interactionCount": 9,
   "kind": "SecurityStatistics",
   "partitions": [
     {
@@ -9,13 +9,452 @@
           "counters": {
             "blockDecisionCount": 4,
             "enforcedBlockCount": 2,
-            "executionAttemptCount": 5,
-            "executionSuccessCount": 4,
-            "interactionCount": 7,
+            "executionAttemptCount": 6,
+            "executionSuccessCount": 5,
+            "interactionCount": 8,
+            "noControlRecordCount": 1,
             "partialOrBypassCount": 1,
             "shadowWouldBlockCount": 2
           },
           "sourceActorId": "support-agent"
+        }
+      ],
+      "byCheck": [
+        {
+          "absentCount": 5,
+          "checkId": "INTERLOCK-ACTOR-TYPE-DENIED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 3,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "INTERLOCK-APPROVAL-REQUIRED",
+          "inapplicableCount": 2,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 1,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "INTERLOCK-DATA-CLASS-DENIED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 3,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "INTERLOCK-DESTRUCTIVE-WRITE",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+          "inapplicableCount": 2,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 1,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M2-DEFINITION-DRIFT",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "ACTOR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M2-DEFINITION-NOT-ACTIVE",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "ACTOR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M5-CREDENTIAL-MISSING",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M5-DELEGATION-DEPTH",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M5-TOKEN-ACTOR-MISMATCH",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M5-TOKEN-PASSTHROUGH",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+          "inapplicableCount": 3,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M8-CREDENTIAL-DETECTED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 3,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-M9-NEW-DESTINATION",
+          "inapplicableCount": 0,
+          "ranCleanCount": 1,
+          "ranFlaggedCount": 2,
+          "scope": "ACTOR"
+        },
+        {
+          "absentCount": 5,
+          "checkId": "L1-UNDECLARED-SIDE-EFFECT",
+          "inapplicableCount": 0,
+          "ranCleanCount": 3,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        }
+      ],
+      "byEdge": [
+        {
+          "byCheck": [
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-ACTOR-TYPE-DENIED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 1,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-APPROVAL-REQUIRED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 1,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-DATA-CLASS-DENIED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 1,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-DESTRUCTIVE-WRITE",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+              "inapplicableCount": 0,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 1,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M2-DEFINITION-DRIFT",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "ACTOR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M2-DEFINITION-NOT-ACTIVE",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "ACTOR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-CREDENTIAL-MISSING",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-DELEGATION-DEPTH",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-ACTOR-MISMATCH",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-PASSTHROUGH",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+              "inapplicableCount": 1,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M8-CREDENTIAL-DETECTED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 1,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M9-NEW-DESTINATION",
+              "inapplicableCount": 0,
+              "ranCleanCount": 1,
+              "ranFlaggedCount": 0,
+              "scope": "ACTOR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-UNDECLARED-SIDE-EFFECT",
+              "inapplicableCount": 0,
+              "ranCleanCount": 1,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            }
+          ],
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 0,
+            "executionAttemptCount": 1,
+            "executionSuccessCount": 1,
+            "interactionCount": 1,
+            "noControlRecordCount": 0,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 1
+          },
+          "policyId": "policy.export-hold",
+          "sourceActorId": "support-agent",
+          "targetActorId": "crm-connector"
+        },
+        {
+          "byCheck": [],
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 3,
+            "executionSuccessCount": 2,
+            "interactionCount": 4,
+            "noControlRecordCount": 0,
+            "partialOrBypassCount": 1,
+            "shadowWouldBlockCount": 0
+          },
+          "policyId": "policy.support-crm",
+          "sourceActorId": "support-agent",
+          "targetActorId": "crm-tool"
+        },
+        {
+          "byCheck": [
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-ACTOR-TYPE-DENIED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 2,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-APPROVAL-REQUIRED",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-DATA-CLASS-DENIED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 2,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-DESTRUCTIVE-WRITE",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M2-DEFINITION-DRIFT",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "ACTOR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M2-DEFINITION-NOT-ACTIVE",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "ACTOR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-CREDENTIAL-MISSING",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-DELEGATION-DEPTH",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-ACTOR-MISMATCH",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-PASSTHROUGH",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+              "inapplicableCount": 2,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 0,
+              "scope": "PAIR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M8-CREDENTIAL-DETECTED",
+              "inapplicableCount": 0,
+              "ranCleanCount": 2,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-M9-NEW-DESTINATION",
+              "inapplicableCount": 0,
+              "ranCleanCount": 0,
+              "ranFlaggedCount": 2,
+              "scope": "ACTOR"
+            },
+            {
+              "absentCount": 0,
+              "checkId": "L1-UNDECLARED-SIDE-EFFECT",
+              "inapplicableCount": 0,
+              "ranCleanCount": 2,
+              "ranFlaggedCount": 0,
+              "scope": "PAYLOAD"
+            }
+          ],
+          "counters": {
+            "blockDecisionCount": 2,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 1,
+            "executionSuccessCount": 1,
+            "interactionCount": 2,
+            "noControlRecordCount": 0,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 1
+          },
+          "policyId": "policy.support-web",
+          "sourceActorId": "support-agent",
+          "targetActorId": "web-search-tool"
         }
       ],
       "byMode": [
@@ -26,6 +465,7 @@
             "executionAttemptCount": 3,
             "executionSuccessCount": 2,
             "interactionCount": 5,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 1,
             "shadowWouldBlockCount": 0
           },
@@ -38,6 +478,7 @@
             "executionAttemptCount": 2,
             "executionSuccessCount": 2,
             "interactionCount": 2,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 2
           },
@@ -52,6 +493,7 @@
             "executionAttemptCount": 1,
             "executionSuccessCount": 1,
             "interactionCount": 1,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 1
           },
@@ -64,6 +506,7 @@
             "executionAttemptCount": 3,
             "executionSuccessCount": 2,
             "interactionCount": 4,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 1,
             "shadowWouldBlockCount": 0
           },
@@ -76,6 +519,7 @@
             "executionAttemptCount": 1,
             "executionSuccessCount": 1,
             "interactionCount": 2,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 1
           },
@@ -109,9 +553,10 @@
           "counters": {
             "blockDecisionCount": 2,
             "enforcedBlockCount": 1,
-            "executionAttemptCount": 4,
-            "executionSuccessCount": 3,
-            "interactionCount": 5,
+            "executionAttemptCount": 5,
+            "executionSuccessCount": 4,
+            "interactionCount": 6,
+            "noControlRecordCount": 1,
             "partialOrBypassCount": 1,
             "shadowWouldBlockCount": 1
           },
@@ -124,6 +569,7 @@
             "executionAttemptCount": 1,
             "executionSuccessCount": 1,
             "interactionCount": 2,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 1
           },
@@ -133,9 +579,10 @@
       "counters": {
         "blockDecisionCount": 4,
         "enforcedBlockCount": 2,
-        "executionAttemptCount": 5,
-        "executionSuccessCount": 4,
-        "interactionCount": 7,
+        "executionAttemptCount": 6,
+        "executionSuccessCount": 5,
+        "interactionCount": 8,
+        "noControlRecordCount": 1,
         "partialOrBypassCount": 1,
         "shadowWouldBlockCount": 2
       },
@@ -143,7 +590,7 @@
       "outcomes": {
         "BLOCKED": 2,
         "PARTIALLY_EXECUTED": 1,
-        "SUCCEEDED": 2,
+        "SUCCEEDED": 3,
         "UNKNOWN": 2
       },
       "timeSeries": [
@@ -155,6 +602,7 @@
             "executionAttemptCount": 1,
             "executionSuccessCount": 1,
             "interactionCount": 2,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 0
           }
@@ -164,14 +612,25 @@
           "counters": {
             "blockDecisionCount": 3,
             "enforcedBlockCount": 1,
-            "executionAttemptCount": 4,
-            "executionSuccessCount": 3,
-            "interactionCount": 5,
+            "executionAttemptCount": 5,
+            "executionSuccessCount": 4,
+            "interactionCount": 6,
+            "noControlRecordCount": 1,
             "partialOrBypassCount": 1,
             "shadowWouldBlockCount": 2
           }
         }
-      ]
+      ],
+      "unattributed": {
+        "blockDecisionCount": 0,
+        "enforcedBlockCount": 0,
+        "executionAttemptCount": 1,
+        "executionSuccessCount": 1,
+        "interactionCount": 1,
+        "noControlRecordCount": 1,
+        "partialOrBypassCount": 0,
+        "shadowWouldBlockCount": 0
+      }
     },
     {
       "byActor": [
@@ -182,10 +641,159 @@
             "executionAttemptCount": 0,
             "executionSuccessCount": 0,
             "interactionCount": 1,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 0
           },
           "sourceActorId": "red-team-agent"
+        }
+      ],
+      "byCheck": [
+        {
+          "absentCount": 1,
+          "checkId": "INTERLOCK-ACTOR-TYPE-DENIED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "INTERLOCK-APPROVAL-REQUIRED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "INTERLOCK-DATA-CLASS-DENIED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "INTERLOCK-DESTRUCTIVE-WRITE",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M2-DEFINITION-DRIFT",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "ACTOR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M2-DEFINITION-NOT-ACTIVE",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "ACTOR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M5-CREDENTIAL-MISSING",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M5-DELEGATION-DEPTH",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M5-TOKEN-ACTOR-MISMATCH",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M5-TOKEN-PASSTHROUGH",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAIR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M8-CREDENTIAL-DETECTED",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-M9-NEW-DESTINATION",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "ACTOR"
+        },
+        {
+          "absentCount": 1,
+          "checkId": "L1-UNDECLARED-SIDE-EFFECT",
+          "inapplicableCount": 0,
+          "ranCleanCount": 0,
+          "ranFlaggedCount": 0,
+          "scope": "PAYLOAD"
+        }
+      ],
+      "byEdge": [
+        {
+          "byCheck": [],
+          "counters": {
+            "blockDecisionCount": 1,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 0,
+            "executionSuccessCount": 0,
+            "interactionCount": 1,
+            "noControlRecordCount": 0,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 0
+          },
+          "policyId": "policy.support-crm",
+          "sourceActorId": "red-team-agent",
+          "targetActorId": "crm-tool"
         }
       ],
       "byMode": [
@@ -196,6 +804,7 @@
             "executionAttemptCount": 0,
             "executionSuccessCount": 0,
             "interactionCount": 1,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 0
           },
@@ -210,6 +819,7 @@
             "executionAttemptCount": 0,
             "executionSuccessCount": 0,
             "interactionCount": 1,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 0
           },
@@ -230,6 +840,7 @@
             "executionAttemptCount": 0,
             "executionSuccessCount": 0,
             "interactionCount": 1,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 0
           },
@@ -242,6 +853,7 @@
         "executionAttemptCount": 0,
         "executionSuccessCount": 0,
         "interactionCount": 1,
+        "noControlRecordCount": 0,
         "partialOrBypassCount": 0,
         "shadowWouldBlockCount": 0
       },
@@ -258,11 +870,22 @@
             "executionAttemptCount": 0,
             "executionSuccessCount": 0,
             "interactionCount": 1,
+            "noControlRecordCount": 0,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 0
           }
         }
-      ]
+      ],
+      "unattributed": {
+        "blockDecisionCount": 0,
+        "enforcedBlockCount": 0,
+        "executionAttemptCount": 0,
+        "executionSuccessCount": 0,
+        "interactionCount": 0,
+        "noControlRecordCount": 0,
+        "partialOrBypassCount": 0,
+        "shadowWouldBlockCount": 0
+      }
     }
   ]
 }

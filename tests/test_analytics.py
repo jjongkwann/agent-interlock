@@ -43,13 +43,14 @@ class GoldenContractTests(unittest.TestCase):
         self.assertEqual(
             production["counters"],
             {
-                "interactionCount": 7,
+                "interactionCount": 8,
                 "blockDecisionCount": 4,
                 "shadowWouldBlockCount": 2,
                 "enforcedBlockCount": 2,
-                "executionAttemptCount": 5,
-                "executionSuccessCount": 4,
+                "executionAttemptCount": 6,
+                "executionSuccessCount": 5,
                 "partialOrBypassCount": 1,
+                "noControlRecordCount": 1,
             },
         )
 
@@ -115,7 +116,7 @@ class GoldenContractTests(unittest.TestCase):
 
     def test_definition_level_control_events_are_ignored(self):
         records = reduce_interactions(self.events)
-        self.assertEqual(len(records), 8)
+        self.assertEqual(len(records), 9)
         self.assertNotIn(None, [record.interaction_id for record in records])
 
     def test_simulation_traffic_is_partitioned_not_merged(self):

@@ -27,6 +27,23 @@ def contains_secret(value: Any) -> bool:
     return False
 
 
+def has_scannable_text(value: Any) -> bool:
+    """Whether the secret scan has any subject at all: at least one non-empty string.
+
+    contains_secret returns False for an argument map holding no strings, which is
+    indistinguishable from a map that was scanned and came back clean. The coverage channel needs
+    the two apart, so the traversal is mirrored here rather than folded into contains_secret --
+    that one answers a security question and must stay a plain bool for sanitize_secrets' callers.
+    """
+    if isinstance(value, str):
+        return bool(value)
+    if isinstance(value, Mapping):
+        return any(has_scannable_text(item) for item in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(has_scannable_text(item) for item in value)
+    return False
+
+
 def sanitize_secrets(value: Any) -> tuple[Any, bool]:
     detected = False
     if isinstance(value, str):

@@ -19,7 +19,7 @@
   "$defs": {
     "partition": {
       "type": "object",
-      "required": ["dataSource", "counters", "outcomes", "byRelationship", "byActor", "byPolicy", "byMode", "byReasonCode", "timeSeries"],
+      "required": ["dataSource", "counters", "outcomes", "byRelationship", "byActor", "byPolicy", "byMode", "byReasonCode", "byCheck", "byEdge", "unattributed", "timeSeries"],
       "additionalProperties": false,
       "properties": {
         "dataSource": { "type": "string" },
@@ -93,6 +93,35 @@
             }
           }
         },
+        "byCheck": {
+          "description": "Coverage per canonical check id, across every enforcement point: which controls were switched on, which looked, and which flagged. Check ids are NOT reason codes -- a check can emit several reason keys and a profile renames them per point, so the join from coverage to byReasonCode must go through the profile's rename map, never a string match. Sorted by checkId. The catalogue is the union of every armed set declared in the stream, so a check nothing declares does not appear at all.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/checkCoverage" }
+        },
+        "byEdge": {
+          "description": "Grouped by the (sourceActorId, targetActorId, policyId) triple of the strongest control decision, sorted ascending. The pair alone is not a key: the graph permits several edges between one actor pair, and policyId splits precisely where the armed set can differ. Interactions with no complete triple are omitted here and counted in `unattributed`. Studio maps the triple to an edge label from the ArchitectureGraph it already holds.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["sourceActorId", "targetActorId", "policyId", "counters", "byCheck"],
+            "additionalProperties": false,
+            "properties": {
+              "sourceActorId": { "type": "string" },
+              "targetActorId": { "type": "string" },
+              "policyId": { "type": "string" },
+              "counters": { "$ref": "#/$defs/counters" },
+              "byCheck": {
+                "description": "The cross-tabulation: on this segment, which controls applied and what happened. Checks ABSENT for EVERY interaction on the edge are omitted to bound the payload -- their absence from this array means ABSENT throughout, which the partition-level byCheck still reports.",
+                "type": "array",
+                "items": { "$ref": "#/$defs/checkCoverage" }
+              }
+            }
+          }
+        },
+        "unattributed": {
+          "description": "Counters over the interactions that could not be placed on the byEdge grid: no target actor, or no CONTROL_EVALUATED and therefore no policyId. Kept as an explicit bucket rather than dropped, so byEdge sums can be reconciled against the partition total. Detecting traffic on an UNDECLARED edge is a different question and is not answered here -- that belongs to compare_observed_runtime, which holds the declared graph.",
+          "$ref": "#/$defs/counters"
+        },
         "timeSeries": {
           "description": "Hourly UTC buckets of each interaction's FIRST event time, sorted ascending. bucketStart format: YYYY-MM-DDThh:00:00Z.",
           "type": "array",
@@ -108,8 +137,22 @@
         }
       }
     },
+    "checkCoverage": {
+      "description": "One canonical check id and the four coverage states, in interactions. RAN_FLAGGED: the check id appears in control.flaggedChecks. RAN_CLEAN: in the declaration's `evaluated` and not flagged. INAPPLICABLE: armed for this link but this invocation gave it nothing to judge. ABSENT: in the catalogue but not armed here -- the operator switched it off, or the enforcement point does not carry it. The four are disjoint and sum to the row's interaction count. This measures COVERAGE, not safety: it can say a control we have did not run, and says nothing about a control we do not have.",
+      "type": "object",
+      "required": ["checkId", "scope", "ranCleanCount", "ranFlaggedCount", "inapplicableCount", "absentCount"],
+      "additionalProperties": false,
+      "properties": {
+        "checkId": { "type": "string" },
+        "scope": { "enum": ["ACTOR", "PAYLOAD", "PAIR", "BOUNDARY"] },
+        "ranCleanCount": { "type": "integer", "minimum": 0 },
+        "ranFlaggedCount": { "type": "integer", "minimum": 0 },
+        "inapplicableCount": { "type": "integer", "minimum": 0 },
+        "absentCount": { "type": "integer", "minimum": 0 }
+      }
+    },
     "counters": {
-      "description": "Interaction-level metrics. decision = strongest_decision over the interaction's CONTROL_EVALUATED control.decision values (ALLOW < SANITIZE < HOLD < BLOCK < QUARANTINE < KILL; unknown strings rank as BLOCK). An execution attempt is an ACTION_EXECUTED with a non-null connectorExecutionId -- the enforcement ACTION_EXECUTED emitted on a block carries connectorExecutionId null and is NOT an attempt.",
+      "description": "Interaction-level metrics. decision = strongest_decision over the interaction's CONTROL_EVALUATED control.decision values, ranked BYPASSED < ALLOW < SANITIZE < DEGRADE < CHALLENGE < HOLD < BLOCK < ERROR < QUARANTINE < REVOKE < KILL; unknown strings rank as BLOCK. An execution attempt is an ACTION_EXECUTED with a non-null connectorExecutionId -- the enforcement ACTION_EXECUTED emitted on a block carries connectorExecutionId null and is NOT an attempt.",
       "type": "object",
       "required": [
         "interactionCount",
@@ -118,7 +161,8 @@
         "enforcedBlockCount",
         "executionAttemptCount",
         "executionSuccessCount",
-        "partialOrBypassCount"
+        "partialOrBypassCount",
+        "noControlRecordCount"
       ],
       "additionalProperties": false,
       "properties": {
@@ -150,6 +194,11 @@
         },
         "partialOrBypassCount": {
           "description": "Interactions whose final securityOutcome is PARTIALLY_EXECUTED, or whose enforced refusal (see blockDecisionCount) was followed by a connector execution attempt anyway (enforcement bypass).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "noControlRecordCount": {
+          "description": "Interactions carrying no CONTROL_EVALUATED at all. They reduce to decision ALLOW with an empty reason list, which is shape-identical to a control that ran and allowed, so without this counter a row reading \"40 calls, 0 blocked\" cannot be told from one where no control ever looked. Reported in every grouping because the blind spot is per-row.",
           "type": "integer",
           "minimum": 0
         }

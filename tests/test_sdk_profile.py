@@ -93,7 +93,7 @@ class SDKProfileTests(unittest.TestCase):
         validated, so the check is INAPPLICABLE and stays out of `ran`."""
         policy = LinkPolicy(mode=PolicyMode.ENFORCE)
         _, source, target = wired(policy)
-        _, _, ran = run_checks(
+        outcome = run_checks(
             policy,
             CheckContext(
                 source=source.spec,
@@ -106,7 +106,7 @@ class SDKProfileTests(unittest.TestCase):
             ),
             SDK_PROFILE,
         )
-        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", ran)
+        self.assertNotIn("INTERLOCK-INPUT-SCHEMA-INVALID", outcome.ran)
 
     def test_repeated_findings_are_de_duplicated_in_the_ledger(self):
         """_new_destination emits one finding per offending destination, so without the same
@@ -200,8 +200,8 @@ class SDKProfileTests(unittest.TestCase):
             trace_id="t",
             span_id="s",
         )
-        self.assertEqual(run_checks(policy, context, GATEWAY_PROFILE)[0], ["L1-M9-SENSITIVE-EGRESS"])
-        self.assertEqual(run_checks(policy, context, SDK_PROFILE)[0], ["INTERLOCK-DATA-CLASS-DENIED"])
+        self.assertEqual(run_checks(policy, context, GATEWAY_PROFILE).reasons, ["L1-M9-SENSITIVE-EGRESS"])
+        self.assertEqual(run_checks(policy, context, SDK_PROFILE).reasons, ["INTERLOCK-DATA-CLASS-DENIED"])
 
     def test_a_malformed_allowlist_entry_still_produces_a_control_record(self):
         """main's SDK never read allowed_domains; routing wrap() through the shared table made it

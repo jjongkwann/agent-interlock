@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from .canonical import canonical_digest, canonical_json
-from .models import DataSource, Environment
+from .models import ControlCoverage, DataSource, Environment
 from .security import sanitize_secrets
 
 _SENSITIVE_KEY = re.compile(r"(?i)(authorization|password|secret|token|api[_-]?key|credential)")
@@ -98,6 +98,28 @@ class Event:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def declare_coverage(ledger: "Ledger", seen: set[str], coverage: ControlCoverage, **common: Any) -> None:
+    """Append CONTROL_COVERAGE_DECLARED the first time an enforcement point sees a coverage digest.
+
+    Which controls are armed is a property of the link, not of the call, so recording it on every
+    CONTROL_EVALUATED would put twenty-odd ids on every event to say the same thing. The event
+    carries the digest; this carries what the digest means, once.
+
+    ``seen`` is the caller's own set, so the dedup is per enforcement-point instance and a restart
+    re-declares. That is deliberate: the reducer keys on the digest and a repeat is a no-op, while
+    a process-lifetime cache that outlived the ledger it was writing to would leave a digest on the
+    wire that nothing in the stream explains.
+
+    No ``interaction_id``: the declaration belongs to the link, and stamping it with one call's id
+    would file a link-level fact under a single interaction.
+    """
+    if coverage.digest in seen:
+        return
+    seen.add(coverage.digest)
+    common.pop("interaction_id", None)
+    ledger.append("CONTROL_COVERAGE_DECLARED", payload={"coverage": dict(coverage.declaration)}, **common)
 
 
 @dataclass(frozen=True, slots=True)

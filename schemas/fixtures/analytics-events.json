@@ -1,8 +1,315 @@
 [
   {
+    "event_id": "evt-0038",
+    "event_type": "CONTROL_COVERAGE_DECLARED",
+    "schema_version": "1.0",
+    "occurred_at": "2026-07-19T11:00:00Z",
+    "ingested_at": "2026-07-19T11:00:00Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-coverage-0038",
+    "span_id": "span-0038",
+    "parent_span_id": null,
+    "interaction_id": null,
+    "source_actor_id": "support-agent",
+    "target_actor_id": null,
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "INFO",
+    "payload": {
+      "coverage": {
+        "profileDigest": "sha256:a8c7206cdb1ddc6a7eb165c3cd67277dd2048462370da6441a1eaa05d180bc72",
+        "enforcementPoint": "MCP_GATEWAY",
+        "policyId": "policy.support-web",
+        "policyVersion": "1.0.0",
+        "armed": [
+          {
+            "id": "INTERLOCK-ACTOR-TYPE-DENIED",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M2-DEFINITION-NOT-ACTIVE",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "L1-M2-DEFINITION-DRIFT",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "INTERLOCK-DATA-CLASS-DENIED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M8-CREDENTIAL-DETECTED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M9-NEW-DESTINATION",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "L1-UNDECLARED-SIDE-EFFECT",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-DESTRUCTIVE-WRITE",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-APPROVAL-REQUIRED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M5-CREDENTIAL-MISSING",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-PASSTHROUGH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-ACTOR-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-DELEGATION-DEPTH",
+            "scope": "PAIR"
+          }
+        ],
+        "evaluated": [
+          "INTERLOCK-ACTOR-TYPE-DENIED",
+          "INTERLOCK-DATA-CLASS-DENIED",
+          "L1-M8-CREDENTIAL-DETECTED",
+          "L1-M9-NEW-DESTINATION",
+          "L1-UNDECLARED-SIDE-EFFECT"
+        ]
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0039",
+    "event_type": "CONTROL_COVERAGE_DECLARED",
+    "schema_version": "1.0",
+    "occurred_at": "2026-07-19T11:00:00Z",
+    "ingested_at": "2026-07-19T11:00:00Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-coverage-0039",
+    "span_id": "span-0039",
+    "parent_span_id": null,
+    "interaction_id": null,
+    "source_actor_id": "support-agent",
+    "target_actor_id": null,
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "INFO",
+    "payload": {
+      "coverage": {
+        "profileDigest": "sha256:5fe73dd1fc8e3c5820742d64520d67da950d3c37a70712a737c0518a5c2f252a",
+        "enforcementPoint": "MCP_GATEWAY",
+        "policyId": "policy.export-challenge",
+        "policyVersion": "1.0.0",
+        "armed": [
+          {
+            "id": "INTERLOCK-ACTOR-TYPE-DENIED",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M2-DEFINITION-NOT-ACTIVE",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "L1-M2-DEFINITION-DRIFT",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "INTERLOCK-DATA-CLASS-DENIED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M8-CREDENTIAL-DETECTED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M9-NEW-DESTINATION",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "L1-UNDECLARED-SIDE-EFFECT",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-DESTRUCTIVE-WRITE",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-APPROVAL-REQUIRED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M5-CREDENTIAL-MISSING",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-PASSTHROUGH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-ACTOR-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-DELEGATION-DEPTH",
+            "scope": "PAIR"
+          }
+        ],
+        "evaluated": [
+          "INTERLOCK-ACTOR-TYPE-DENIED",
+          "INTERLOCK-APPROVAL-REQUIRED",
+          "INTERLOCK-DATA-CLASS-DENIED",
+          "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+          "L1-M8-CREDENTIAL-DETECTED",
+          "L1-M9-NEW-DESTINATION",
+          "L1-UNDECLARED-SIDE-EFFECT"
+        ]
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0040",
+    "event_type": "CONTROL_COVERAGE_DECLARED",
+    "schema_version": "1.0",
+    "occurred_at": "2026-07-19T11:00:00Z",
+    "ingested_at": "2026-07-19T11:00:00Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-coverage-0040",
+    "span_id": "span-0040",
+    "parent_span_id": null,
+    "interaction_id": null,
+    "source_actor_id": "support-agent",
+    "target_actor_id": null,
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "INFO",
+    "payload": {
+      "coverage": {
+        "profileDigest": "sha256:9680bde2dcfe2b1e0aa2b84b8a9f0badaa49c6d8d562b5c13bfbd9a04741910d",
+        "enforcementPoint": "MCP_GATEWAY",
+        "policyId": "policy.export-hold",
+        "policyVersion": "1.0.0",
+        "armed": [
+          {
+            "id": "INTERLOCK-ACTOR-TYPE-DENIED",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M2-DEFINITION-NOT-ACTIVE",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "L1-M2-DEFINITION-DRIFT",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "INTERLOCK-DATA-CLASS-DENIED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M8-CREDENTIAL-DETECTED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M9-NEW-DESTINATION",
+            "scope": "ACTOR"
+          },
+          {
+            "id": "L1-UNDECLARED-SIDE-EFFECT",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-DESTRUCTIVE-WRITE",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "INTERLOCK-APPROVAL-REQUIRED",
+            "scope": "PAYLOAD"
+          },
+          {
+            "id": "L1-M5-CREDENTIAL-MISSING",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-PASSTHROUGH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-AUDIENCE-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-RESOURCE-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-TOKEN-ACTOR-MISMATCH",
+            "scope": "PAIR"
+          },
+          {
+            "id": "L1-M5-DELEGATION-DEPTH",
+            "scope": "PAIR"
+          }
+        ],
+        "evaluated": [
+          "INTERLOCK-ACTOR-TYPE-DENIED",
+          "INTERLOCK-APPROVAL-REQUIRED",
+          "INTERLOCK-DATA-CLASS-DENIED",
+          "INTERLOCK-TAINTED-EXTERNAL-WRITE",
+          "L1-M8-CREDENTIAL-DETECTED",
+          "L1-M9-NEW-DESTINATION",
+          "L1-UNDECLARED-SIDE-EFFECT"
+        ]
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
     "event_id": "evt-0001",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:00:05Z",
     "ingested_at": "2026-07-19T10:00:05Z",
     "tenant_id": "tenant-a",
@@ -28,7 +335,7 @@
   {
     "event_id": "evt-0002",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:00:06Z",
     "ingested_at": "2026-07-19T10:00:06Z",
     "tenant_id": "tenant-a",
@@ -58,7 +365,7 @@
   {
     "event_id": "evt-0003",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:00:07Z",
     "ingested_at": "2026-07-19T10:00:07Z",
     "tenant_id": "tenant-a",
@@ -83,7 +390,7 @@
   {
     "event_id": "evt-0004",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:00:08Z",
     "ingested_at": "2026-07-19T10:00:08Z",
     "tenant_id": "tenant-a",
@@ -107,7 +414,7 @@
   {
     "event_id": "evt-0005",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:05:00Z",
     "ingested_at": "2026-07-19T10:05:00Z",
     "tenant_id": "tenant-a",
@@ -135,7 +442,7 @@
   {
     "event_id": "evt-0006",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:15:00Z",
     "ingested_at": "2026-07-19T10:15:00Z",
     "tenant_id": "tenant-a",
@@ -161,7 +468,7 @@
   {
     "event_id": "evt-0007",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:15:01Z",
     "ingested_at": "2026-07-19T10:15:01Z",
     "tenant_id": "tenant-a",
@@ -194,7 +501,7 @@
   {
     "event_id": "evt-0008",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:15:02Z",
     "ingested_at": "2026-07-19T10:15:02Z",
     "tenant_id": "tenant-a",
@@ -219,7 +526,7 @@
   {
     "event_id": "evt-0009",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T10:15:03Z",
     "ingested_at": "2026-07-19T10:15:03Z",
     "tenant_id": "tenant-a",
@@ -243,7 +550,7 @@
   {
     "event_id": "evt-0010",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:02:00Z",
     "ingested_at": "2026-07-19T11:02:00Z",
     "tenant_id": "tenant-a",
@@ -269,7 +576,7 @@
   {
     "event_id": "evt-0011",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:02:01Z",
     "ingested_at": "2026-07-19T11:02:01Z",
     "tenant_id": "tenant-a",
@@ -293,7 +600,12 @@
         "reasonCodes": [
           "L1-M9-NEW-DESTINATION"
         ],
-        "actualEnforced": false
+        "actualEnforced": false,
+        "enforcementPoint": "MCP_GATEWAY",
+        "evaluatedProfile": "sha256:a8c7206cdb1ddc6a7eb165c3cd67277dd2048462370da6441a1eaa05d180bc72",
+        "flaggedChecks": [
+          "L1-M9-NEW-DESTINATION"
+        ]
       }
     },
     "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -301,7 +613,7 @@
   {
     "event_id": "evt-0012",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:02:02Z",
     "ingested_at": "2026-07-19T11:02:02Z",
     "tenant_id": "tenant-a",
@@ -326,7 +638,7 @@
   {
     "event_id": "evt-0013",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:02:03Z",
     "ingested_at": "2026-07-19T11:02:03Z",
     "tenant_id": "tenant-a",
@@ -350,7 +662,7 @@
   {
     "event_id": "evt-0014",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:20:00Z",
     "ingested_at": "2026-07-19T11:20:00Z",
     "tenant_id": "tenant-a",
@@ -376,7 +688,7 @@
   {
     "event_id": "evt-0015",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:20:01Z",
     "ingested_at": "2026-07-19T11:20:01Z",
     "tenant_id": "tenant-a",
@@ -406,7 +718,7 @@
   {
     "event_id": "evt-0016",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:20:02Z",
     "ingested_at": "2026-07-19T11:20:02Z",
     "tenant_id": "tenant-a",
@@ -431,7 +743,7 @@
   {
     "event_id": "evt-0017",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:20:03Z",
     "ingested_at": "2026-07-19T11:20:03Z",
     "tenant_id": "tenant-a",
@@ -455,7 +767,7 @@
   {
     "event_id": "evt-0018",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:30:00Z",
     "ingested_at": "2026-07-19T11:30:00Z",
     "tenant_id": "tenant-a",
@@ -481,7 +793,7 @@
   {
     "event_id": "evt-0019",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:30:01Z",
     "ingested_at": "2026-07-19T11:30:01Z",
     "tenant_id": "tenant-a",
@@ -511,7 +823,7 @@
   {
     "event_id": "evt-0020",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:30:02Z",
     "ingested_at": "2026-07-19T11:30:02Z",
     "tenant_id": "tenant-a",
@@ -536,7 +848,7 @@
   {
     "event_id": "evt-0021",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:30:03Z",
     "ingested_at": "2026-07-19T11:30:03Z",
     "tenant_id": "tenant-a",
@@ -560,7 +872,7 @@
   {
     "event_id": "evt-0022",
     "event_type": "DETECTION_RAISED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:31:00Z",
     "ingested_at": "2026-07-19T11:31:00Z",
     "tenant_id": "tenant-a",
@@ -592,7 +904,7 @@
   {
     "event_id": "evt-0023",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:31:01Z",
     "ingested_at": "2026-07-19T11:31:01Z",
     "tenant_id": "tenant-a",
@@ -617,7 +929,7 @@
   {
     "event_id": "evt-0024",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:31:02Z",
     "ingested_at": "2026-07-19T11:31:02Z",
     "tenant_id": "tenant-a",
@@ -642,7 +954,7 @@
   {
     "event_id": "evt-0025",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:45:00Z",
     "ingested_at": "2026-07-19T11:45:00Z",
     "tenant_id": "tenant-a",
@@ -668,7 +980,7 @@
   {
     "event_id": "evt-0026",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:45:01Z",
     "ingested_at": "2026-07-19T11:45:01Z",
     "tenant_id": "tenant-a",
@@ -700,7 +1012,7 @@
   {
     "event_id": "evt-0027",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:45:02Z",
     "ingested_at": "2026-07-19T11:45:02Z",
     "tenant_id": "tenant-a",
@@ -725,7 +1037,7 @@
   {
     "event_id": "evt-0028",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:45:03Z",
     "ingested_at": "2026-07-19T11:45:03Z",
     "tenant_id": "tenant-a",
@@ -749,7 +1061,7 @@
   {
     "event_id": "evt-0029",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:06:00Z",
     "ingested_at": "2026-07-19T11:06:00Z",
     "tenant_id": "tenant-a",
@@ -775,7 +1087,7 @@
   {
     "event_id": "evt-0030",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:06:01Z",
     "ingested_at": "2026-07-19T11:06:01Z",
     "tenant_id": "tenant-a",
@@ -800,7 +1112,12 @@
           "L1-M9-NEW-DESTINATION"
         ],
         "actualEnforced": true,
-        "executionPermitted": false
+        "executionPermitted": false,
+        "enforcementPoint": "MCP_GATEWAY",
+        "evaluatedProfile": "sha256:a8c7206cdb1ddc6a7eb165c3cd67277dd2048462370da6441a1eaa05d180bc72",
+        "flaggedChecks": [
+          "L1-M9-NEW-DESTINATION"
+        ]
       }
     },
     "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -808,7 +1125,7 @@
   {
     "event_id": "evt-0031",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:06:02Z",
     "ingested_at": "2026-07-19T11:06:02Z",
     "tenant_id": "tenant-a",
@@ -833,7 +1150,7 @@
   {
     "event_id": "evt-0032",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:06:03Z",
     "ingested_at": "2026-07-19T11:06:03Z",
     "tenant_id": "tenant-a",
@@ -857,7 +1174,7 @@
   {
     "event_id": "evt-0033",
     "event_type": "INTERACTION_REQUESTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:07:00Z",
     "ingested_at": "2026-07-19T11:07:00Z",
     "tenant_id": "tenant-a",
@@ -883,7 +1200,7 @@
   {
     "event_id": "evt-0034",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:07:01Z",
     "ingested_at": "2026-07-19T11:07:01Z",
     "tenant_id": "tenant-a",
@@ -907,7 +1224,12 @@
         "reasonCodes": [
           "INTERLOCK-APPROVAL-REQUIRED"
         ],
-        "actualEnforced": false
+        "actualEnforced": false,
+        "enforcementPoint": "MCP_GATEWAY",
+        "evaluatedProfile": "sha256:5fe73dd1fc8e3c5820742d64520d67da950d3c37a70712a737c0518a5c2f252a",
+        "flaggedChecks": [
+          "INTERLOCK-APPROVAL-REQUIRED"
+        ]
       }
     },
     "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -915,7 +1237,7 @@
   {
     "event_id": "evt-0035",
     "event_type": "CONTROL_EVALUATED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:07:02Z",
     "ingested_at": "2026-07-19T11:07:02Z",
     "tenant_id": "tenant-a",
@@ -939,7 +1261,12 @@
         "reasonCodes": [
           "INTERLOCK-TAINTED-EXTERNAL-WRITE"
         ],
-        "actualEnforced": false
+        "actualEnforced": false,
+        "enforcementPoint": "MCP_GATEWAY",
+        "evaluatedProfile": "sha256:9680bde2dcfe2b1e0aa2b84b8a9f0badaa49c6d8d562b5c13bfbd9a04741910d",
+        "flaggedChecks": [
+          "INTERLOCK-TAINTED-EXTERNAL-WRITE"
+        ]
       }
     },
     "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -947,7 +1274,7 @@
   {
     "event_id": "evt-0036",
     "event_type": "ACTION_EXECUTED",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:07:03Z",
     "ingested_at": "2026-07-19T11:07:03Z",
     "tenant_id": "tenant-a",
@@ -972,7 +1299,7 @@
   {
     "event_id": "evt-0037",
     "event_type": "SECURITY_OUTCOME_SET",
-    "schema_version": "1.0.0",
+    "schema_version": "1.0",
     "occurred_at": "2026-07-19T11:07:04Z",
     "ingested_at": "2026-07-19T11:07:04Z",
     "tenant_id": "tenant-a",
@@ -990,6 +1317,81 @@
     "payload": {
       "securityOutcome": "SUCCEEDED",
       "connectorExecutionId": "exec-0008"
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0041",
+    "event_type": "INTERACTION_REQUESTED",
+    "schema_version": "1.0",
+    "occurred_at": "2026-07-19T11:08:00Z",
+    "ingested_at": "2026-07-19T11:08:00Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-9",
+    "span_id": "span-0041",
+    "parent_span_id": null,
+    "interaction_id": "ia-9",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "INFO",
+    "payload": {
+      "invocation": {
+        "purpose": "crm-lookup",
+        "argumentsHash": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0042",
+    "event_type": "ACTION_EXECUTED",
+    "schema_version": "1.0",
+    "occurred_at": "2026-07-19T11:08:01Z",
+    "ingested_at": "2026-07-19T11:08:01Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-9",
+    "span_id": "span-0042",
+    "parent_span_id": null,
+    "interaction_id": "ia-9",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "INFO",
+    "payload": {
+      "result": "COMPLETED",
+      "connectorExecutionId": "exec-0009",
+      "failure": null
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0043",
+    "event_type": "SECURITY_OUTCOME_SET",
+    "schema_version": "1.0",
+    "occurred_at": "2026-07-19T11:08:02Z",
+    "ingested_at": "2026-07-19T11:08:02Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-9",
+    "span_id": "span-0043",
+    "parent_span_id": null,
+    "interaction_id": "ia-9",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "INFO",
+    "payload": {
+      "securityOutcome": "SUCCEEDED",
+      "connectorExecutionId": "exec-0009"
     },
     "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   }

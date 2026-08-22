@@ -35,6 +35,23 @@ Pinned semantics:
   (``UNKNOWN`` when none was set).
 - ``reasonCodes`` are deduped per interaction but one interaction can carry
   several, so per-reason sums legitimately exceed interaction counts.
+
+Coverage (the second question the statistics answer -- which controls looked, not
+only which fired):
+
+- ``CONTROL_COVERAGE_DECLARED`` carries no ``interaction_id``: what is armed is a
+  property of the link, not of a call. Declarations are collected from the whole
+  stream and keyed by ``profileDigest``; CONTROL_EVALUATED points at one with
+  ``control.evaluatedProfile``.
+- The catalogue is the union of every ``armed`` set seen in the stream, so the
+  reducer stays a pure function of the events and the Studio port needs no access
+  to the Python check table.
+- Per interaction and check id: in ``flaggedChecks`` is RAN_FLAGGED, else in the
+  declaration's ``evaluated`` is RAN_CLEAN, else in its ``armed`` is INAPPLICABLE,
+  else ABSENT. An interaction whose events carry no digest is ABSENT throughout --
+  no control looked, which is not the same as no control objected.
+- ``flaggedChecks`` carries check ids, not reason codes. ``Profile.reason_codes``
+  is not injective, so a code cannot name the check that produced it.
 """
 
 from __future__ import annotations
@@ -49,6 +66,32 @@ from .policy import strongest_decision
 
 STATISTICS_API_VERSION = "interlock.dev/v1alpha1"
 STATISTICS_KIND = "SecurityStatistics"
+
+
+COVERAGE_STATES = ("RAN_CLEAN", "RAN_FLAGGED", "INAPPLICABLE", "ABSENT")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckCoverage:
+    """What one interaction's controls did, as three nested sets of check ids.
+
+    ``flagged`` is a subset of ``ran``, which is a subset of ``armed``; the fourth state, ABSENT,
+    is everything in the catalogue that is not in ``armed``, so it is a property of the stream
+    rather than of the interaction and cannot be stored here.
+    """
+
+    armed: frozenset[str] = frozenset()
+    ran: frozenset[str] = frozenset()
+    flagged: frozenset[str] = frozenset()
+
+    def state(self, check_id: str) -> str:
+        if check_id in self.flagged:
+            return "RAN_FLAGGED"
+        if check_id in self.ran:
+            return "RAN_CLEAN"
+        if check_id in self.armed:
+            return "INAPPLICABLE"
+        return "ABSENT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +111,8 @@ class InteractionRecord:
     actual_enforced: bool
     execution_permitted: bool
     reason_codes: tuple[str, ...]
+    control_evaluated: bool
+    coverage: CheckCoverage
     execution_attempted: bool
     execution_succeeded: bool
     enforcement_action_completed: bool
@@ -93,14 +138,61 @@ class InteractionRecord:
         )
 
     @property
+    def edge_key(self) -> tuple[str, str, str] | None:
+        """The (source, target, policy) triple byEdge groups on, or None when it is incomplete.
+
+        The graph allows several edges between one actor pair -- ArchitectureGraph.edges is a tuple
+        and uniqueness is enforced on edge ids -- so the pair alone is not a key, and policyId is
+        what splits precisely where the armed set can differ. An interaction with no control record
+        has no policyId, so it cannot be placed on the grid at all; those are counted in
+        ``unattributed`` rather than dropped or folded into some other edge's row.
+        """
+        if self.target_actor_id is None or self.policy_id is None:
+            return None
+        return (self.source_actor_id, self.target_actor_id, self.policy_id)
+
+    @property
     def partial_or_bypass(self) -> bool:
         if self.security_outcome == SecurityOutcome.PARTIALLY_EXECUTED.value:
             return True
         return self.block_decision and self.actual_enforced and self.execution_attempted
 
 
+def coverage_declarations(events: Iterable[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    """Every CONTROL_COVERAGE_DECLARED payload in the stream, keyed by its digest.
+
+    First declaration per digest wins; a producer cannot emit two different bodies under one digest
+    without the digest changing, since it covers the whole body.
+    """
+    declarations: dict[str, Mapping[str, Any]] = {}
+    for event in events:
+        if event.get("event_type") != "CONTROL_COVERAGE_DECLARED":
+            continue
+        payload = event.get("payload")
+        coverage = payload.get("coverage") if isinstance(payload, Mapping) else None
+        if isinstance(coverage, Mapping) and isinstance(coverage.get("profileDigest"), str):
+            declarations.setdefault(coverage["profileDigest"], coverage)
+    return declarations
+
+
+def check_catalogue(declarations: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Check id -> scope, over the union of every armed set declared in the stream.
+
+    This is what makes ABSENT expressible without the Python check table: a control missing from
+    one link's armed set is only ABSENT relative to the links that do arm it.
+    """
+    catalogue: dict[str, str] = {}
+    for declaration in declarations.values():
+        for entry in declaration.get("armed") or ():
+            if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
+                catalogue.setdefault(entry["id"], str(entry.get("scope", "")))
+    return catalogue
+
+
 def reduce_interactions(events: Iterable[Mapping[str, Any]]) -> tuple[InteractionRecord, ...]:
     """Join event-envelope dicts (``Event.to_dict()`` shape) by interaction."""
+    events = list(events)
+    declarations = coverage_declarations(events)
     grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for event in events:
         interaction_id = event.get("interaction_id")
@@ -110,7 +202,7 @@ def reduce_interactions(events: Iterable[Mapping[str, Any]]) -> tuple[Interactio
     records = [
         record
         for (_tenant_id, interaction_id), items in grouped.items()
-        if (record := _reduce_one(interaction_id, items)) is not None
+        if (record := _reduce_one(interaction_id, items, declarations)) is not None
     ]
     records.sort(
         key=lambda record: (
@@ -122,7 +214,11 @@ def reduce_interactions(events: Iterable[Mapping[str, Any]]) -> tuple[Interactio
     return tuple(records)
 
 
-def _reduce_one(interaction_id: str, events: list[Mapping[str, Any]]) -> InteractionRecord | None:
+def _reduce_one(
+    interaction_id: str,
+    events: list[Mapping[str, Any]],
+    declarations: Mapping[str, Mapping[str, Any]],
+) -> InteractionRecord | None:
     ordered = sorted(
         range(len(events)),
         key=lambda index: (_event_time(events[index]), str(events[index].get("event_id", "")), index),
@@ -152,6 +248,7 @@ def _reduce_one(interaction_id: str, events: list[Mapping[str, Any]]) -> Interac
         elif event_type == "SECURITY_OUTCOME_SET" and payload.get("securityOutcome"):
             outcome = str(payload["securityOutcome"])
 
+    coverage = _coverage(controls, declarations)
     decisions = [_control_decision(control) for control in controls]
     decision = strongest_decision(decisions)
     permitted = all(control.get("executionPermitted", True) is True for control in controls)
@@ -183,6 +280,8 @@ def _reduce_one(interaction_id: str, events: list[Mapping[str, Any]]) -> Interac
         decision=decision,
         actual_enforced=chosen.get("actualEnforced") is True,
         execution_permitted=permitted,
+        control_evaluated=bool(controls),
+        coverage=coverage,
         reason_codes=tuple(reason_codes),
         execution_attempted=execution_attempted,
         execution_succeeded=execution_succeeded,
@@ -190,6 +289,36 @@ def _reduce_one(interaction_id: str, events: list[Mapping[str, Any]]) -> Interac
         security_outcome=outcome,
         first_occurred_at=str(first.get("occurred_at", "")),
     )
+
+
+def _coverage(
+    controls: Sequence[Mapping[str, Any]],
+    declarations: Mapping[str, Mapping[str, Any]],
+) -> CheckCoverage:
+    """Join one interaction's control records to the coverage they were declared under.
+
+    A control record naming a digest the stream never declared contributes nothing rather than
+    being guessed at: an unresolvable digest is missing evidence, and inventing an armed set for it
+    would report coverage the ledger does not carry.
+    """
+    armed: set[str] = set()
+    ran: set[str] = set()
+    flagged: set[str] = set()
+    for control in controls:
+        for check_id in control.get("flaggedChecks") or ():
+            flagged.add(str(check_id))
+        declaration = declarations.get(str(control.get("evaluatedProfile", "")))
+        if declaration is None:
+            continue
+        for entry in declaration.get("armed") or ():
+            if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
+                armed.add(entry["id"])
+        for check_id in declaration.get("evaluated") or ():
+            ran.add(str(check_id))
+    # A flagged check ran, and a check that ran is armed, whatever an inconsistent stream claims.
+    ran |= flagged
+    armed |= ran
+    return CheckCoverage(armed=frozenset(armed), ran=frozenset(ran), flagged=frozenset(flagged))
 
 
 def _control_decision(control: Mapping[str, Any]) -> ControlDecision:
@@ -201,7 +330,9 @@ def _control_decision(control: Mapping[str, Any]) -> ControlDecision:
 
 def summarize_security_statistics(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate events into the SecurityStatistics contract value."""
+    events = list(events)
     records = reduce_interactions(events)
+    catalogue = check_catalogue(coverage_declarations(events))
     partitions = []
     for data_source in sorted({record.data_source for record in records}):
         subset = [record for record in records if record.data_source == data_source]
@@ -215,6 +346,9 @@ def summarize_security_statistics(events: Iterable[Mapping[str, Any]]) -> dict[s
                 "byPolicy": _grouped(subset, "policyId", lambda r: r.policy_id),
                 "byMode": _grouped(subset, "mode", lambda r: r.mode),
                 "byReasonCode": _reason_counts(subset),
+                "byCheck": _by_check(subset, catalogue),
+                "byEdge": _by_edge(subset, catalogue),
+                "unattributed": _counters([record for record in subset if record.edge_key is None]),
                 "timeSeries": _time_series(subset),
             }
         )
@@ -235,7 +369,67 @@ def _counters(records: Sequence[InteractionRecord]) -> dict[str, int]:
         "executionAttemptCount": sum(1 for r in records if r.execution_attempted),
         "executionSuccessCount": sum(1 for r in records if r.execution_succeeded),
         "partialOrBypassCount": sum(1 for r in records if r.partial_or_bypass),
+        # An interaction whose events carry no CONTROL_EVALUATED reduces to decision ALLOW with an
+        # empty reason list, which is shape-identical to a control that ran and allowed. Counted
+        # here in every grouping rather than only in the partition's `unattributed` bucket, because
+        # the blind spot is per-row: byActor showing "40 calls, 0 blocked" reads as forty examined
+        # calls whether or not any control saw them.
+        "noControlRecordCount": sum(1 for r in records if not r.control_evaluated),
     }
+
+
+def _by_check(records: Sequence[InteractionRecord], catalogue: Mapping[str, str]) -> list[dict[str, Any]]:
+    """Per canonical check id, how many interactions ended in each of the four coverage states.
+
+    Spans all three enforcement points: the ids are the canonical check ids, not the per-point
+    reason codes, so the same control correlates across the gateway, the SDK and the broker without
+    claiming the three implementations are byte-identical.
+    """
+    rows = []
+    for check_id in sorted(catalogue):
+        counts = dict.fromkeys(COVERAGE_STATES, 0)
+        for record in records:
+            counts[record.coverage.state(check_id)] += 1
+        rows.append(
+            {
+                "checkId": check_id,
+                "scope": catalogue[check_id],
+                "ranCleanCount": counts["RAN_CLEAN"],
+                "ranFlaggedCount": counts["RAN_FLAGGED"],
+                "inapplicableCount": counts["INAPPLICABLE"],
+                "absentCount": counts["ABSENT"],
+            }
+        )
+    return rows
+
+
+def _by_edge(records: Sequence[InteractionRecord], catalogue: Mapping[str, str]) -> list[dict[str, Any]]:
+    """The deliverable cross-tabulation: on this segment, which controls applied and what happened.
+
+    Rows ABSENT for every interaction on the edge are omitted -- on a link that arms six of
+    twenty-eight checks, listing the other twenty-two as zeroes on every edge is most of the
+    document. Their absence from a row means ABSENT throughout, which byCheck still reports at the
+    partition level.
+    """
+    groups: dict[tuple[str, str, str], list[InteractionRecord]] = {}
+    for record in records:
+        key = record.edge_key
+        if key is not None:
+            groups.setdefault(key, []).append(record)
+    return [
+        {
+            "sourceActorId": source,
+            "targetActorId": target,
+            "policyId": policy_id,
+            "counters": _counters(groups[(source, target, policy_id)]),
+            "byCheck": [
+                row
+                for row in _by_check(groups[(source, target, policy_id)], catalogue)
+                if row["absentCount"] != len(groups[(source, target, policy_id)])
+            ],
+        }
+        for source, target, policy_id in sorted(groups)
+    ]
 
 
 def _outcome_counts(records: Sequence[InteractionRecord]) -> dict[str, int]:

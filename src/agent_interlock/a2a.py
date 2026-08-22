@@ -19,7 +19,7 @@ from typing import Any, Protocol
 
 from .architecture import ArchitectureEdge, CompiledArchitecture
 from .canonical import canonical_digest, canonical_json
-from .ledger import InMemoryLedger, Ledger
+from .ledger import InMemoryLedger, Ledger, declare_coverage
 from .models import (
     ActorType,
     ControlDecision,
@@ -29,7 +29,7 @@ from .models import (
     InvocationIntent,
     PolicyMode,
 )
-from .policy import A2A_BOUNDARY_PROFILE, A2A_LINK_PROFILE, CheckContext, run_checks
+from .policy import A2A_BOUNDARY_PROFILE, A2A_LINK_PROFILE, A2A_PROFILE, CheckContext, control_coverage, run_checks
 from .security import validate_schema
 
 
@@ -602,6 +602,8 @@ class A2ABroker:
         self.task_store = task_store or InMemoryA2ATaskStore()
         self._cards: dict[str, A2AAgentCard] = {}
         self._handlers: dict[str, A2AAgentHandler] = {}
+        # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
+        self._declared_coverage: set[str] = set()
 
     def register_agent(self, actor_id: str, card: A2AAgentCard, handler: A2AAgentHandler) -> None:
         actor = self.architecture.actors.get(actor_id)
@@ -659,13 +661,21 @@ class A2ABroker:
             payload_bytes=payload_bytes,
             relationship=edge.relationship,
         )
-        link_reasons, _, _ = run_checks(edge.policy, check_context, A2A_LINK_PROFILE)
+        link_outcome = run_checks(edge.policy, check_context, A2A_LINK_PROFILE)
+        link_reasons = link_outcome.reasons
         # A bound boundary that did not compile is a wiring error, not a policy finding: no check
         # can express it, because the profile is handed the boundary that is missing.
+        outcomes = [link_outcome]
         if edge.boundary_id is not None and boundary is None:
             boundary_reasons = ["A2A-BOUNDARY-NOT-COMPILED"]
         else:
-            boundary_reasons, _, _ = run_checks(edge.policy, check_context, A2A_BOUNDARY_PROFILE)
+            boundary_outcome = run_checks(edge.policy, check_context, A2A_BOUNDARY_PROFILE)
+            boundary_reasons = boundary_outcome.reasons
+            outcomes.append(boundary_outcome)
+        # One event, so one coverage record over both profiles. Their check sets are disjoint by
+        # scope, so the union is A2A_PROFILE; when the boundary did not compile only the link half
+        # is declared, which is exactly true -- no boundary check was armed.
+        coverage = control_coverage(edge.policy, A2A_PROFILE, *outcomes)
         reasons = tuple(dict.fromkeys((*link_reasons, *boundary_reasons)))
         enforced = bool(
             (link_reasons and edge.policy.mode == PolicyMode.ENFORCE)
@@ -760,6 +770,7 @@ class A2ABroker:
                     "decision": decision.value,
                     "reasonCodes": list(reasons),
                     "actualEnforced": enforced,
+                    **coverage.event_fields(),
                 },
                 "boundary": {
                     "id": boundary.id if boundary else None,
@@ -769,6 +780,7 @@ class A2ABroker:
             severity="HIGH" if reasons else "INFO",
             **common,
         )
+        declare_coverage(self.ledger, self._declared_coverage, coverage, **common)
         if reasons and enforced:
             rejected = replace(task, status=A2ATaskStatus(A2ATaskState.REJECTED))
             self.task_store.update(tenant_id=context.principal.tenant_id, task=rejected)
