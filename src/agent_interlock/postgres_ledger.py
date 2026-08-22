@@ -356,14 +356,19 @@ class PostgreSQLLedger:
                           )
                           -- Coverage declarations carry no interaction_id, so the interaction
                           -- filter cannot see them and the statistics would report every check
-                          -- ABSENT. See the InMemoryLedger comment for why the bound is `< end`.
+                          -- ABSENT. See the InMemoryLedger comment for why the bound is `< end`
+                          -- and why data_source is applied here too.
                           OR (event_type = 'CONTROL_COVERAGE_DECLARED'
-                              AND occurred_at < %s::timestamptz)
+                              AND occurred_at < %s::timestamptz
+                              AND (%s::text IS NULL OR data_source = %s::text))
                       )
                     ORDER BY occurred_at, event_id
                     LIMIT %s
                     """,
-                    (tenant_id, tenant_id, start, end, data_source, data_source, end, limit + 1),
+                    (
+                        tenant_id, tenant_id, start, end, data_source, data_source,
+                        end, data_source, data_source, limit + 1,
+                    ),
                 )
                 values = tuple(_event_from_row(row) for row in cursor.fetchall())
             finally:

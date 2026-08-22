@@ -94,7 +94,7 @@ class MCPToolGateway:
         self._policies: dict[tuple[str, str], LinkPolicy] = {}
         self._decisions: dict[str, _Pending] = {}
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
-        self._declared_coverage: set[str] = set()
+        self._declared_coverage: set[tuple[str, ...]] = set()
         self._approvals: dict[str, Approval] = {}
         self._idempotency: dict[tuple[str, str], tuple[str, InvocationResult]] = {}
         self._execution_decisions: dict[str, str] = {}
@@ -543,7 +543,13 @@ class MCPToolGateway:
             interaction_id=decision.interaction_id,
             source_actor_id=pending.source.id,
             target_actor_id=pending.target.id,
-            severity="HIGH" if decision.decision != ControlDecision.ALLOW else "INFO",
+            # The permit belongs here for the same reason it belongs in block_decision: findings
+            # reducing to [ALLOW, BYPASSED] are refused, and severity is what the alerting path and
+            # every `severity >= HIGH` query read. Without it that column disagrees with the
+            # statistics about whether the call was blocked.
+            severity="HIGH"
+            if decision.decision != ControlDecision.ALLOW or not decision.execution_permitted
+            else "INFO",
             payload={
                 "toolDefinition": {
                     "toolId": pending.revision.tool_id,

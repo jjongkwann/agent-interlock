@@ -98,7 +98,12 @@ class PostgreSQLLedgerUnitTests(unittest.TestCase):
                 "2026-07-20T00:00:00Z",
                 "SIMULATION",
                 "SIMULATION",
+                # The declaration branch: bounded by `end`, and filtered by the same dataSource the
+                # interactions are -- unfiltered it unions the catalogue of every other partition's
+                # links and reports their checks ABSENT against this one's traffic.
                 "2026-07-20T00:00:00Z",
+                "SIMULATION",
+                "SIMULATION",
                 501,
             ),
         )

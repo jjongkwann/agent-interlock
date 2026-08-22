@@ -356,9 +356,10 @@ class PolicyDecisionRecord:
         object -- and any future member ranked below ALLOW inherits that without an edit here.
 
         This disagrees with permits_execution on BYPASSED, deliberately; read its docstring
-        before changing either. Four other predicates in src/ still test ``!= ALLOW`` and so
-        disagree with this one on that member -- the spec's open questions list them. The
-        statistics reducer left that list by reading the permit beside the decision.
+        before changing either. Three other predicates in src/ still test ``!= ALLOW`` alone and so
+        disagree with this one on that member -- the spec's open questions list them. The statistics
+        reducer left that list by reading the permit beside the decision, and the gateway's
+        CONTROL_EVALUATED severity followed it there.
         """
         return _DECISION_RANK[self.decision] > _DECISION_RANK[ControlDecision.ALLOW]
 

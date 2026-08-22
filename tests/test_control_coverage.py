@@ -26,6 +26,7 @@ from agent_interlock.models import (
     ActorType,
     ControlDecision,
     CredentialClaims,
+    DataSource,
     InvocationIntent,
     LinkPolicy,
     SideEffect,
@@ -712,6 +713,166 @@ class LiveQueryPathTests(unittest.TestCase):
         self.assertEqual(control["evaluatedProfile"], declaration["profileDigest"])
         body = {key: value for key, value in declaration.items() if key != "profileDigest"}
         self.assertEqual(declaration["profileDigest"], canonical_digest(body))
+
+
+class DeclarationScopeTests(unittest.TestCase):
+    """What the dedup key has to include, and what happens when the append does not land.
+
+    Every case here reports coverage as ABSENT for traffic that was fully instrumented -- the exact
+    reading this branch exists to make impossible -- and none of them fails any other test.
+    """
+
+    def test_every_tenant_gets_its_own_declaration(self):
+        from l1_harness import TENANT, build_gateway
+
+        from agent_interlock import summarize_security_statistics
+
+        gateway, revision, source, _target = build_gateway(external_approval=False)
+        tenants = (TENANT, "tenant-other")
+        for tenant in tenants:
+            gateway.invoke(
+                connector=lambda arguments: {"status": "SENT"},
+                idempotency_key=f"idem-{tenant}",
+                tenant_id=tenant,
+                source_actor_id=source.id,
+                revision_id=revision.revision_id,
+                intent=InvocationIntent(purpose="notify-customer"),
+                arguments={"to": "user@customer.example", "body": "hello"},
+            )
+        for tenant in tenants:
+            with self.subTest(tenant=tenant):
+                events = gateway.ledger.interaction_lifecycles_started_between(
+                    tenant, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+                )
+                summary = summarize_security_statistics([event.to_dict() for event in events])
+                # Keyed on the digest alone, the second tenant here reduced to zero rows: its
+                # control records referenced a digest declared only into the first tenant's stream.
+                self.assertTrue(summary["partitions"][0]["byCheck"], f"{tenant} lost its coverage")
+
+    def test_a_failed_append_does_not_suppress_the_declaration_for_good(self):
+        from agent_interlock.ledger import declare_coverage
+
+        class FlakyLedger:
+            def __init__(self):
+                self.appended = []
+                self.fail_next = True
+
+            def append(self, event_type, **kwargs):
+                if self.fail_next:
+                    self.fail_next = False
+                    raise RuntimeError("sink unavailable")
+                self.appended.append(event_type)
+
+        ledger, seen = FlakyLedger(), set()
+        coverage = control_coverage(LinkPolicy(), GATEWAY_PROFILE, run_checks(LinkPolicy(), context(), GATEWAY_PROFILE))
+        with self.assertRaises(RuntimeError):
+            declare_coverage(ledger, seen, coverage, tenant_id="t", trace_id="tr", span_id="sp", source_actor_id="a")
+        # Marked before the append, one transient failure would suppress it for the life of the
+        # process while every control record kept naming its digest.
+        self.assertEqual(seen, set())
+        declare_coverage(ledger, seen, coverage, tenant_id="t", trace_id="tr", span_id="sp", source_actor_id="a")
+        self.assertEqual(ledger.appended, ["CONTROL_COVERAGE_DECLARED"])
+        self.assertEqual(len(seen), 1)
+
+    def test_the_dedup_set_is_bounded(self):
+        from agent_interlock.ledger import _MAX_DECLARED_COVERAGE, declare_coverage
+
+        class NullLedger:
+            def append(self, event_type, **kwargs):
+                return None
+
+        ledger, seen = NullLedger(), set()
+        base = control_coverage(LinkPolicy(), GATEWAY_PROFILE, run_checks(LinkPolicy(), context(), GATEWAY_PROFILE))
+        for index in range(_MAX_DECLARED_COVERAGE + 5):
+            declare_coverage(
+                ledger, seen, base, tenant_id=f"tenant-{index}", trace_id="tr", span_id="sp", source_actor_id="a"
+            )
+        self.assertLessEqual(len(seen), _MAX_DECLARED_COVERAGE)
+
+    def test_the_digest_is_per_coverage_shape_not_per_link(self):
+        """The docstring used to claim once per link. `evaluated` is per invocation -- arguments
+        holding no strings give the secret scan no subject -- so one link legitimately declares
+        more than one shape, and that is the compression rather than a defect."""
+        policy = LinkPolicy()
+        scannable = context(arguments={"note": "plain text"})
+        numeric = context(arguments={"count": 3})
+        digests = {
+            control_coverage(policy, GATEWAY_PROFILE, run_checks(policy, value, GATEWAY_PROFILE)).digest
+            for value in (scannable, numeric)
+        }
+        self.assertEqual(len(digests), 2)
+
+    def test_a_denied_permit_is_logged_at_the_severity_a_block_is(self):
+        """severity is what the alerting path and every `severity >= HIGH` query read. Keyed on the
+        decision alone it says INFO for an invocation the statistics count as an enforced block."""
+        from l1_harness import TENANT, build_gateway
+
+        from agent_interlock import InvocationBlocked
+
+        policy = LinkPolicy(
+            secret_action=ControlDecision.ALLOW,
+            undeclared_side_effect_action=ControlDecision.BYPASSED,
+        )
+        gateway, revision, source, _target = build_gateway(policy=policy)
+        with self.assertRaises(InvocationBlocked):
+            gateway.invoke(
+                connector=lambda arguments: {"status": "SENT"},
+                idempotency_key="idem-bypassed",
+                tenant_id=TENANT,
+                source_actor_id=source.id,
+                revision_id=revision.revision_id,
+                intent=InvocationIntent(purpose="notify-customer", estimated_side_effect=SideEffect.READ),
+                # The secret trips a check configured to ALLOW, so the aggregate decision is ALLOW
+                # while the BYPASSED undeclared-side-effect finding denies the permit. That pairing
+                # is the whole point: severity keyed on the decision alone reads INFO here.
+                arguments={"to": "user@customer.example", "body": "AKIAIOSFODNN7EXAMPLE"},
+            )
+        event = next(
+            event
+            for event in gateway.ledger.interaction_lifecycles_started_between(
+                TENANT, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+            )
+            if event.event_type == "CONTROL_EVALUATED"
+        )
+        self.assertEqual(event.payload["control"]["decision"], "ALLOW")
+        self.assertIs(event.payload["control"]["executionPermitted"], False)
+        self.assertEqual(event.severity, "HIGH")
+
+    def test_a_data_source_filter_does_not_import_another_partitions_catalogue(self):
+        from agent_interlock.ledger import InMemoryLedger
+
+        ledger = InMemoryLedger()
+        shared = dict(trace_id="tr", span_id="sp", source_actor_id="agent.a", target_actor_id="tool.b")
+        for source_name, check_id in (("PRODUCTION", "PROD-ONLY-CHECK"), ("TEST", "TEST-ONLY-CHECK")):
+            ledger.append(
+                "CONTROL_COVERAGE_DECLARED",
+                tenant_id="tenant-a",
+                data_source=DataSource(source_name),
+                payload={
+                    "coverage": {
+                        "profileDigest": f"sha256:{source_name.lower()}",
+                        "enforcementPoint": "MCP_GATEWAY",
+                        "armed": [{"id": check_id, "scope": "PAIR"}],
+                        "evaluated": [],
+                    }
+                },
+                **shared,
+            )
+        ledger.append(
+            "INTERACTION_REQUESTED",
+            tenant_id="tenant-a",
+            data_source=DataSource.PRODUCTION,
+            interaction_id="ia-1",
+            payload={},
+            **shared,
+        )
+        events = ledger.interaction_lifecycles_started_between(
+            "tenant-a", "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z", data_source="PRODUCTION"
+        )
+        catalogue = check_catalogue(coverage_declarations([event.to_dict() for event in events]))
+        # Unfiltered, TEST-ONLY-CHECK joins the catalogue and is reported ABSENT across production
+        # traffic: a coverage gap that does not exist.
+        self.assertEqual(set(catalogue), {"PROD-ONLY-CHECK"})
 
 
 if __name__ == "__main__":

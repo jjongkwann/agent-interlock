@@ -603,7 +603,7 @@ class A2ABroker:
         self._cards: dict[str, A2AAgentCard] = {}
         self._handlers: dict[str, A2AAgentHandler] = {}
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
-        self._declared_coverage: set[str] = set()
+        self._declared_coverage: set[tuple[str, ...]] = set()
 
     def register_agent(self, actor_id: str, card: A2AAgentCard, handler: A2AAgentHandler) -> None:
         actor = self.architecture.actors.get(actor_id)

@@ -272,9 +272,25 @@ can run the same checks with different sets armed -- one arming a control that
 stays INAPPLICABLE -- and keying on the evaluated set alone would let whichever
 declaration was seen first speak for both. Since the digest is over everything the
 payload says, a reader can recompute it from the event, and a producer emitting
-two different bodies under one digest is not expressible. Dedup is per
-enforcement-point instance, so a restart re-declares; the reducer keys on the
-digest and a repeat is a no-op.
+two different bodies under one digest is not expressible.
+
+**"Once per digest", not "once per link" -- and the dedup key is not the digest.**
+`evaluated` is per invocation: an argument map holding no strings gives the secret
+scan no subject, and that is a different coverage shape from one that does. Distinct
+shapes are far fewer than invocations, which is the compression; the set of shapes
+seen is capped and cleared rather than left to grow for the life of the process,
+since a repeat declaration is a no-op for the reducer.
+
+The dedup key is `(tenant_id, environment, data_source, digest)`. `tenant_id` is the
+load-bearing part: it is a per-invocation argument while the seen-set lives on the
+enforcement point, and both ledgers filter declarations by tenant. Keyed on the
+digest alone, the first tenant through a link declares and every other tenant's
+`CONTROL_EVALUATED` then names a digest absent from its own stream -- **measured on
+the real gateway: tenant A got 16 `byCheck` rows and tenant B got none**, a
+dashboard reporting that no control ever looked at a fully instrumented tenant. The
+key is recorded only after the append returns, so one transient sink failure cannot
+suppress a declaration for the life of the process while every control record keeps
+referencing its digest. A restart re-declares, deliberately.
 
 **The declaration carries no `interaction_id`.** What is armed belongs to the
 link. Stamping it with one call's id would file a link-level fact under a single
@@ -315,7 +331,11 @@ Added to each partition in `schemas/security-statistics.schema.json`:
   ArchitectureGraph, which the reducer does not have and must not have, or the
   Studio port stops being a pure function of the event stream. What the reducer
   can see is an incomplete triple -- no target actor, or no `CONTROL_EVALUATED`
-  and therefore no `policyId`. Detecting traffic on an *undeclared* edge remains
+  and therefore no `policyId`. The `dataSource` filter applies to declarations as
+  well as to interactions, or a PRODUCTION window unions the catalogue of every
+  SIMULATION and TEST link and reports each of their checks ABSENT across
+  production traffic -- coverage gaps that do not exist, in the one number this
+  document exists to make trustworthy. Detecting traffic on an *undeclared* edge remains
   `compare_observed_runtime`'s job, as **Out of scope** already says.
 - **`noControlRecordCount`** in every `counters` block. An interaction with no
   `CONTROL_EVALUATED` reduces to `ALLOW` with an empty reason list, which is
@@ -744,13 +764,18 @@ settle them without shipping an undocumented decision.
   says "no grounds to block", the latter denies execution under ENFORCE. Both are
   defensible in isolation and the pair is fail-closed, but it is undocumented and
   falls straight out of the previous question.
-- **Six `!= ALLOW` predicates, two answers — now four.** See §6, §6a and §6c.
+- **Six `!= ALLOW` predicates, two answers — now four, and one of the four grew a
+  second disjunct.** See §6, §6a and §6c.
   `sdk.py` left the list by becoming an explicit execution-permit aggregate, and
   `analytics.py` left it by reading the permit alongside the decision. The four
   that remain are `gateway.py:273` (admits the config guard's verdict into the
-  record), `gateway.py:329` and `gateway.py:544` (outcome and severity labels)
-  and `config_guard.py:412` (severity label); none of them gates execution.
-  Reconcile; do not add a fifth.
+  record), `gateway.py:329` (outcome label) and `config_guard.py:412` (severity
+  label); none of them gates execution. The gateway's own `CONTROL_EVALUATED`
+  severity now reads `decision != ALLOW or not execution_permitted`, matching
+  `block_decision` -- severity is what the alerting path and every
+  `severity >= HIGH` query read, and keyed on the decision alone that column said
+  `INFO` for an invocation the statistics count as an enforced block. Reconcile
+  the rest; do not add a fifth.
 - **`ActorSpec.data_access` has no enforcement reader — partly mitigated, and the
   residual is measured.** The merge moved the data-class judgement onto the link
   policy's `allowed`/`denied_data_classes`; before it, `sdk.py` judged against the

@@ -100,26 +100,59 @@ class Event:
         return asdict(self)
 
 
-def declare_coverage(ledger: "Ledger", seen: set[str], coverage: ControlCoverage, **common: Any) -> None:
-    """Append CONTROL_COVERAGE_DECLARED the first time an enforcement point sees a coverage digest.
+# A declaration is emitted once per (routing key, coverage shape). The shapes on one link are
+# bounded by its armed set in principle and are a handful in practice, but nothing evicts them, so
+# the set is capped and cleared rather than left to grow for the life of the process. Clearing
+# re-declares, and a repeat declaration is a no-op for the reducer, which keys on the digest.
+# ponytail: clear-on-full, not an LRU -- the reachable shape count is small and a rare burst of
+# duplicate declarations costs less than tracking recency.
+_MAX_DECLARED_COVERAGE = 512
 
-    Which controls are armed is a property of the link, not of the call, so recording it on every
+
+def declare_coverage(ledger: "Ledger", seen: set[tuple[str, ...]], coverage: ControlCoverage, **common: Any) -> None:
+    """Append CONTROL_COVERAGE_DECLARED the first time this stream sees a coverage shape.
+
+    Which controls are *armed* is a property of the link, so recording it on every
     CONTROL_EVALUATED would put twenty-odd ids on every event to say the same thing. The event
-    carries the digest; this carries what the digest means, once.
+    carries the digest; this carries what the digest means.
 
-    ``seen`` is the caller's own set, so the dedup is per enforcement-point instance and a restart
-    re-declares. That is deliberate: the reducer keys on the digest and a repeat is a no-op, while
-    a process-lifetime cache that outlived the ledger it was writing to would leave a digest on the
-    wire that nothing in the stream explains.
+    **Not once per link.** The digest also covers ``evaluated``, which is per invocation -- a call
+    whose arguments hold no strings gives the secret scan no subject, and that is a different
+    coverage shape from one that does. Distinct shapes are far fewer than invocations, which is the
+    compression; "once" here means once per shape, not once per link.
+
+    **The dedup key is the routing fields, not the digest alone.** ``tenant_id`` is the important
+    one: it is a per-invocation argument while ``seen`` lives on the enforcement point, and both
+    ledger implementations filter declarations by tenant. Keyed on the digest alone, the first
+    tenant through a link declares and every other tenant's CONTROL_EVALUATED then references a
+    digest absent from its own stream -- the reducer resolves nothing and reports every check
+    ABSENT, which is a dashboard saying no control ever looked at a correctly instrumented tenant.
+    ``environment`` and ``data_source`` join it because they partition the same way and because the
+    declaration carries them as its own fields.
+
+    ``seen`` is the caller's own set, so a restart re-declares. That is deliberate: a repeat is a
+    no-op for the reducer, while a process-lifetime cache that outlived the ledger it was writing
+    to would leave a digest on the wire that nothing in the stream explains.
 
     No ``interaction_id``: the declaration belongs to the link, and stamping it with one call's id
     would file a link-level fact under a single interaction.
     """
-    if coverage.digest in seen:
+    key = (
+        str(common.get("tenant_id", "")),
+        str(getattr(common.get("environment", ""), "value", common.get("environment", ""))),
+        str(getattr(common.get("data_source", ""), "value", common.get("data_source", ""))),
+        coverage.digest,
+    )
+    if key in seen:
         return
-    seen.add(coverage.digest)
     common.pop("interaction_id", None)
     ledger.append("CONTROL_COVERAGE_DECLARED", payload={"coverage": dict(coverage.declaration)}, **common)
+    # Recorded only after the append succeeds. Marking first would let one transient sink failure
+    # suppress the declaration for the life of the process while every CONTROL_EVALUATED kept
+    # referencing its digest -- a stream carrying a fingerprint nothing explains.
+    if len(seen) >= _MAX_DECLARED_COVERAGE:
+        seen.clear()
+    seen.add(key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,6 +509,12 @@ class InMemoryLedger:
                         or (
                             event.event_type == "CONTROL_COVERAGE_DECLARED"
                             and parse_event_time(event.occurred_at) < end_at
+                            # Filtered the same way the interactions are. Unfiltered, a PRODUCTION
+                            # window unions the catalogue of every SIMULATION and TEST link and
+                            # reports each of their checks ABSENT across production traffic --
+                            # coverage gaps that do not exist, in the one number this exists to
+                            # make trustworthy.
+                            and (data_source is None or event.data_source == data_source)
                         )
                     )
                 ),

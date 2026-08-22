@@ -59,7 +59,7 @@ class Interlock:
         self._actors: dict[str, Actor] = {}
         self._links: dict[tuple[str, str], LinkPolicy] = {}
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
-        self._declared_coverage: set[str] = set()
+        self._declared_coverage: set[tuple[str, ...]] = set()
 
     def define_actor(self, spec: ActorSpec) -> Actor:
         if spec.id in self._actors:
