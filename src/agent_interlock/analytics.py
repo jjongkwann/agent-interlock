@@ -305,7 +305,15 @@ def _coverage(
     ran: set[str] = set()
     flagged: set[str] = set()
     for control in controls:
-        for check_id in control.get("flaggedChecks") or ():
+        # Same shape guard reasonCodes already carries below: a bare string is iterable, so a
+        # producer writing a single id instead of a list would otherwise contribute one check per
+        # character.
+        raw_flagged = control.get("flaggedChecks")
+        if isinstance(raw_flagged, str):
+            raw_flagged = (raw_flagged,)
+        elif not isinstance(raw_flagged, Sequence):
+            raw_flagged = ()
+        for check_id in raw_flagged:
             flagged.add(str(check_id))
         declaration = declarations.get(str(control.get("evaluatedProfile", "")))
         if declaration is None:

@@ -171,7 +171,12 @@ function coverageFor(controls, declarations) {
   const ran = new Set();
   const flagged = new Set();
   for (const control of controls) {
-    for (const checkId of control.flaggedChecks ?? []) flagged.add(String(checkId));
+    // Mirrors _coverage in analytics.py: a bare string is iterable in both languages, so an
+    // unguarded loop contributes one check per character.
+    const rawFlagged = typeof control.flaggedChecks === "string"
+      ? [control.flaggedChecks]
+      : Array.isArray(control.flaggedChecks) ? control.flaggedChecks : [];
+    for (const checkId of rawFlagged) flagged.add(String(checkId));
     const declaration = declarations.get(String(control.evaluatedProfile ?? ""));
     if (declaration === undefined) continue;
     for (const entry of declaration.armed ?? []) {

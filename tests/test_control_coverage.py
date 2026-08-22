@@ -510,6 +510,20 @@ class ReducerCoverageTests(unittest.TestCase):
             self.assertEqual(record.coverage.armed, record.coverage.flagged)
             self.assertEqual(record.coverage.ran, record.coverage.flagged)
 
+    def test_a_flagged_checks_string_is_read_as_one_id_not_one_per_character(self):
+        """`reasonCodes` already carries this guard. Without the matching one, a producer writing a
+        bare id instead of a list turns a control record into twenty-odd single-character checks."""
+        events = [
+            _requested("ia-str"),
+            _control("ia-str", {"decision": "BLOCK", "flaggedChecks": "L1-M9-NEW-DESTINATION"}),
+        ]
+        record = reduce_interactions(events)[0]
+        self.assertEqual(record.coverage.flagged, frozenset({"L1-M9-NEW-DESTINATION"}))
+
+    def test_a_malformed_flagged_checks_value_contributes_nothing(self):
+        events = [_requested("ia-bad"), _control("ia-bad", {"decision": "BLOCK", "flaggedChecks": 7})]
+        self.assertEqual(reduce_interactions(events)[0].coverage.flagged, frozenset())
+
     def test_the_four_states_are_disjoint_and_total(self):
         catalogue = check_catalogue(coverage_declarations(self.events))
         records = reduce_interactions(self.events)
@@ -528,6 +542,19 @@ class ReducerCoverageTests(unittest.TestCase):
         record = next(r for r in reduce_interactions(events) if r.interaction_id == "ia-1")
         self.assertFalse(record.control_evaluated)
         self.assertIsNone(record.edge_key)  # no policyId, so it cannot be placed on the byEdge grid
+
+
+def _requested(interaction_id):
+    return {
+        "event_type": "INTERACTION_REQUESTED", "occurred_at": "2026-07-19T12:00:00Z",
+        "tenant_id": "tenant-a", "environment": "DEV", "data_source": "PRODUCTION",
+        "interaction_id": interaction_id, "source_actor_id": "agent.a",
+        "target_actor_id": "tool.b", "relationship_id": "REL-05", "payload": {},
+    }
+
+
+def _control(interaction_id, control):
+    return {**_requested(interaction_id), "event_type": "CONTROL_EVALUATED", "payload": {"control": control}}
 
 
 class LiveQueryPathTests(unittest.TestCase):
@@ -658,6 +685,33 @@ class LiveQueryPathTests(unittest.TestCase):
             self.assertEqual(control["enforcementPoint"], "MCP_GATEWAY")
             self.assertTrue(control["evaluatedProfile"].startswith("sha256:"))
             self.assertEqual(control["flaggedChecks"], [])
+
+    def test_the_digest_survives_the_ledger_and_still_joins_after_redaction(self):
+        """The join is a digest on one event matching a digest on another, and both pass through
+        redact_payload, which rewrites strings. A pattern that ate either side would leave the
+        events individually plausible and the coverage permanently unresolvable."""
+        from l1_harness import TENANT, build_gateway
+
+        gateway, revision, source, _target = build_gateway(external_approval=False)
+        gateway.invoke(
+            connector=lambda arguments: {"status": "SENT"},
+            idempotency_key="idem-join",
+            tenant_id=TENANT,
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="notify-customer"),
+            arguments={"to": "user@customer.example", "body": "hello"},
+        )
+        events = gateway.ledger.interaction_lifecycles_started_between(
+            TENANT, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+        )
+        control = next(e.payload["control"] for e in events if e.event_type == "CONTROL_EVALUATED")
+        declaration = next(
+            e.payload["coverage"] for e in events if e.event_type == "CONTROL_COVERAGE_DECLARED"
+        )
+        self.assertEqual(control["evaluatedProfile"], declaration["profileDigest"])
+        body = {key: value for key, value in declaration.items() if key != "profileDigest"}
+        self.assertEqual(declaration["profileDigest"], canonical_digest(body))
 
 
 if __name__ == "__main__":
