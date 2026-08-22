@@ -22,9 +22,9 @@ status: active
 
 | 계약 | 구현 | 검증 |
 |---|---|---|
-| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests`(**시험 한 개** — `define`/`connect`/graph 배선만), `tests/test_sdk_profile.py`(시험 14개: `wrap()`이 실행하는 check 16개, 그 rename map, 실행 게이트) |
-| 통합 check 표·profile | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(26)·`run_checks` | `tests/test_check_table.py`(시험 20개: 표 구성, 커버리지 상태 3종, check별 `armed`, 중복 id 거부) |
-| 집행점별 profile | `GATEWAY_PROFILE`(18) · `SDK_PROFILE`(16) · `A2A_PROFILE`(16) → `A2A_LINK_PROFILE`(11)·`A2A_BOUNDARY_PROFILE`(5) | profile마다 산출되는 코드 집합만이 아니라 rename map **전체**를 고정; 방출 가능한 reason key가 모두 매핑돼 있는지 정적 감사 |
+| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests`(**시험 한 개** — `define`/`connect`/graph 배선만), `tests/test_sdk_profile.py`(시험 14개: `wrap()`이 실행하는 check 18개, 그 rename map, 실행 게이트) |
+| 통합 check 표·profile | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(28)·`run_checks` | `tests/test_check_table.py`(시험 20개: 표 구성, 커버리지 상태 4종(`RAN_CLEAN`, `RAN_FLAGGED`, `INAPPLICABLE`, `ABSENT`), check별 `armed`, 중복 id 거부) |
+| 집행점별 profile | `GATEWAY_PROFILE`(20) · `SDK_PROFILE`(18) · `A2A_PROFILE`(17) → `A2A_LINK_PROFILE`(12)·`A2A_BOUNDARY_PROFILE`(5) | profile마다 산출되는 코드 집합만이 아니라 rename map **전체**를 고정; 방출 가능한 reason key가 모두 매핑돼 있는지 정적 감사 |
 | 판정 심각도 순서 | `models.py` `_DECISION_RANK`(`ControlDecision` 멤버 11개 전부, fallback 없음; 완전하지 않으면 import 시점에 `RuntimeError`) | `tests/test_decision_ranking.py`(시험 12개: 완전성, 충돌 쌍을 이름으로 지목하는 유일성, `BYPASSED`가 `ALLOW`보다 아래, `ERROR`가 `QUARANTINE`보다 아래) |
 | 심각도와 분리해 집계하는 실행 permit | `policy.execution_permitted`, `PolicyDecisionRecord.execution_permitted`를 `permits_execution`으로 AND 결합 | `tests/test_execution_permit.py`(시험 10개; `[ALLOW, BYPASSED]`가 실행을 허용하지 **않음**을 고정) |
 | 모드와 무관한 "정책이 이의를 제기함" | `PolicyDecisionRecord.would_block`, `!= ALLOW`가 아니라 `_DECISION_RANK`에서 유도 | `tests/test_decision_ranking.py`; 남아 있는 `!= ALLOW` 술어 5개와 `BYPASSED`에서 어긋나는 것은 **의도된 것** |
@@ -92,7 +92,7 @@ status: active
 | Langfuse/LangSmith trace 어댑터 | `vendor_telemetry.py` `langfuse_traces_to_otlp`·`langsmith_runs_to_otlp`·`import_*` | vendor metadata→OTLP 속성 매핑 후 import_runtime_telemetry 재사용, edge 재구성·불완전 컨텍스트 issue 시험 |
 | WORM audit 보존 store | `audit_sink.py` `WORMAuditStore`·`InMemoryWORMAuditStore`·`FileWORMAuditStore` | append-only·해시체인, write-once 중복 거부·삭제/치환/재정렬 chain 파손 탐지, 파일 백엔드 JSONL append·fsync·재시작 후 체인 재검증·dedupe 지속·변조/삭제 open-time 탐지 시험 |
 | Studio git 배포 워크플로 | `studio_deploy.py` `GitBundleStore`·`sign_deployment_approval` | Ed25519 개인키 승인/공개키 검증, 실 git propose→2인 SHADOW→ENFORCE, 과거 active bundle만 새 2인 승인으로 rollback, 동일 공개키의 2개 identity·위조·digest tamper 거부 시험 |
-| PostgreSQL live 프로비저닝 | `ci/docker-compose.postgres.yml`·`ci/postgres_provision.sql`·`ci/run_postgres_live.sh`, `.github/workflows/ci.yml` | postgres:16 + 0001-0003 migration + 2 tenant role 매핑, live store/ledger 6개 시험 실행 |
+| PostgreSQL live 프로비저닝 | `ci/docker-compose.postgres.yml`·`ci/postgres_provision.sql`·`ci/run_postgres_live.sh`, `.github/workflows/ci.yml` | postgres:16 + 0001-0004 migration + 2 tenant role 매핑, live store/ledger 6개 시험 실행 |
 | artifact 검사–실행 TOCTOU 제거 (fd 실행) | `mcp_stdio.py` `_open_verified_artifact`·`SandboxLaunchPlan.executable_digest`, client `/proc/self/fd` exec | fd 위 digest 검증·변조/swap 거부·비정규 파일 거부, backend별 argv[0] pin, Linux CI에서 fd-exec 실행 |
 | sandbox process supervisor·health telemetry | `sandbox_supervisor.py` `SandboxSupervisor`·`SandboxHealth`·`SupervisedProcess` | liveness/health probe, bounded-backoff 재시작, 재시작 시 attestation 재검증(swap fail-closed), 전이마다 `CONTROL_HEALTH_CHANGED`(REL-11) 방출 시험 |
 | OTLP semantic convention 어댑터·telemetry health | `otlp_semconv.py` `normalize_otlp_semconv`·`SEMCONV_ALIASES`, `control_health.py` `ControlHealthReporter` | legacy(`llm.*`·snake_case) 별칭→canonical 정규화·canonical 우선, import issue·sampling gap·Audit Sink 장애를 `CONTROL_HEALTH_CHANGED`(REL-12) 연결 시험 |

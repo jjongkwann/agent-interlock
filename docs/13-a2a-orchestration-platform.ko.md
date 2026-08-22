@@ -106,15 +106,15 @@ Cross-zone Edge에는 `boundaryId`가 반드시 있어야 한다. compiler는 �
 
 구현 위치:
 
-- `src/agent_interlock/policy.py`: **broker가 내리는 모든 정책 판정.** broker가 실행하는 check 16개는 공유 `CHECKS` 표에 선언돼 있고 `A2A_PROFILE`이 선택하며, `a2a.py:662,668`이 이를 `A2A_LINK_PROFILE`(link scope check 11개)과 `A2A_BOUNDARY_PROFILE`(boundary scope 5개)로 나눠 각 reason 집합을 각자의 모드로 집행한다. 공유 check id를 `A2A-*` wire 문자열로 바꾸는 것은 `A2A_PROFILE.reason_codes`다.
+- `src/agent_interlock/policy.py`: **broker가 내리는 모든 정책 판정.** broker가 실행하는 check 17개는 공유 `CHECKS` 표에 선언돼 있고 `A2A_PROFILE`이 선택하며, `a2a.py:662,668`이 이를 `A2A_LINK_PROFILE`(link scope check 12개)과 `A2A_BOUNDARY_PROFILE`(boundary scope 5개)로 나눠 각 reason 집합을 각자의 모드로 집행한다. 공유 check id를 `A2A-*` wire 문자열로 바꾸는 것은 `A2A_PROFILE.reason_codes`다.
 - `src/agent_interlock/a2a.py`: protocol model, task store, broker 배선, JSON-RPC router. 여기서 여전히 inline으로 결정하는 정책 규칙은 `A2A-BOUNDARY-NOT-COMPILED`(`a2a.py:665-666`) 하나뿐이며, Edge가 compiler가 해석하지 못한 boundary를 선언할 때 발생한다. 나머지 finding은 전부 표에서 나온다.
 - `src/agent_interlock/a2a_http.py`: authenticated HTTP carrier와 Agent Card endpoint
 - `tests/test_a2a.py`: boundary, policy, v1/v0.3 wire, 실제 HTTP socket, orchestration 회귀 시험
 - `tests/test_a2a_characterization.py`, `tests/test_check_table.py`: reason code별 characterization과 공유 표 자체의 시험
 
-check 16개 중 **8개는 MCP gateway와 공유**하고(actor type, purpose, data class, secret과 M5 token/delegation check 4개) **8개는 broker 자체 통제**다(identity binding, message-part schema, payload 존재, boundary check 5개).
+check 17개 중 **9개는 MCP gateway와 공유**하고(actor type, purpose, data class, secret과 M5 token/delegation check 5개) **8개는 broker 자체 통제**다(identity binding, message-part schema, payload 존재, boundary check 5개).
 
-gateway 통제 10개는 여기에 **대응물이 아예 없다**: `L1-M9-NEW-DESTINATION`, `L1-M9-VOLUME-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`과 M2 definition check 2개다. broker에는 egress 목적지·export 용량·side effect·taint 통제가 없다. 이번 병합이 통합한 것은 메커니즘이지 커버리지가 아니다 — `A2A-*` finding이 없다고 해서 대응되는 gateway 통제가 통과한 것으로 읽어서는 안 된다.
+gateway 통제 11개는 여기에 **대응물이 아예 없다**: `L1-M9-NEW-DESTINATION`, `L1-M9-VOLUME-EXCEEDED`, `L1-M9-VOLUME-BYTES-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`과 M2 definition check 2개다. broker에는 egress 목적지·export 용량·side effect·taint 통제가 없다. 이번 병합이 통합한 것은 메커니즘이지 커버리지가 아니다 — `A2A-*` finding이 없다고 해서 대응되는 gateway 통제가 통과한 것으로 읽어서는 안 된다.
 
 현재 A2A 1.0 범위는 `SendMessage`, `GetTask`, `CancelTask`, Agent Card와 동기 Task 처리다. `ListTasks`, SSE streaming/subscription, push notification, authenticated extended card, JWS Agent Card admission은 운영 확장 항목이다.
 

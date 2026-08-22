@@ -71,7 +71,7 @@ python3 -m pip install -e '.[postgres]'
 
 | Component | Role |
 |---|---|
-| Interlock SDK | Declare ActorSpecs, wrap existing code, generate traces/events — **and enforce**: `wrap()` runs 16 of the gateway's 18 checks in-process and raises `GatewayError` under `ENFORCE` |
+| Interlock SDK | Declare ActorSpecs, wrap existing code, generate traces/events — **and enforce**: `wrap()` runs 18 of the gateway's 20 checks in-process and raises `GatewayError` under `ENFORCE` |
 | Interlock Runtime | Intercept inter-Actor communication and enforce policy |
 | Interlock Orchestrator | Execute verified Task DAGs over A2A/MCP/Human transports |
 | Interlock A2A Broker | Handle Agent Cards/Tasks with REL-06 and Trust Boundary pre-enforcement |
@@ -131,7 +131,7 @@ The repository includes a Python 3.11 reference core following the docs' origina
 - Isolation of definition drift, metadata instructions, cross-server references
 - Call-argument schema, data classification, secret, destination, token-binding, declared-side-effect policy
 - Approvals bound to hashes and destinations; hash-bound connector execution — **gateway only**: `MCPToolGateway.grant_approval` is the sole approval API, so a `wrap()`ped Tool cannot perform an `EXTERNAL_WRITE` under a stock `LinkPolicy` (`external_write_requires_approval` defaults `True` and the SDK never sets `approval_valid`). It fails closed, but the approval path is unreachable from the SDK; see [docs/02 §4.2](docs/02-developer-framework-design.md)
-- One `Check` table (26 checks) behind all three enforcement points, each selecting a `Profile`: MCP gateway 18, SDK 16, A2A broker 16. **The mechanism is shared; the coverage is not** — the broker shares only 8 checks with the gateway and has no egress, volume or taint control
+- One `Check` table (28 checks) behind all three enforcement points, each selecting a `Profile`: MCP gateway 20, SDK 18, A2A broker 17. **The mechanism is shared; the coverage is not** — the broker shares only 9 checks with the gateway and has no egress, volume or taint control
 - `OBSERVE`, `SHADOW`, `ENFORCE` modes
 - Tool-result secret sanitization, `UNTRUSTED_TOOL_RESULT` taint, schema isolation
 

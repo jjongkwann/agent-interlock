@@ -106,15 +106,15 @@ The current wire profile is based on the JSON-RPC core of the official, latest [
 
 Implementation locations:
 
-- `src/agent_interlock/policy.py`: **every policy judgment the broker makes.** The 16 checks it runs are declared in the shared `CHECKS` table and selected by `A2A_PROFILE`, which `a2a.py:662,668` splits into `A2A_LINK_PROFILE` (11 link-scoped checks) and `A2A_BOUNDARY_PROFILE` (5 boundary-scoped), so each reason set is enforced against its own mode. `A2A_PROFILE.reason_codes` is what renames the shared check ids onto the `A2A-*` wire strings.
+- `src/agent_interlock/policy.py`: **every policy judgment the broker makes.** The 17 checks it runs are declared in the shared `CHECKS` table and selected by `A2A_PROFILE`, which `a2a.py:662,668` splits into `A2A_LINK_PROFILE` (12 link-scoped checks) and `A2A_BOUNDARY_PROFILE` (5 boundary-scoped), so each reason set is enforced against its own mode. `A2A_PROFILE.reason_codes` is what renames the shared check ids onto the `A2A-*` wire strings.
 - `src/agent_interlock/a2a.py`: protocol model, task store, broker wiring, JSON-RPC router. The only policy rule still decided inline here is `A2A-BOUNDARY-NOT-COMPILED` (`a2a.py:665-666`), which fires when an edge declares a boundary the compiler did not resolve. Every other finding comes from the table.
 - `src/agent_interlock/a2a_http.py`: authenticated HTTP carrier and Agent Card endpoint
 - `tests/test_a2a.py`: boundary, policy, v1/v0.3 wire, real HTTP socket, orchestration regression tests
 - `tests/test_a2a_characterization.py`, `tests/test_check_table.py`: per-reason-code characterization and the shared table's own tests
 
-Of its 16 checks, **8 are shared with the MCP gateway** (actor type, purpose, data class, secret, and the four M5 token/delegation checks) and **8 are its own** (identity binding, message-part schema, payload presence, and the five boundary checks).
+Of its 17 checks, **9 are shared with the MCP gateway** (actor type, purpose, data class, secret, and the five M5 token/delegation checks) and **8 are its own** (identity binding, message-part schema, payload presence, and the five boundary checks).
 
-Ten gateway controls have **no counterpart here at all**: `L1-M9-NEW-DESTINATION`, `L1-M9-VOLUME-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`, and the two M2 definition checks. The broker has no egress-destination, export-volume, side-effect or taint control. The merge unified the mechanism, not the coverage — do not read an absent `A2A-*` finding as the corresponding gateway control having passed.
+Eleven gateway controls have **no counterpart here at all**: `L1-M9-NEW-DESTINATION`, `L1-M9-VOLUME-EXCEEDED`, `L1-M9-VOLUME-BYTES-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`, and the two M2 definition checks. The broker has no egress-destination, export-volume, side-effect or taint control. The merge unified the mechanism, not the coverage — do not read an absent `A2A-*` finding as the corresponding gateway control having passed.
 
 The current A2A 1.0 scope is `SendMessage`, `GetTask`, `CancelTask`, the Agent Card, and synchronous Task processing. `ListTasks`, SSE streaming/subscription, push notifications, the authenticated extended card, and JWS Agent Card admission are production extension items.
 

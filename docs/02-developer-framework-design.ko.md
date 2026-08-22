@@ -166,7 +166,7 @@ SDK가 없어도 Proxy로 통신은 관측할 수 있지만, plan step·memory p
 
 ### 4.2 `wrap()`은 집행하지만 승인할 수는 없다
 
-`wrap()`은 관측 전용이 아니다. `PolicyMode.ENFORCE`에서는 `SDK_PROFILE`의 check 16개를 실행하고(`sdk.py:152`), 종합 판정이 거부면 `GatewayError`를 raise한다(`sdk.py:199`). 호출은 일어나지 않는다. gateway의 check 18개 중 16개가 여기서 실행되며, 빠지는 것은 M2 definition check 2개뿐이다. SDK는 `ToolRevision`을 보유하지 않기 때문이다.
+`wrap()`은 관측 전용이 아니다. `PolicyMode.ENFORCE`에서는 `SDK_PROFILE`의 check 18개를 실행하고(`sdk.py:152`), 종합 판정이 거부면 `GatewayError`를 raise한다(`sdk.py:199`). 호출은 일어나지 않는다. gateway의 check 20개 중 18개가 여기서 실행되며, 빠지는 것은 M2 definition check 2개뿐이다. SDK는 `ToolRevision`을 보유하지 않기 때문이다.
 
 **`wrap()`으로 감싼 Tool은 기본 `LinkPolicy`에서 외부 쓰기를 수행할 수 없다.** `external_write_requires_approval`의 기본값이 `True`이므로 `approval_valid`가 설정되지 않는 한 모든 `EXTERNAL_WRITE` intent에서 `INTERLOCK-APPROVAL-REQUIRED`가 발생하는데, SDK 경로는 이 값을 설정하지 않는다. `CheckContext.approval_valid`의 기본값은 `False`이고(`policy.py:81`), `_invoke`는 이 값을 전달하지 않으며, `Interlock`도 `Actor`도 승인 API를 노출하지 않는다. `grant_approval`은 `MCPToolGateway`에만 있다(`gateway.py:140`).
 
@@ -390,4 +390,3 @@ Actor 선언         ActorSpec
 ```
 
 공식 설명은 **“AI Agent 상호작용 보안 프레임워크”**로 사용한다.
-

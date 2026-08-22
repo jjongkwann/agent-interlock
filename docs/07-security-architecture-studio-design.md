@@ -202,7 +202,7 @@ The JSON contract is authoritative in `schemas/architecture.schema.json`, and th
 - Downloading the same `interlock.dev/v1alpha1` manifest the Python compiler uses
 - Ledger · OTLP JSON import and real Runtime Graph generation
 - A Drift view that separates undeclared relationships, unobserved Design Edges, and control bypasses
-- A Ledger interaction statistics view (offline import + read-only Live Attach, aggregated by data source · mode · relationship · Actor · policy · reason)
+- A Ledger interaction statistics view (offline import + read-only Live Attach, aggregated by data source · mode · relationship · Actor · policy · reason; the contract also carries `byCheck` (coverage per check id) and `byEdge`/`unattributed`, which the Studio UI does not yet render)
 - The CLI `architecture compile --shadow`'s CRITICAL review gate · all-Edge SHADOW enforcement · stable bundle digest
 - Manifest-based Python SDK skeleton · security-test generation
 - An Ed25519 two-person-approval propose→promote→rollback-to-a-past-active-bundle CLI, integrated with the Control Plane

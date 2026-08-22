@@ -175,7 +175,7 @@ Even if the Tool description asserts it is safe, the policy independently evalua
 
 > **Which of these the loader actually reads.** There is no `kind: LinkPolicy` manifest loader in `src/`. The only path from a document to a `LinkPolicy` is an Architecture manifest's `edge.policy` block, parsed by `_parse_edge` (`architecture.py:1236-1261`), and it reads a fixed key list: `id`, `version`, `mode`, `relationship`, `allowedPurposes`, `allowedDataClasses`, `deniedDataClasses`, `requireActiveDefinition`, `requireDigestPin`, `requireExplicitDestination`, `newDestinationAction`, `tokenPassthrough`, `requireAudience`, `requireResource`, `requireActorBinding`, `maxDelegationDepth`, `externalWriteRequiresApproval`, `failureMode`, `decisionTtlSeconds`.
 >
-> Everything else in the YAML above is **silently ignored** — `data.secretAction`, `data.propagateTaint`, `toolDefinition.allowCrossServerReferences`, and the whole `sideEffects` block. Those controls exist and run, but only at their Python defaults (`secret_action=BLOCK`, `destructive_write_action=BLOCK`, `undeclared_side_effect_action=BLOCK`), and the volume caps `max_export_records`/`max_export_bytes` default to `0`, which leaves `L1-M9-VOLUME-EXCEEDED` **disarmed** on any policy built from a manifest. Writing `secretAction: ALLOW` here does not disable the secret control, and writing `undeclared: BLOCK` does not enable anything that was not already on. Set these by constructing `LinkPolicy` in Python until the parser and `schemas/architecture.schema.json` carry them.
+> Everything else in the YAML above is **silently ignored** — `data.secretAction`, `data.propagateTaint`, `toolDefinition.allowCrossServerReferences`, and the whole `sideEffects` block. Those controls exist and run, but only at their Python defaults (`secret_action=BLOCK`, `destructive_write_action=BLOCK`, `undeclared_side_effect_action=BLOCK`), and the volume caps `max_export_records`/`max_export_bytes` default to `0`, which leaves two checks **disarmed** on any policy built from a manifest: `L1-M9-VOLUME-EXCEEDED` (records) and `L1-M9-VOLUME-BYTES-EXCEEDED` (bytes). Writing `secretAction: ALLOW` here does not disable the secret control, and writing `undeclared: BLOCK` does not enable anything that was not already on. Set these by constructing `LinkPolicy` in Python until the parser and `schemas/architecture.schema.json` carry them.
 
 ## 7. Processing Pipeline
 
@@ -306,7 +306,7 @@ Events are grouped by the same `interaction_id`, and internal Server transaction
 
 ### 9.1 Emitted by the gateway's policy engine
 
-These are the complete set `GATEWAY_PROFILE` can put on the wire — 18 checks producing 19 codes (`policy.py`). "Default verdict" is what the check returns under a default `LinkPolicy`; where an operator-configurable `LinkPolicy` action field governs it, that field is named in its Python spelling, because most of them cannot be set from a manifest at all (see §6).
+These are the complete set `GATEWAY_PROFILE` can put on the wire — 20 checks producing 19 codes (`policy.py`); the check count grew, the wire code count did not. "Default verdict" is what the check returns under a default `LinkPolicy`; where an operator-configurable `LinkPolicy` action field governs it, that field is named in its Python spelling, because most of them cannot be set from a manifest at all (see §6).
 
 | Code | Condition | Default Verdict |
 |---|---|---|
@@ -319,21 +319,23 @@ These are the complete set `GATEWAY_PROFILE` can put on the wire — 18 checks p
 | `L1-M9-SENSITIVE-EGRESS` | Same check as above, emitted instead when the *denied* class is `D7` | `BLOCK` |
 | `L1-M8-CREDENTIAL-DETECTED` | D5 fingerprint detected in the arguments | `secret_action` (`BLOCK`) |
 | `L1-M9-NEW-DESTINATION` | Destination unparseable, outside the target's `allowedDomains`, or absent when required | `new_destination_action` (`HOLD`) |
-| `L1-M9-VOLUME-EXCEEDED` | Estimated records or bytes exceed the cap (armed only when a cap is set) | `volume_action` (`BLOCK`) |
+| `L1-M9-VOLUME-EXCEEDED` | Estimated records exceed the cap (armed solely by `max_export_records`) | `volume_action` (`BLOCK`) |
+| `L1-M9-VOLUME-BYTES-EXCEEDED` | Estimated bytes exceed the cap (armed solely by `max_export_bytes`); renamed onto the `L1-M9-VOLUME-EXCEEDED` wire code | `volume_action` (`BLOCK`) |
 | `L1-UNDECLARED-SIDE-EFFECT` | Side effect exceeds the ActorSpec's declared `sideEffects` | `undeclared_side_effect_action` (`BLOCK`) |
 | `INTERLOCK-DESTRUCTIVE-WRITE` | Intent is a `DESTRUCTIVE_WRITE` | `destructive_write_action` (`BLOCK`) |
 | `INTERLOCK-TAINTED-EXTERNAL-WRITE` | Taint labels present on an `EXTERNAL_WRITE` | `BLOCK`, unconditional |
 | `INTERLOCK-APPROVAL-REQUIRED` | `EXTERNAL_WRITE` with no valid approval (armed by `externalWriteRequiresApproval`) | `HOLD` |
 | `L1-M5-CREDENTIAL-MISSING` | Intent expects an audience or resource and no **authenticated** credential is present | `BLOCK` |
 | `L1-M5-TOKEN-PASSTHROUGH` | Downstream forwarding without exchange (armed when `tokenPassthrough` is false) | `BLOCK` |
-| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | Token audience or resource mismatch (armed by `requireAudience`/`requireResource`) | `BLOCK` |
+| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | Token audience mismatch (armed solely by `requireAudience`) | `BLOCK` |
+| `L1-M5-TOKEN-RESOURCE-MISMATCH` | Token resource mismatch (armed solely by `requireResource`); renamed onto the `L1-M5-TOKEN-AUDIENCE-MISMATCH` wire code | `BLOCK` |
 | `L1-M5-TOKEN-ACTOR-MISMATCH` | Acting subject not bound to the source Actor (armed by `requireActorBinding`) | `BLOCK` |
 | `L1-M5-DELEGATION-DEPTH` | Delegation depth exceeds `maxDelegationDepth` | `BLOCK` |
 
 Three things this table encodes that are easy to get wrong:
 
 - **`INTERLOCK-DATA-CLASS-DENIED` and `L1-M9-SENSITIVE-EGRESS` are one check**, `_data_classes`, choosing between two reason keys. It selects `L1-M9-SENSITIVE-EGRESS` **iff `D7` is in `deniedDataClasses`** — it never reads `estimated_side_effect`, so "sensitive data moving via an external write" is not its condition. Under the default `LinkPolicy`, `D7` is in *allowed* and not in denied, which means **`L1-M9-SENSITIVE-EGRESS` is unreachable out of the box.** A deployment that wants D7 egress caught must put `D7` in `deniedDataClasses` explicitly.
-- **`L1-M5-TOKEN-AUDIENCE-MISMATCH` covers two controls.** The audience and resource comparisons are one check id emitting two keys, with `L1-M5-TOKEN-RESOURCE-MISMATCH` renamed onto `L1-M5-TOKEN-AUDIENCE-MISMATCH` to preserve the historical string. `L1-M9-VOLUME-EXCEEDED` has the same shape over records and bytes.
+- **`L1-M5-TOKEN-AUDIENCE-MISMATCH`/`L1-M5-TOKEN-RESOURCE-MISMATCH` and `L1-M9-VOLUME-EXCEEDED`/`L1-M9-VOLUME-BYTES-EXCEEDED` are now two independently-armed check ids apiece**, split precisely because arming one flag armed both controls and the off one reported RAN_CLEAN. The wire is unchanged: each new check id renames onto the historical code (`L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-M9-VOLUME-EXCEEDED`).
 - **`L1-M2-DEFINITION-NOT-ACTIVE` forwards arbitrary registry strings** from `revision.reason_codes`, so the emitted key set for that row is not closed.
 
 ### 9.2 Emitted elsewhere in the MCP path

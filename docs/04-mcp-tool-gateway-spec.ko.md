@@ -175,7 +175,7 @@ spec:
 
 > **이 중 loader가 실제로 읽는 것.** `src/`에는 `kind: LinkPolicy` manifest loader가 없다. 문서에서 `LinkPolicy`로 가는 유일한 경로는 Architecture manifest의 `edge.policy` 블록이며, `_parse_edge`(`architecture.py:1236-1261`)가 고정된 키 목록만 읽는다: `id`, `version`, `mode`, `relationship`, `allowedPurposes`, `allowedDataClasses`, `deniedDataClasses`, `requireActiveDefinition`, `requireDigestPin`, `requireExplicitDestination`, `newDestinationAction`, `tokenPassthrough`, `requireAudience`, `requireResource`, `requireActorBinding`, `maxDelegationDepth`, `externalWriteRequiresApproval`, `failureMode`, `decisionTtlSeconds`.
 >
-> 위 YAML의 나머지는 전부 **조용히 무시된다** — `data.secretAction`, `data.propagateTaint`, `toolDefinition.allowCrossServerReferences`, 그리고 `sideEffects` 블록 전체가 그렇다. 이 통제들은 존재하고 실제로 동작하지만 Python 기본값(`secret_action=BLOCK`, `destructive_write_action=BLOCK`, `undeclared_side_effect_action=BLOCK`)으로만 동작하며, 용량 상한 `max_export_records`/`max_export_bytes`는 기본값이 `0`이라 manifest로 만든 정책에서는 `L1-M9-VOLUME-EXCEEDED`가 **비활성** 상태로 남는다. 여기에 `secretAction: ALLOW`를 써도 secret 통제가 꺼지지 않고, `undeclared: BLOCK`을 써도 이미 켜져 있지 않던 무언가가 켜지지는 않는다. parser와 `schemas/architecture.schema.json`이 이 값들을 지원하기 전까지는 Python에서 `LinkPolicy`를 직접 구성해 설정한다.
+> 위 YAML의 나머지는 전부 **조용히 무시된다** — `data.secretAction`, `data.propagateTaint`, `toolDefinition.allowCrossServerReferences`, 그리고 `sideEffects` 블록 전체가 그렇다. 이 통제들은 존재하고 실제로 동작하지만 Python 기본값(`secret_action=BLOCK`, `destructive_write_action=BLOCK`, `undeclared_side_effect_action=BLOCK`)으로만 동작하며, 용량 상한 `max_export_records`/`max_export_bytes`는 기본값이 `0`이라 manifest로 만든 정책에서는 check 두 개가 **비활성** 상태로 남는다: `L1-M9-VOLUME-EXCEEDED`(레코드 수)와 `L1-M9-VOLUME-BYTES-EXCEEDED`(바이트). 여기에 `secretAction: ALLOW`를 써도 secret 통제가 꺼지지 않고, `undeclared: BLOCK`을 써도 이미 켜져 있지 않던 무언가가 켜지지는 않는다. parser와 `schemas/architecture.schema.json`이 이 값들을 지원하기 전까지는 Python에서 `LinkPolicy`를 직접 구성해 설정한다.
 
 ## 7. 처리 파이프라인
 
@@ -306,7 +306,7 @@ payload:
 
 ### 9.1 Gateway 정책 엔진이 방출하는 코드
 
-`GATEWAY_PROFILE`이 실제로 내보낼 수 있는 코드의 전체 집합이다 — check 18개가 코드 19개를 만든다(`policy.py`). “기본 판정”은 기본 `LinkPolicy`에서 해당 check가 반환하는 값이다. 운영자가 설정할 수 있는 `LinkPolicy` action 필드가 판정을 좌우하는 경우에는 그 필드를 Python 표기로 적었다. 대부분은 애초에 manifest로 설정할 수 없기 때문이다(§6 참고).
+`GATEWAY_PROFILE`이 실제로 내보낼 수 있는 코드의 전체 집합이다 — check 20개가 코드 19개를 만든다(`policy.py`); check 수는 늘었지만 wire 코드 수는 그대로다. “기본 판정”은 기본 `LinkPolicy`에서 해당 check가 반환하는 값이다. 운영자가 설정할 수 있는 `LinkPolicy` action 필드가 판정을 좌우하는 경우에는 그 필드를 Python 표기로 적었다. 대부분은 애초에 manifest로 설정할 수 없기 때문이다(§6 참고).
 
 | Code | 조건 | 기본 판정 |
 |---|---|---|
@@ -319,21 +319,23 @@ payload:
 | `L1-M9-SENSITIVE-EGRESS` | 위와 같은 check. *거부된* 등급이 `D7`일 때 대신 방출 | `BLOCK` |
 | `L1-M8-CREDENTIAL-DETECTED` | 인수에서 D5 fingerprint 탐지 | `secret_action` (`BLOCK`) |
 | `L1-M9-NEW-DESTINATION` | 목적지를 파싱할 수 없거나, target의 `allowedDomains` 밖이거나, 필수인데 없음 | `new_destination_action` (`HOLD`) |
-| `L1-M9-VOLUME-EXCEEDED` | 예상 레코드 수 또는 바이트가 상한 초과 (상한이 설정된 경우에만 활성화) | `volume_action` (`BLOCK`) |
+| `L1-M9-VOLUME-EXCEEDED` | 예상 레코드 수가 상한 초과 (`max_export_records`로만 활성화) | `volume_action` (`BLOCK`) |
+| `L1-M9-VOLUME-BYTES-EXCEEDED` | 예상 바이트가 상한 초과 (`max_export_bytes`로만 활성화); `L1-M9-VOLUME-EXCEEDED` wire 코드로 rename됨 | `volume_action` (`BLOCK`) |
 | `L1-UNDECLARED-SIDE-EFFECT` | 부작용이 ActorSpec 선언 `sideEffects`를 초과 | `undeclared_side_effect_action` (`BLOCK`) |
 | `INTERLOCK-DESTRUCTIVE-WRITE` | intent가 `DESTRUCTIVE_WRITE` | `destructive_write_action` (`BLOCK`) |
 | `INTERLOCK-TAINTED-EXTERNAL-WRITE` | `EXTERNAL_WRITE`에 taint label이 있음 | `BLOCK`, 무조건 |
 | `INTERLOCK-APPROVAL-REQUIRED` | 유효한 승인 없는 `EXTERNAL_WRITE` (`externalWriteRequiresApproval`로 활성화) | `HOLD` |
 | `L1-M5-CREDENTIAL-MISSING` | intent가 audience 또는 resource를 요구하는데 **인증된** credential이 없음 | `BLOCK` |
 | `L1-M5-TOKEN-PASSTHROUGH` | 교환 없는 downstream 전달 (`tokenPassthrough`가 false일 때 활성화) | `BLOCK` |
-| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | token audience 또는 resource 불일치 (`requireAudience`/`requireResource`로 활성화) | `BLOCK` |
+| `L1-M5-TOKEN-AUDIENCE-MISMATCH` | token audience 불일치 (`requireAudience`로만 활성화) | `BLOCK` |
+| `L1-M5-TOKEN-RESOURCE-MISMATCH` | token resource 불일치 (`requireResource`로만 활성화); `L1-M5-TOKEN-AUDIENCE-MISMATCH` wire 코드로 rename됨 | `BLOCK` |
 | `L1-M5-TOKEN-ACTOR-MISMATCH` | acting subject가 source Actor에 결합되지 않음 (`requireActorBinding`으로 활성화) | `BLOCK` |
 | `L1-M5-DELEGATION-DEPTH` | 위임 깊이가 `maxDelegationDepth` 초과 | `BLOCK` |
 
 이 표가 담고 있지만 틀리기 쉬운 것이 셋 있다.
 
 - **`INTERLOCK-DATA-CLASS-DENIED`와 `L1-M9-SENSITIVE-EGRESS`는 하나의 check**, `_data_classes`가 두 reason key 중 하나를 고르는 것이다. `deniedDataClasses`에 `D7`이 있을 **때에만** `L1-M9-SENSITIVE-EGRESS`를 선택하며, `estimated_side_effect`는 아예 읽지 않는다. 즉 “민감 데이터가 외부 쓰기로 이동”은 이 check의 조건이 아니다. 기본 `LinkPolicy`에서 `D7`은 *허용* 쪽에 있고 거부 쪽에는 없으므로 **`L1-M9-SENSITIVE-EGRESS`는 기본 설정에서 도달할 수 없다.** D7 egress를 잡으려는 배포는 `deniedDataClasses`에 `D7`을 명시적으로 넣어야 한다.
-- **`L1-M5-TOKEN-AUDIENCE-MISMATCH`는 통제 두 개를 덮는다.** audience 비교와 resource 비교는 하나의 check id가 두 key를 방출하는 형태이며, 기존 문자열을 유지하려고 `L1-M5-TOKEN-RESOURCE-MISMATCH`를 `L1-M5-TOKEN-AUDIENCE-MISMATCH`로 rename했다. `L1-M9-VOLUME-EXCEEDED`도 레코드 수와 바이트에 대해 같은 형태다.
+- **`L1-M5-TOKEN-AUDIENCE-MISMATCH`/`L1-M5-TOKEN-RESOURCE-MISMATCH`와 `L1-M9-VOLUME-EXCEEDED`/`L1-M9-VOLUME-BYTES-EXCEEDED`는 이제 각각 독립적으로 armed되는 check id 두 개다.** 플래그 하나를 켜면 통제 둘 다 armed되고 끄면 RAN_CLEAN으로 보고되던 문제 때문에 정확히 이 지점에서 분리했다. wire는 그대로다 — 새 check id는 각각 기존 코드(`L1-M5-TOKEN-AUDIENCE-MISMATCH`, `L1-M9-VOLUME-EXCEEDED`)로 rename된다.
 - **`L1-M2-DEFINITION-NOT-ACTIVE`는 `revision.reason_codes`의 임의 registry 문자열을 그대로 전달**하므로, 이 행에서 방출되는 key 집합은 닫혀 있지 않다.
 
 ### 9.2 MCP 경로의 다른 곳에서 방출되는 코드

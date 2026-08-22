@@ -166,7 +166,7 @@ Even without an SDK, a Proxy can observe communication, but semantics such as pl
 
 ### 4.2 `wrap()` Enforces, and It Cannot Approve
 
-`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 16 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses (`sdk.py:199`). The call does not happen. Sixteen of the gateway's eighteen checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
+`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 18 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses (`sdk.py:199`). The call does not happen. Eighteen of the gateway's twenty checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
 
 **A wrapped Tool cannot perform an external write under a stock `LinkPolicy`.** `external_write_requires_approval` defaults `True`, so `INTERLOCK-APPROVAL-REQUIRED` fires on every `EXTERNAL_WRITE` intent unless `approval_valid` is set — and the SDK path never sets it. `CheckContext.approval_valid` defaults `False` (`policy.py:81`), `_invoke` does not pass it, and neither `Interlock` nor `Actor` exposes an approval API; `grant_approval` exists only on `MCPToolGateway` (`gateway.py:140`).
 

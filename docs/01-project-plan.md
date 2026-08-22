@@ -101,11 +101,11 @@ flowchart LR
 
 | Component | Responsibility | MVP Implementation |
 |---|---|---|
-| Sensor/SDK | Observes internal steps within the Agent framework **and enforces**: `wrap()` runs `SDK_PROFILE`'s 16 checks (`sdk.py:152`) and raises `GatewayError` under `ENFORCE` (`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
+| Sensor/SDK | Observes internal steps within the Agent framework **and enforces**: `wrap()` runs `SDK_PROFILE`'s 18 checks (`sdk.py:152`) and raises `GatewayError` under `ENFORCE` (`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
 | Security Gateway | Relays/blocks requests per relationship | HTTP/gRPC middleware, Tool/RAG adapter |
 | Event Normalizer | Converts provider-specific logs into the common schema | Stateless service |
 | Policy Decision Point | Evaluates policy, authorization, and risk score | Policy engine + deterministic rules |
-| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway **and in the SDK** — three points run the shared check table today: MCP gateway (18 checks), SDK (16), A2A broker (16). They are not equivalent; see §4.2 |
+| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway **and in the SDK** — three points run the shared check table today: MCP gateway (20 checks), SDK (18), A2A broker (17). They are not equivalent; see §4.2 |
 | Event Bus | Asynchronous delivery and reprocessing | MVP writes directly to the DB or uses a lightweight queue; Kafka-compatible at scale |
 | Event Store | Data for search, statistics, and correlation | PostgreSQL partitioning |
 | Evidence Store | Encrypted raw content, files, and large payloads | S3-compatible Object Storage |
@@ -116,18 +116,18 @@ flowchart LR
 
 ### 4.2 The Three Enforcement Points Share a Mechanism, Not a Scope
 
-Policy judgment is declared once, in `policy.py`'s `CHECKS` table (26 checks). An enforcement point is a `Profile`: which check ids it runs, and what reason code it emits for each. That is the whole of what was unified — **the mechanism, not the coverage.**
+Policy judgment is declared once, in `policy.py`'s `CHECKS` table (28 checks). An enforcement point is a `Profile`: which check ids it runs, and what reason code it emits for each. That is the whole of what was unified — **the mechanism, not the coverage.**
 
 | Point | Profile | Checks | Emitted namespace |
 |---|---|---|---|
-| MCP gateway | `GATEWAY_PROFILE` | 18 | `INTERLOCK-*`, `L1-*` |
-| SDK (`wrap()`) | `SDK_PROFILE` | 16 | `INTERLOCK-*`, `L1-*` |
-| A2A broker | `A2A_PROFILE` (split into `A2A_LINK_PROFILE` 11 + `A2A_BOUNDARY_PROFILE` 5) | 16 | `A2A-*` |
+| MCP gateway | `GATEWAY_PROFILE` | 20 | `INTERLOCK-*`, `L1-*` |
+| SDK (`wrap()`) | `SDK_PROFILE` | 18 | `INTERLOCK-*`, `L1-*` |
+| A2A broker | `A2A_PROFILE` (split into `A2A_LINK_PROFILE` 12 + `A2A_BOUNDARY_PROFILE` 5) | 17 | `A2A-*` |
 
 The three do **not** check the same things, and no statistic should be read as if they did:
 
 - The SDK omits the two M2 definition checks — it never holds a `ToolRevision`. Those are ABSENT at the SDK, not "passed".
-- The broker shares only **8** of its 16 checks with the gateway; the other 8 are its own (identity binding, message-part schema, payload presence, and the five boundary checks). Ten gateway controls have no counterpart on the broker at all — it has **no** egress-destination, export-volume, side-effect, taint, approval or schema control.
+- The broker shares only **9** of its 17 checks with the gateway; the other 8 are its own (identity binding, message-part schema, payload presence, and the five boundary checks). Eleven gateway controls have no counterpart on the broker at all — it has **no** egress-destination, export-volume, side-effect, taint, approval or schema control.
 - Each point renames what it emits. The same control appears as `L1-M5-TOKEN-AUDIENCE-MISMATCH` at the gateway and `A2A-AUDIENCE-MISMATCH` at the broker. Aggregates keyed on reason code are therefore **not** comparable across points; aggregates keyed on the canonical check id are. Any join between the two must go through `Profile.reason_codes`, never a string match.
 
 Two comparisons genuinely differ rather than merely being renamed, and the difference is a parameter rather than a second check. Both points run the same predicate against `intent.expected_audience` and `intent.expected_resource`; the broker is what *fills those fields*, from `target.identity` and `a2a://{target.id}` respectively (`a2a.py:650-651`), where the MCP gateway takes them from the caller's declared intent.
@@ -174,6 +174,7 @@ We do not put all meaning into a single general-purpose log table. We combine a 
 | `INTERACTION_REQUESTED` | An Actor requests another Actor/Resource | Who requested what from whom |
 | `DATA_FLOW_OBSERVED` | Data crosses a Trust Boundary | What sensitive data moved where |
 | `CONTROL_EVALUATED` | A control evaluates the request | Which policy decided what, on what basis |
+| `CONTROL_COVERAGE_DECLARED` | Declared once per coverage digest (carries no `interaction_id`) | Which checks were armed and which were evaluated for a link |
 | `ACTION_EXECUTED` | Block/hold/quarantine/revoke executes | Was the decision actually enforced |
 | `INTERACTION_COMPLETED` | The target call ends | Did the request succeed, fail, or partially execute |
 | `SECURITY_OUTCOME_SET` | The security outcome is finalized | Was the attack blocked, partially executed, or successful |
@@ -338,18 +339,22 @@ Captured from a real run: a tainted `EXTERNAL_WRITE` to an unlisted destination,
         "L1-M9-NEW-DESTINATION",
         "INTERLOCK-TAINTED-EXTERNAL-WRITE"
       ],
-      "actualEnforced": true
+      "actualEnforced": true,
+      "enforcementPoint": "MCP_GATEWAY",
+      "evaluatedProfile": "sha256:7a1c...",
+      "flaggedChecks": ["L1-M9-NEW-DESTINATION", "INTERLOCK-TAINTED-EXTERNAL-WRITE"]
     }
   }
 }
 ```
 
-Four things to read off this event rather than from memory:
+Five things to read off this event rather than from memory:
 
 - **The verdict nests under `payload.control`**, not at the payload root. `mode` (what the policy was configured to do) and `actualEnforced` (what was actually enforced) are separate fields, so a SHADOW evaluation is distinguishable from an enforced one without composing it from anything else.
 - **`reasonCodes` are the real emitted strings.** There is no `risk_score`, `evaluation_ms`, `control_instance_id` or `required_action` field. Earlier revisions of this document showed `UNTRUSTED_DATA_TO_EXTERNAL_WRITE`, `NEW_DESTINATION` and `PII_PRESENT`; none of those strings exists anywhere in `src/`.
 - **`INTERLOCK-TAINTED-EXTERNAL-WRITE` is newly reachable at the gateway** on this branch — it previously existed only in the SDK.
 - **The SDK emits the same nested `payload.control` block** so one reducer handles both, but with **no** `toolDefinition` or `authorization` sibling. The same call through `wrap()` yields `reasonCodes: ["L1-M9-NEW-DESTINATION", "INTERLOCK-TAINTED-EXTERNAL-WRITE", "INTERLOCK-APPROVAL-REQUIRED"]` — the third code appears because the SDK cannot satisfy an approval; see [02 Developer Framework Design](02-developer-framework-design.md) §4.2.
+- **A matching `CONTROL_COVERAGE_DECLARED` event carries what `evaluatedProfile` means** — the checks armed and evaluated for this link, keyed by the same digest.
 
 ### 7.3 Action Failure and Attack Success
 
