@@ -161,17 +161,40 @@ class InteractionRecord:
 def coverage_declarations(events: Iterable[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
     """Every CONTROL_COVERAGE_DECLARED payload in the stream, keyed by its digest.
 
-    First declaration per digest wins; a producer cannot emit two different bodies under one digest
-    without the digest changing, since it covers the whole body.
+    The digest covers the whole body, so two declarations sharing a digest must have identical
+    bodies. A pair that does not is proof that one of them is wrong -- a producer at a different
+    revision, a corrupted event, or a forged one -- and **both are dropped**, which resolves the
+    digest to nothing and reads every check on the interactions naming it as ABSENT.
+
+    Fail closed rather than first-wins, which is what this was. First-wins let a declaration whose
+    body did not match its own digest speak for the digest as long as it sorted earlier: reproduced
+    on the shipped fixture, one event turned five evaluated checks into sixteen, so every
+    interaction on that link reported the whole armed set RAN_CLEAN. Coverage read as a safety
+    number is the failure mode this document exists to prevent, and a forged clean one is the worst
+    version of it.
+
+    Residual: a digest whose *only* declaration is forged still stands, because verifying it means
+    recomputing canonical_digest and the Studio port has no canonical_json to recompute it with --
+    diverging there would silently drop real declarations on one side. Bounded by the ledger's own
+    trust model: anyone who can append a declaration can append a CONTROL_EVALUATED reading
+    `decision: ALLOW`, which is not a smaller lie.
     """
     declarations: dict[str, Mapping[str, Any]] = {}
+    conflicted: set[str] = set()
     for event in events:
         if event.get("event_type") != "CONTROL_COVERAGE_DECLARED":
             continue
         payload = event.get("payload")
         coverage = payload.get("coverage") if isinstance(payload, Mapping) else None
-        if isinstance(coverage, Mapping) and isinstance(coverage.get("profileDigest"), str):
-            declarations.setdefault(coverage["profileDigest"], coverage)
+        if not isinstance(coverage, Mapping) or not isinstance(coverage.get("profileDigest"), str):
+            continue
+        digest = coverage["profileDigest"]
+        seen = declarations.get(digest)
+        if seen is not None and dict(seen) != dict(coverage):
+            conflicted.add(digest)
+        declarations.setdefault(digest, coverage)
+    for digest in conflicted:
+        del declarations[digest]
     return declarations
 
 
@@ -291,6 +314,18 @@ def _reduce_one(
     )
 
 
+def _sequence(value: Any) -> Sequence[Any]:
+    """A list-shaped field out of untrusted ledger content, or nothing.
+
+    A bare string is iterable, so an unguarded loop over a producer that wrote one id instead of a
+    list of one contributes a check per character. reasonCodes has carried this guard since it was
+    written; every list the coverage channel reads goes through it too.
+    """
+    if isinstance(value, str):
+        return (value,)
+    return value if isinstance(value, Sequence) else ()
+
+
 def _coverage(
     controls: Sequence[Mapping[str, Any]],
     declarations: Mapping[str, Mapping[str, Any]],
@@ -305,23 +340,15 @@ def _coverage(
     ran: set[str] = set()
     flagged: set[str] = set()
     for control in controls:
-        # Same shape guard reasonCodes already carries below: a bare string is iterable, so a
-        # producer writing a single id instead of a list would otherwise contribute one check per
-        # character.
-        raw_flagged = control.get("flaggedChecks")
-        if isinstance(raw_flagged, str):
-            raw_flagged = (raw_flagged,)
-        elif not isinstance(raw_flagged, Sequence):
-            raw_flagged = ()
-        for check_id in raw_flagged:
+        for check_id in _sequence(control.get("flaggedChecks")):
             flagged.add(str(check_id))
         declaration = declarations.get(str(control.get("evaluatedProfile", "")))
         if declaration is None:
             continue
-        for entry in declaration.get("armed") or ():
+        for entry in _sequence(declaration.get("armed")):
             if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
                 armed.add(entry["id"])
-        for check_id in declaration.get("evaluated") or ():
+        for check_id in _sequence(declaration.get("evaluated")):
             ran.add(str(check_id))
     # A flagged check ran, and a check that ran is armed, whatever an inconsistent stream claims.
     ran |= flagged

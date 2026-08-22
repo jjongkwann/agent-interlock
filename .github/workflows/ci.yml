@@ -48,9 +48,9 @@ jobs:
           # type in the security_events CHECK constraint and the list did not move with it, so the
           # live suite would have run against a table that refuses the event the code now writes.
           for f in migrations/postgresql/0[0-9][0-9][0-9]_*.sql; do
-            psql "$OWNER" -v ON_ERROR_STOP=1 -f "$f"
+            psql "$OWNER" -v ON_ERROR_STOP=1 --single-transaction -f "$f"
           done
-          psql "$OWNER" -v ON_ERROR_STOP=1 -f ci/postgres_provision.sql
+          psql "$OWNER" -v ON_ERROR_STOP=1 --single-transaction -f ci/postgres_provision.sql
       - name: Run suite with live PostgreSQL
         env:
           INTERLOCK_TEST_POSTGRES_DSN_TENANT_A: postgresql://tenant_a_app:tenant_a_pw@localhost:5432/interlock

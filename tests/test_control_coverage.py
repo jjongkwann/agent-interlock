@@ -425,6 +425,60 @@ class FixtureConsistencyTests(unittest.TestCase):
             self.assertTrue(set(control["flaggedChecks"]) <= set(declaration["evaluated"]) <= armed)
 
 
+class UntrustedDeclarationTests(unittest.TestCase):
+    """A declaration is ledger content, and the reducer parses it as data, not as truth.
+
+    The digest is documented as covering the whole body, and until the conflict check existed that
+    was a claim rather than a property: nothing recomputed it, and first-in-stream won.
+    """
+
+    def setUp(self):
+        self.events = json.loads((FIXTURES / "analytics-events.json").read_text())
+        self.legit = next(e for e in self.events if e["event_type"] == "CONTROL_COVERAGE_DECLARED")
+        self.digest = self.legit["payload"]["coverage"]["profileDigest"]
+
+    def forged(self, **coverage):
+        import copy
+
+        event = copy.deepcopy(self.legit)
+        event["event_id"] = "evt-forged"
+        event["occurred_at"] = event["ingested_at"] = "2026-07-19T00:00:00Z"  # sorts first
+        event["payload"]["coverage"].update(coverage)
+        return event
+
+    def test_a_body_that_does_not_match_its_digest_takes_the_digest_down_with_it(self):
+        # Measured before the fix: this one event turned five evaluated checks into sixteen, so
+        # every interaction on that link reported the whole armed set RAN_CLEAN. Coverage read as a
+        # safety number is the failure this exists to prevent; a forged clean one is the worst of it.
+        armed_ids = sorted(entry["id"] for entry in self.legit["payload"]["coverage"]["armed"])
+        stream = [self.forged(evaluated=armed_ids), *self.events]
+        self.assertIn(self.digest, coverage_declarations(self.events))
+        self.assertNotIn(self.digest, coverage_declarations(stream))
+
+    def test_dropping_it_reads_as_absent_not_as_clean(self):
+        armed_ids = sorted(entry["id"] for entry in self.legit["payload"]["coverage"]["armed"])
+        records = reduce_interactions([self.forged(evaluated=armed_ids), *self.events])
+        record = next(r for r in records if r.interaction_id == "ia-3")
+        self.assertEqual(record.coverage.ran, record.coverage.flagged)  # only the event's own claim
+
+    def test_a_repeat_of_the_same_declaration_still_resolves(self):
+        # A restart re-declares. That is the documented no-op and must not look like a conflict.
+        self.assertIn(self.digest, coverage_declarations([self.legit, *self.events]))
+
+    def test_every_list_the_coverage_channel_reads_is_shape_guarded(self):
+        """A bare string is iterable, so an unguarded loop contributes one check per character."""
+        for field, value in (
+            ("evaluated", "L1-M9-NEW-DESTINATION"),
+            ("armed", {"id": "L1-M9-NEW-DESTINATION", "scope": "ACTOR"}),
+        ):
+            with self.subTest(field=field):
+                events = [event for event in self.events if event["event_type"] != "CONTROL_COVERAGE_DECLARED"]
+                declaration = self.forged(**{field: value})
+                records = reduce_interactions([declaration, *events])
+                for record in records:
+                    self.assertTrue(all(len(check_id) > 1 for check_id in record.coverage.armed | record.coverage.ran))
+
+
 class EventVocabularyTests(unittest.TestCase):
     """The event-type vocabulary lives in four places and there is no Python enum to add to.
 

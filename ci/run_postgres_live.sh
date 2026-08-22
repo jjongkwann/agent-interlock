@@ -12,7 +12,9 @@ HOST="${INTERLOCK_PG_HOST:-127.0.0.1}"
 PORT="${INTERLOCK_PG_PORT:-55432}"
 OWNER_DSN="postgresql://interlock_owner:owner_pw@${HOST}:${PORT}/interlock"
 
-psql_owner() { psql "$OWNER_DSN" -v ON_ERROR_STOP=1 "$@"; }
+# --single-transaction: each migration applies atomically. Without it psql commits statement by
+# statement, so a file that drops a constraint before re-adding it leaves a window with none.
+psql_owner() { psql "$OWNER_DSN" -v ON_ERROR_STOP=1 --single-transaction "$@"; }
 
 echo "waiting for postgres at ${HOST}:${PORT} ..."
 for _ in $(seq 1 30); do

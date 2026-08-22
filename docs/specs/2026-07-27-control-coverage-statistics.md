@@ -297,6 +297,22 @@ link. Stamping it with one call's id would file a link-level fact under a single
 interaction, and `reduce_interactions` -- which groups on `interaction_id` -- would
 then have to special-case it out again.
 
+**A declaration is ledger content, so the reducer reads it as data.** The digest covers the whole
+body, so two declarations sharing one must be identical; a pair that differs proves one is wrong,
+and both are dropped, which resolves the digest to nothing and reads its checks as ABSENT. That
+replaced first-in-stream-wins, under which a body contradicting its own digest spoke for the digest
+as long as it sorted earlier: measured on the shipped fixture, one event turned five evaluated
+checks into sixteen, so every interaction on that link reported the whole armed set RAN_CLEAN. A
+forged clean coverage number is the worst version of the failure the **Non-goals** section names.
+Every list read out of a declaration is shape-guarded the way `reasonCodes` already was, since a
+bare string is iterable in both languages.
+
+The residual is a digest whose *only* declaration is forged, which stands. Verifying it means
+recomputing `canonical_digest`, and the Studio port has no `canonical_json` — diverging there would
+silently drop real declarations on one side, with the byte-parity test unable to see it. Bounded by
+the ledger's own trust model: whoever can append a declaration can append a `CONTROL_EVALUATED`
+reading `decision: ALLOW`, which is not a smaller lie.
+
 The reducer derives the four states: in `flaggedChecks` is RAN_FLAGGED; otherwise
 in `evaluated` is RAN_CLEAN; in `armed` but not `evaluated` is INAPPLICABLE; in the
 catalogue but not `armed` is ABSENT. The catalogue is the union of all `armed` sets

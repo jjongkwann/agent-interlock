@@ -126,16 +126,37 @@ function coverageState(coverage, checkId) {
  * @returns {Map<string, Record<string, any>>}
  */
 export function coverageDeclarations(events) {
+  // Mirrors coverage_declarations in analytics.py. The digest covers the whole body, so two
+  // declarations sharing one must be identical; a pair that differs is proof one is wrong, and both
+  // are dropped so the digest resolves to nothing and its checks read ABSENT. First-wins let a body
+  // that did not match its own digest speak for the digest as long as it sorted earlier.
   const declarations = new Map();
+  const conflicted = new Set();
   for (const event of events) {
     if (event.event_type !== "CONTROL_COVERAGE_DECLARED") continue;
     const payload = event.payload;
     const coverage = isPlainObject(payload) ? payload.coverage : null;
-    if (isPlainObject(coverage) && typeof coverage.profileDigest === "string") {
-      if (!declarations.has(coverage.profileDigest)) declarations.set(coverage.profileDigest, coverage);
+    if (!isPlainObject(coverage) || typeof coverage.profileDigest !== "string") continue;
+    const seen = declarations.get(coverage.profileDigest);
+    if (seen === undefined) {
+      declarations.set(coverage.profileDigest, coverage);
+    } else if (JSON.stringify(sortKeysDeep(seen)) !== JSON.stringify(sortKeysDeep(coverage))) {
+      conflicted.add(coverage.profileDigest);
     }
   }
+  for (const digest of conflicted) declarations.delete(digest);
   return declarations;
+}
+
+/** Structural comparison only -- both sides compare bodies their own parser produced. */
+function sortKeysDeep(value) {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (isPlainObject(value)) {
+    const sorted = {};
+    for (const key of Object.keys(value).sort()) sorted[key] = sortKeysDeep(value[key]);
+    return sorted;
+  }
+  return value;
 }
 
 /**
@@ -166,23 +187,28 @@ export function checkCatalogue(declarations) {
  * @param {Map<string, Record<string, any>>} declarations
  * @returns {CheckCoverage}
  */
+/**
+ * Mirrors `_sequence` in analytics.py. A bare string is iterable in both languages, so an
+ * unguarded loop over a producer that wrote one id instead of a list of one contributes a check
+ * per character. Every list the coverage channel reads out of the ledger goes through this.
+ */
+function sequence(value) {
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? value : [];
+}
+
 function coverageFor(controls, declarations) {
   const armed = new Set();
   const ran = new Set();
   const flagged = new Set();
   for (const control of controls) {
-    // Mirrors _coverage in analytics.py: a bare string is iterable in both languages, so an
-    // unguarded loop contributes one check per character.
-    const rawFlagged = typeof control.flaggedChecks === "string"
-      ? [control.flaggedChecks]
-      : Array.isArray(control.flaggedChecks) ? control.flaggedChecks : [];
-    for (const checkId of rawFlagged) flagged.add(String(checkId));
+    for (const checkId of sequence(control.flaggedChecks)) flagged.add(String(checkId));
     const declaration = declarations.get(String(control.evaluatedProfile ?? ""));
     if (declaration === undefined) continue;
-    for (const entry of declaration.armed ?? []) {
+    for (const entry of sequence(declaration.armed)) {
       if (isPlainObject(entry) && typeof entry.id === "string") armed.add(entry.id);
     }
-    for (const checkId of declaration.evaluated ?? []) ran.add(String(checkId));
+    for (const checkId of sequence(declaration.evaluated)) ran.add(String(checkId));
   }
   // A flagged check ran, and a check that ran is armed, whatever an inconsistent stream claims.
   for (const checkId of flagged) ran.add(checkId);
