@@ -803,6 +803,28 @@ class ArchitectureLinter:
             )
         # An Actor that declares no data access at all is undeclared, not declared to hold
         # nothing, so the grant comparison below only applies once data_access is populated.
+        #
+        # That skip is silent, and silence is the failure mode this codebase exists to remove: on a
+        # graph whose actors omit dataAccess, ARCH-DATA-CLASS-EXCEEDS-ACTOR is a CRITICAL rule that
+        # can never fire, and the compiler that refuses CRITICALs reports the graph clean. Studio
+        # emits `dataAccess: []` for every actor it exports, so until that changed no Studio-authored
+        # graph was covered by this rule at all -- and the shipped example manifest is not covered on
+        # its two external-egress edges, which are the two the rule most exists for. A control that
+        # could not evaluate is not a control that passed, so say so.
+        if edge.policy.allowed_data_classes and not target.data_access:
+            findings.append(
+                ArchitectureFinding(
+                    "ARCH-DATA-CLASS-ACTOR-UNDECLARED",
+                    FindingSeverity.WARNING,
+                    "target Actor declares no dataAccess, so ARCH-DATA-CLASS-EXCEEDS-ACTOR cannot evaluate this edge",
+                    edge_id=edge.id,
+                    remediation=(
+                        "Declare the target Actor's dataAccess so the grant comparison has a subject. "
+                        "WARNING rather than CRITICAL because this reports missing evidence, not a "
+                        "violation -- it does not block compile."
+                    ),
+                )
+            )
         excess = edge.policy.allowed_data_classes - target.data_access if target.data_access else frozenset()
         if excess:
             findings.append(

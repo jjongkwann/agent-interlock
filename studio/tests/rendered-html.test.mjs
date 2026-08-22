@@ -53,6 +53,15 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /targetSelector:/);
   assert.match(page, /definitionDigest/);
   assert.match(page, /allowedDomains/);
+  // The canvas must be able to say what an Actor holds. exportManifest hard-coded `dataAccess: []`
+  // for every node, and the CLI's ARCH-DATA-CLASS-EXCEEDS-ACTOR rule skips an empty grant, so no
+  // Studio-authored graph was covered by that CRITICAL rule at all. Three halves of the fix:
+  // the export carries the real value, the inspector can edit it, and Studio raises the same
+  // "cannot evaluate" finding the linter does rather than reporting the draft clean.
+  assert.match(page, /dataAccess: node\.dataAccess \?\? \[\]/);
+  assert.doesNotMatch(page, /dataAccess: \[\],\n/);
+  assert.match(page, /Data access<input/);
+  assert.match(page, /Target actor declares no data access/);
   assert.match(page, /Runtime graph/);
   assert.match(page, /label: "Runs"/);
   assert.match(page, /Import telemetry/);

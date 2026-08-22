@@ -86,7 +86,7 @@ policy:
 
 ## 5. 현재 Security lint
 
-`ArchitectureLinter`는 39개 코드를 방출한다. 권위 있는 정의는 `architecture.py`이며, 아래 표들은 이 판본 기준 전체 집합을 영역별로 묶은 것이다.
+`ArchitectureLinter`는 40개 코드를 방출한다. 권위 있는 정의는 `architecture.py`이며, 아래 표들은 이 판본 기준 전체 집합을 영역별로 묶은 것이다.
 
 ### 5.1 Trust Zone과 Boundary
 
@@ -120,6 +120,7 @@ policy:
 | 코드 | 심각도 | 조건 |
 |---|---|---|
 | `ARCH-CREDENTIAL-DATA-ALLOWED` | CRITICAL | 관계에서 credential data class D5를 허용 |
+| `ARCH-DATA-CLASS-ACTOR-UNDECLARED` | WARNING | edge가 data class를 허용하는데 target Actor가 `dataAccess`를 선언하지 않아, 아래 규칙에 비교할 대상이 없고 평가 자체가 되지 않는다 |
 | `ARCH-DATA-CLASS-EXCEEDS-ACTOR` | CRITICAL | `edge.policy.allowedDataClasses`가 target Actor의 `dataAccess`의 부분집합이 아님 |
 | `ARCH-RAG-TENANT-OPTIONAL` | CRITICAL | RAG security boundary가 tenant를 요구하지 않음 |
 
@@ -161,13 +162,15 @@ CRITICAL finding이 있으면 compiler는 ActorSpec·LinkPolicy 생성을 거부
 
 이 목록이 다루지 **않는** 두 가지. workflow task의 의존 **DAG**와 message **budget**은 lint finding이 아니다. orchestration 의존 cycle은 linter가 돌기 전에 `_validate_acyclic_tasks`가 던지는 parse 시점 `ValueError`이고, message budget은 설계 시점에 전혀 검사되지 않고 실행 시점에 `orchestration.py`가 집행한다(`ORCH-MESSAGE-BUDGET`).
 
-### 5.7 Studio는 `ARCH-DATA-CLASS-EXCEEDS-ACTOR`를 드러낼 수 없다
+### 5.7 `ARCH-DATA-CLASS-EXCEEDS-ACTOR`와 그 규칙이 필요로 하는 grant — 닫힘
 
 `ARCH-DATA-CLASS-EXCEEDS-ACTOR`는 `edge.policy.allowedDataClasses`를 target Actor의 `dataAccess`와 비교하며, **`dataAccess`가 비어 있는 Actor는 건너뛴다** — data access를 선언하지 않은 Actor는 "아무것도 보유하지 않는다고 선언한 것"이 아니라 "선언하지 않은 것"이기 때문이다.
 
-Studio canvas는 이 필드를 모델링하지 않는다. `grep -rn dataAccess studio/`는 정확히 한 건, `studio/app/page.tsx:1106`만 반환하며, 그것은 `exportManifest()`의 `nodes.map(...)` 안에 리터럴로 박힌 `dataAccess: []`다. 따라서 **모든** Studio export의 **모든** Actor가 빈 grant를 실어 보내고, 규칙은 설계상 전부 건너뛴다. 현재 Studio 작성자가 grant를 표현할 방법도, "아무것도 보유하지 않음"을 표현할 방법도 없다.
+그 건너뛰기는 옳았고 **조용했다**. 조용했다는 쪽이 문제였다. Actor들이 `dataAccess`를 생략한 그래프에서는 CRITICAL 규칙이 결코 발화할 수 없고, CRITICAL을 거부하는 컴파일러는 그 그래프를 깨끗하다고 보고한다. 이제 `ARCH-DATA-CLASS-ACTOR-UNDECLARED`가 그 사실을 말한다. CRITICAL이 아니라 WARNING인 이유는 위반이 아니라 증거 부재를 보고하기 때문이며, 그래서 선택 필드를 생략한 그래프를 거부하지 않는다.
 
-그 결과 두 표면이 갈라진다. **Studio의 보안 검사를 통과한 초안이 CLI에서는 거부될 수 있으며**, 그 CRITICAL은 UI가 보여줄 수 없었던 것이다. 작성 표면이 `dataAccess`를 모델링하기 전까지 이 규칙의 권위는 Studio 패널이 아니라 `interlock architecture lint`다.
+이제 canvas가 이 필드를 모델링한다. `ArchitectureNode`가 `dataAccess`를 싣고, inspector에서 편집할 수 있으며, `exportManifest()`는 리터럴 `dataAccess: []` 대신 실제 값을 내보내고, Studio 자체 findings 목록도 linter와 같은 "평가 불가" 경고를 올린다. 초안이 Studio 검사를 통과한 뒤 CLI에서 거부되는 일은 이제 없다. 배포된 예제 자체가 이 규칙이 가장 필요한 두 edge — D7을 외부 sink로 보내는 `edge.email-customer`와 `edge.support-audit` — 에서 정확히 평가되지 않고 있었다. 두 곳 모두 이제 grant를 선언하고 규칙이 실제로 평가한다.
+
+남은 잔여 하나는 그대로다. Actor는 여전히 **"아무것도 보유하지 않는다"** 를 "말하지 않았다" 와 구분해 말할 수 없다. `_parse_node`가 선택 필드를 `frozenset()`으로 기본값 처리하므로, linter가 볼 때쯤이면 "있으나 비어 있음"과 "없음"은 같은 값이다. 이를 닫으려면 모델 전체에 `None`을 실어야 하고, 닫기 전까지는 진짜로 빈 grant도 미선언으로 읽혀 경고를 받는다.
 
 ## 6. 실행 방법
 

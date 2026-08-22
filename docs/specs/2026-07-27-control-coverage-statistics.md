@@ -797,18 +797,42 @@ settle them without shipping an undocumented decision.
   the security-relevant half is the half that closes, and the surviving strictness
   is the SDK converging on the gateway's own semantics.
 
-  **What it cannot reach.** The rule skips actors with an empty `data_access`,
-  because the schema makes the field optional and `_parse_node` defaults it to
-  `frozenset()` while edge `allowedDataClasses` defaults *non-empty* — so treating
-  empty as a grant fires on every actor that omits it. That population is **61% of
-  the measured control-loss cases**, including 102 of the 278 ENFORCE-mode
-  fail-open flips. Worse, `studio/app/page.tsx:1106` hardcodes `dataAccess: []`
-  and is the **only occurrence of the field in the entire `studio/` tree**, so the
-  UI cannot express the input the rule reads and every Studio-authored graph is
-  unprotected. Plan 2 should treat this as an authoring-surface gap, not a lint
-  gap: there is currently no way for an author to say "holds nothing," while
-  `docs/02-developer-framework-design.md` §3.1 lists `dataAccess` as a required
-  field.
+  **What it could not reach — now closed, except one residual.** The rule skips
+  actors with an empty `data_access`, because the schema makes the field optional
+  and `_parse_node` defaults it to `frozenset()` while edge `allowedDataClasses`
+  defaults *non-empty* — so treating empty as a grant fires on every actor that
+  omits it. That population is **61% of the measured control-loss cases**,
+  including 102 of the 278 ENFORCE-mode fail-open flips.
+
+  Treated as the authoring-surface gap this paragraph called it, plus the half it
+  did not name: the skip was also **silent**, and a CRITICAL rule that can never
+  fire on a graph the compiler then calls clean is this document's own defect
+  class. Three changes.
+
+  `ARCH-DATA-CLASS-ACTOR-UNDECLARED` (WARNING) names the unevaluable case —
+  WARNING because it reports missing evidence rather than a violation, so it does
+  not refuse every graph that omits an optional field.
+
+  Studio models the field. `ArchitectureNode` carries `dataAccess`, the inspector
+  edits it, `exportManifest()` emits the real value instead of the hard-coded
+  `dataAccess: []` that was the only occurrence of the field in the whole `studio/`
+  tree, and Studio's own findings list raises the same warning — so a draft no
+  longer passes Studio's check only to be refused by the CLI.
+
+  And the shipped example was itself uncovered on **the two edges the rule most
+  exists for**: `edge.email-customer` and `edge.support-audit`, both carrying D7 to
+  an external sink, both targeting an actor that declared no grant. Both declare one
+  now, and narrowing either produces the CRITICAL that was previously unreachable
+  there — which is what makes the rule's silence on them measured rather than
+  argued.
+
+  **Residual.** An actor still cannot say "holds nothing" distinctly from "did not
+  say": `_parse_node` defaults the optional field to `frozenset()`, so
+  present-but-empty and absent are one value by the time the linter sees them.
+  Closing it means carrying `None` through the model; until then a genuinely empty
+  grant reads as undeclared and draws the warning.
+  `docs/02-developer-framework-design.md` §3.1 lists `dataAccess` as required, which
+  the schema does not, and that inconsistency is unchanged.
 - **`LinkPolicy` validates nothing at construction.** It has no `__post_init__`,
   so `allowed_data_classes` and `denied_data_classes` may overlap; only
   `ArchitectureBoundary` checks that disjointness. Found via a generated security

@@ -12,28 +12,48 @@
         "label": "External input",
         "kind": "EXTERNAL",
         "description": "Untrusted user and partner request sources",
-        "bounds": {"x": 0, "y": 60, "width": 190, "height": 260}
+        "bounds": {
+          "x": 0,
+          "y": 60,
+          "width": 190,
+          "height": 260
+        }
       },
       {
         "id": "zone.control",
         "label": "Internal control plane",
         "kind": "INTERNAL",
         "description": "Coordinator, managed tools, and evidence services",
-        "bounds": {"x": 220, "y": 0, "width": 420, "height": 520}
+        "bounds": {
+          "x": 220,
+          "y": 0,
+          "width": 420,
+          "height": 520
+        }
       },
       {
         "id": "zone.worker",
         "label": "Internal worker plane",
         "kind": "INTERNAL",
         "description": "Delegated agents and tenant-scoped retrieval",
-        "bounds": {"x": 680, "y": 0, "width": 420, "height": 260}
+        "bounds": {
+          "x": 680,
+          "y": 0,
+          "width": 420,
+          "height": 260
+        }
       },
       {
         "id": "zone.external-output",
         "label": "External destinations",
         "kind": "EXTERNAL",
         "description": "Destinations outside the managed runtime",
-        "bounds": {"x": 680, "y": 300, "width": 420, "height": 220}
+        "bounds": {
+          "x": 680,
+          "y": 300,
+          "width": 420,
+          "height": 220
+        }
       }
     ],
     "trustBoundaries": [
@@ -43,9 +63,17 @@
         "sourceZoneId": "zone.external-input",
         "targetZoneId": "zone.control",
         "enforcementPoint": "INPUT_GATEWAY",
-        "allowedRelationships": ["REQUESTS"],
-        "allowedDataClasses": ["D2", "D3"],
-        "deniedDataClasses": ["D5", "D8"],
+        "allowedRelationships": [
+          "REQUESTS"
+        ],
+        "allowedDataClasses": [
+          "D2",
+          "D3"
+        ],
+        "deniedDataClasses": [
+          "D5",
+          "D8"
+        ],
         "mode": "ENFORCE",
         "failureMode": "FAIL_CLOSED",
         "requireIdentity": true,
@@ -58,9 +86,18 @@
         "sourceZoneId": "zone.control",
         "targetZoneId": "zone.worker",
         "enforcementPoint": "A2A_BROKER",
-        "allowedRelationships": ["DELEGATES"],
-        "allowedDataClasses": ["D2", "D3", "D7"],
-        "deniedDataClasses": ["D5", "D8"],
+        "allowedRelationships": [
+          "DELEGATES"
+        ],
+        "allowedDataClasses": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "deniedDataClasses": [
+          "D5",
+          "D8"
+        ],
         "mode": "ENFORCE",
         "failureMode": "FAIL_CLOSED",
         "requireIdentity": true,
@@ -73,9 +110,17 @@
         "sourceZoneId": "zone.control",
         "targetZoneId": "zone.external-output",
         "enforcementPoint": "EGRESS_GATEWAY",
-        "allowedRelationships": ["SENDS"],
-        "allowedDataClasses": ["D3", "D7"],
-        "deniedDataClasses": ["D5", "D8"],
+        "allowedRelationships": [
+          "SENDS"
+        ],
+        "allowedDataClasses": [
+          "D3",
+          "D7"
+        ],
+        "deniedDataClasses": [
+          "D5",
+          "D8"
+        ],
         "mode": "ENFORCE",
         "failureMode": "FAIL_CLOSED",
         "requireIdentity": true,
@@ -89,79 +134,146 @@
         "type": "USER",
         "owner": "customer-platform",
         "identity": "oidc://customer",
-        "capabilities": ["SUPPORT_REQUEST"],
-        "dataAccess": ["D2", "D3"],
+        "capabilities": [
+          "SUPPORT_REQUEST"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3"
+        ],
         "trustZone": "EXTERNAL",
         "trustZoneId": "zone.external-input",
-        "position": {"x": 30, "y": 120}
+        "position": {
+          "x": 30,
+          "y": 120
+        }
       },
       {
         "id": "agent.support",
         "type": "AGENT",
         "owner": "customer-platform",
         "identity": "spiffe://prod.example/agent/support",
-        "capabilities": ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"],
-        "dataAccess": ["D2", "D3", "D7"],
+        "capabilities": [
+          "SUPPORT_REPLY",
+          "DELEGATE_RESEARCH",
+          "EMAIL_SEND"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
         "maxDelegationDepth": 2,
         "trustZone": "INTERNAL",
         "trustZoneId": "zone.control",
-        "position": {"x": 260, "y": 120}
+        "position": {
+          "x": 260,
+          "y": 120
+        }
       },
       {
         "id": "agent.research",
         "type": "SUBAGENT",
         "owner": "customer-platform",
         "identity": "spiffe://prod.example/agent/research",
-        "capabilities": ["KNOWLEDGE_SEARCH"],
-        "dataAccess": ["D2", "D3", "D7"],
+        "capabilities": [
+          "KNOWLEDGE_SEARCH"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
         "maxDelegationDepth": 0,
         "trustZone": "INTERNAL",
         "trustZoneId": "zone.worker",
-        "position": {"x": 720, "y": 20}
+        "position": {
+          "x": 720,
+          "y": 20
+        }
       },
       {
         "id": "rag.support-knowledge",
         "type": "RAG",
         "owner": "knowledge-platform",
         "identity": "spiffe://prod.example/rag/support",
-        "capabilities": ["TENANT_RETRIEVAL"],
-        "dataAccess": ["D2", "D3", "D7"],
-        "sideEffects": ["READ"],
+        "capabilities": [
+          "TENANT_RETRIEVAL"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "READ"
+        ],
         "trustZone": "INTERNAL",
         "trustZoneId": "zone.worker",
-        "position": {"x": 920, "y": 20}
+        "position": {
+          "x": 920,
+          "y": 20
+        }
       },
       {
         "id": "tool.send-email",
         "type": "TOOL",
         "owner": "messaging-platform",
         "identity": "spiffe://prod.example/tool/send-email",
-        "capabilities": ["EMAIL_SEND"],
-        "dataAccess": ["D2", "D3", "D7"],
-        "sideEffects": ["EXTERNAL_WRITE"],
+        "capabilities": [
+          "EMAIL_SEND"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "EXTERNAL_WRITE"
+        ],
         "definitionDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "trustZone": "INTERNAL",
         "trustZoneId": "zone.control",
-        "position": {"x": 450, "y": 220}
+        "position": {
+          "x": 450,
+          "y": 220
+        }
       },
       {
         "id": "external.customer-email",
         "type": "EXTERNAL",
         "owner": "messaging-platform",
         "identity": "dns://customer.example",
-        "allowedDomains": ["customer.example"],
+        "allowedDomains": [
+          "customer.example"
+        ],
+        "dataAccess": [
+          "D3",
+          "D7"
+        ],
         "trustZone": "EXTERNAL",
         "trustZoneId": "zone.external-output",
-        "position": {"x": 920, "y": 360}
+        "position": {
+          "x": 920,
+          "y": 360
+        }
       },
       {
         "id": "external.audit-ledger",
         "type": "EXTERNAL",
         "owner": "security-platform",
         "identity": "spiffe://prod.example/interlock/ledger",
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
         "trustZone": "INTERNAL",
         "trustZoneId": "zone.control",
-        "position": {"x": 450, "y": 390}
+        "position": {
+          "x": 450,
+          "y": 390
+        }
       }
     ],
     "edges": [
@@ -176,9 +288,17 @@
           "id": "customer-support-input",
           "version": "1.0.0",
           "mode": "ENFORCE",
-          "allowedPurposes": ["SUPPORT_REQUEST"],
-          "allowedDataClasses": ["D2", "D3"],
-          "deniedDataClasses": ["D5", "D8"],
+          "allowedPurposes": [
+            "SUPPORT_REQUEST"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
           "failureMode": "FAIL_CLOSED"
         },
         "controls": [
@@ -207,8 +327,12 @@
         "boundaryId": "boundary.control-worker-a2a",
         "dynamic": true,
         "targetSelector": {
-          "types": ["SUBAGENT"],
-          "requiredCapabilities": ["KNOWLEDGE_SEARCH"],
+          "types": [
+            "SUBAGENT"
+          ],
+          "requiredCapabilities": [
+            "KNOWLEDGE_SEARCH"
+          ],
           "idPattern": "agent.research*",
           "sameTenant": true
         },
@@ -216,9 +340,18 @@
           "id": "support-research-delegation",
           "version": "1.0.0",
           "mode": "ENFORCE",
-          "allowedPurposes": ["SUPPORT_RESEARCH"],
-          "allowedDataClasses": ["D2", "D3", "D7"],
-          "deniedDataClasses": ["D5", "D8"],
+          "allowedPurposes": [
+            "SUPPORT_RESEARCH"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
           "requireAudience": true,
           "requireResource": true,
           "requireActorBinding": true,
@@ -252,9 +385,18 @@
           "id": "tenant-rag-read",
           "version": "1.0.0",
           "mode": "ENFORCE",
-          "allowedPurposes": ["SUPPORT_RESEARCH"],
-          "allowedDataClasses": ["D2", "D3", "D7"],
-          "deniedDataClasses": ["D5", "D8"],
+          "allowedPurposes": [
+            "SUPPORT_RESEARCH"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
           "failureMode": "FAIL_CLOSED"
         },
         "controls": [
@@ -284,9 +426,18 @@
           "id": "support-email-invoke",
           "version": "1.0.0",
           "mode": "ENFORCE",
-          "allowedPurposes": ["SUPPORT_REPLY"],
-          "allowedDataClasses": ["D2", "D3", "D7"],
-          "deniedDataClasses": ["D5", "D8"],
+          "allowedPurposes": [
+            "SUPPORT_REPLY"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
           "requireActiveDefinition": true,
           "requireDigestPin": true,
           "failureMode": "FAIL_CLOSED"
@@ -327,9 +478,17 @@
           "id": "customer-email-egress",
           "version": "1.0.0",
           "mode": "ENFORCE",
-          "allowedPurposes": ["SUPPORT_REPLY"],
-          "allowedDataClasses": ["D3", "D7"],
-          "deniedDataClasses": ["D5", "D8"],
+          "allowedPurposes": [
+            "SUPPORT_REPLY"
+          ],
+          "allowedDataClasses": [
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
           "requireExplicitDestination": true,
           "newDestinationAction": "HOLD",
           "externalWriteRequiresApproval": true,
@@ -362,8 +521,15 @@
           "id": "mandatory-audit",
           "version": "1.0.0",
           "mode": "ENFORCE",
-          "allowedDataClasses": ["D2", "D3", "D7"],
-          "deniedDataClasses": ["D5", "D8"],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
           "failureMode": "DEGRADE_READ_ONLY"
         },
         "controls": [
@@ -395,12 +561,21 @@
           "targetActorId": "agent.research",
           "transport": "A2A",
           "purpose": "SUPPORT_RESEARCH",
-          "dataClasses": ["D2", "D3", "D7"],
-          "acceptanceCriteria": ["Answer is grounded in tenant-scoped support knowledge"],
+          "dataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "acceptanceCriteria": [
+            "Answer is grounded in tenant-scoped support knowledge"
+          ],
           "maxAttempts": 2,
           "timeoutSeconds": 120,
           "onFailure": "FAIL_WORKFLOW",
-          "position": {"x": 120, "y": 120}
+          "position": {
+            "x": 120,
+            "y": 120
+          }
         },
         {
           "id": "task.send-reply",
@@ -409,14 +584,24 @@
           "targetActorId": "tool.send-email",
           "transport": "MCP",
           "purpose": "SUPPORT_REPLY",
-          "dependsOn": ["task.research"],
-          "dataClasses": ["D3", "D7"],
-          "acceptanceCriteria": ["Delivery receipt is reconciled with the approved destination"],
+          "dependsOn": [
+            "task.research"
+          ],
+          "dataClasses": [
+            "D3",
+            "D7"
+          ],
+          "acceptanceCriteria": [
+            "Delivery receipt is reconciled with the approved destination"
+          ],
           "maxAttempts": 1,
           "timeoutSeconds": 60,
           "approvalRequired": true,
           "onFailure": "FAIL_WORKFLOW",
-          "position": {"x": 440, "y": 120}
+          "position": {
+            "x": 440,
+            "y": 120
+          }
         }
       ]
     }

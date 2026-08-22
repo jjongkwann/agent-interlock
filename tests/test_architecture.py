@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import unittest
 from pathlib import Path
@@ -122,6 +123,65 @@ class ArchitectureSecurityLintTests(unittest.TestCase):
         rag["dataAccess"] = []
         codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
         self.assertNotIn("ARCH-DATA-CLASS-EXCEEDS-ACTOR", codes)
+
+    def test_an_undeclared_grant_says_so_instead_of_skipping_the_rule_silently(self):
+        """The skip above is correct and was silent, which is the part that was not.
+
+        ARCH-DATA-CLASS-EXCEEDS-ACTOR is CRITICAL and the compiler refuses CRITICALs, so on a graph
+        whose actors omit dataAccess the rule can never fire and the compiler calls the graph clean.
+        A control that could not evaluate is not a control that passed.
+        """
+        value = manifest()
+        rag = next(item for item in value["spec"]["nodes"] if item["id"] == "rag.support-knowledge")
+        rag["dataAccess"] = []
+        finding = next(
+            item
+            for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
+            if item.code == "ARCH-DATA-CLASS-ACTOR-UNDECLARED"
+        )
+        self.assertEqual(finding.severity, FindingSeverity.WARNING)
+        self.assertEqual(finding.edge_id, "edge.research-rag")
+
+    def test_the_undeclared_finding_reports_missing_evidence_and_does_not_block_compile(self):
+        # WARNING, not CRITICAL: it says the rule had no subject, not that a policy is wrong.
+        # Raising it to CRITICAL would refuse every graph that omits an optional field.
+        value = manifest()
+        for node in value["spec"]["nodes"]:
+            node.pop("dataAccess", None)
+        findings = ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
+        undeclared = [item for item in findings if item.code == "ARCH-DATA-CLASS-ACTOR-UNDECLARED"]
+        self.assertTrue(undeclared)
+        self.assertEqual({item.severity for item in undeclared}, {FindingSeverity.WARNING})
+        ArchitectureCompiler().compile(ArchitectureGraph.from_dict(value))  # must not raise
+
+    def test_an_edge_allowing_nothing_needs_no_grant_to_compare_against(self):
+        value = manifest()
+        edge = next(item for item in value["spec"]["edges"] if item["id"] == "edge.research-rag")
+        edge["policy"]["allowedDataClasses"] = []
+        rag = next(item for item in value["spec"]["nodes"] if item["id"] == "rag.support-knowledge")
+        rag["dataAccess"] = []
+        codes = {item.code for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))}
+        self.assertNotIn("ARCH-DATA-CLASS-ACTOR-UNDECLARED", codes)
+
+    def test_the_shipped_example_now_evaluates_the_rule_on_its_egress_edges(self):
+        """The example's two external sinks declared no grant, so the rule skipped exactly the two
+        edges it most exists for -- D7 leaving the system. Both are declared now, and narrowing one
+        produces the CRITICAL that was previously unreachable there."""
+        example = json.loads(
+            (Path(__file__).resolve().parent.parent / "examples" / "secure_multi_agent_architecture.json").read_text()
+        )
+        self.assertEqual(ArchitectureLinter().lint(ArchitectureGraph.from_dict(example)), ())
+
+        narrowed = copy.deepcopy(example)
+        sink = next(item for item in narrowed["spec"]["nodes"] if item["id"] == "external.customer-email")
+        sink["dataAccess"] = ["D3"]  # keeps the destination class, drops business data
+        finding = next(
+            item
+            for item in ArchitectureLinter().lint(ArchitectureGraph.from_dict(narrowed))
+            if item.code == "ARCH-DATA-CLASS-EXCEEDS-ACTOR"
+        )
+        self.assertEqual(finding.edge_id, "edge.email-customer")
+        self.assertIn("D7", finding.message)
 
     def test_prevent_control_cannot_run_only_after_execution(self):
         value = manifest()

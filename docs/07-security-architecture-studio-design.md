@@ -86,7 +86,7 @@ At admission, the actual Sub-Agent instance is checked against the selector and 
 
 ## 5. Current Security Lint
 
-`ArchitectureLinter` emits 39 codes. `architecture.py` is authoritative; the tables below are the complete set as of this revision, grouped by area.
+`ArchitectureLinter` emits 40 codes. `architecture.py` is authoritative; the tables below are the complete set as of this revision, grouped by area.
 
 ### 5.1 Trust zones and boundaries
 
@@ -121,6 +121,7 @@ At admission, the actual Sub-Agent instance is checked against the selector and 
 |---|---|---|
 | `ARCH-CREDENTIAL-DATA-ALLOWED` | CRITICAL | Credential data class D5 is allowed across the relationship |
 | `ARCH-DATA-CLASS-EXCEEDS-ACTOR` | CRITICAL | `edge.policy.allowedDataClasses` is not a subset of the target Actor's `dataAccess` |
+| `ARCH-DATA-CLASS-ACTOR-UNDECLARED` | WARNING | the edge allows data classes and the target Actor declares no `dataAccess`, so the rule above has no subject and cannot evaluate |
 | `ARCH-RAG-TENANT-OPTIONAL` | CRITICAL | A RAG security boundary does not require a tenant |
 
 ### 5.4 Risk posture, Tool pinning, egress
@@ -161,13 +162,15 @@ If there is a CRITICAL finding, the compiler refuses to generate ActorSpec/LinkP
 
 Two things this list does **not** cover. A workflow task's dependency **DAG** and its message **budget** are not lint findings: an orchestration dependency cycle is a parse-time `ValueError` from `_validate_acyclic_tasks`, raised before the linter ever runs, and the message budget is enforced at execution time by `orchestration.py` (`ORCH-MESSAGE-BUDGET`), not checked at design time at all.
 
-### 5.7 Studio cannot surface `ARCH-DATA-CLASS-EXCEEDS-ACTOR`
+### 5.7 `ARCH-DATA-CLASS-EXCEEDS-ACTOR` and the grant it needs — closed
 
 `ARCH-DATA-CLASS-EXCEEDS-ACTOR` compares `edge.policy.allowedDataClasses` against the target Actor's `dataAccess`, and the rule **skips any Actor whose `dataAccess` is empty** — an Actor that declares no data access is undeclared, not declared to hold nothing.
 
-The Studio canvas does not model the field. `grep -rn dataAccess studio/` returns exactly one hit — `studio/app/page.tsx:1106` — and it is a literal `dataAccess: []` inside `exportManifest()`'s `nodes.map(...)`, so **every** Actor in **every** Studio export carries an empty grant and the rule skips all of them by design. There is currently no way for a Studio author to express either a grant or "holds nothing."
+That skip was correct and **silent**, which is the half that was not. On a graph whose Actors omit `dataAccess`, a CRITICAL rule can never fire and the compiler that refuses CRITICALs reports the graph clean. `ARCH-DATA-CLASS-ACTOR-UNDECLARED` now says so: WARNING, not CRITICAL, because it reports missing evidence rather than a violation, and so it does not refuse a graph that omits an optional field.
 
-The consequence is a split between the two surfaces: **a draft that passes Studio's security check can still be refused by the CLI**, with a CRITICAL that the UI has no way to have shown. Until the authoring surface models `dataAccess`, treat `interlock architecture lint` — not the Studio panel — as the authority on this rule.
+The canvas models the field now. `ArchitectureNode` carries `dataAccess`, the inspector edits it, `exportManifest()` emits the real value instead of the literal `dataAccess: []` it used to, and Studio's own findings list raises the same "cannot evaluate" warning the linter does — so a draft no longer passes Studio's check only to be refused by the CLI. The shipped example was itself uncovered on exactly the two edges the rule most exists for, `edge.email-customer` and `edge.support-audit`, both carrying D7 to an external sink; both now declare a grant and the rule evaluates them.
+
+One residual, unchanged: an Actor still cannot say **"holds nothing"** distinctly from "did not say". `_parse_node` defaults the optional field to `frozenset()`, so present-but-empty and absent are the same value by the time the linter sees them. Closing that means carrying `None` through the model, and until it is closed a genuinely empty grant reads as an undeclared one and draws the warning.
 
 ## 6. How to Run
 

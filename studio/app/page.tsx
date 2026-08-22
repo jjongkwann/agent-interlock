@@ -36,6 +36,11 @@ type ArchitectureNode = {
   trustZone: TrustZone;
   trustZoneId: string;
   definitionDigest?: string;
+  // What this Actor is permitted to hold. Exported as `dataAccess`, which the CLI's
+  // ARCH-DATA-CLASS-EXCEEDS-ACTOR rule compares an edge's allowedDataClasses against. It used to be
+  // exported hard-coded empty, and that rule skips an empty grant, so no Studio-authored graph was
+  // covered by it at all.
+  dataAccess: string[];
   allowedDomains?: string[];
   x: number;
   y: number;
@@ -148,13 +153,13 @@ const initialZones: TrustZoneDefinition[] = [
 ];
 
 const initialNodes: ArchitectureNode[] = [
-  { id: "user.customer", label: "Customer", type: "USER", owner: "Customer Platform", identity: "oidc://customer", capabilities: ["SUPPORT_REQUEST"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-input", x: 42, y: 255 },
-  { id: "agent.support", label: "Support Agent", type: "AGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/support", capabilities: ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"], tenantMode: "REQUIRED", maxDelegationDepth: 2, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 255 },
-  { id: "agent.research", label: "Research Sub-Agent", type: "SUBAGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/research", capabilities: ["KNOWLEDGE_SEARCH"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 88 },
-  { id: "rag.support-knowledge", label: "Support Knowledge", type: "RAG", owner: "Knowledge Platform", identity: "spiffe://prod.example/rag/support", capabilities: ["TENANT_RETRIEVAL"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 350 },
-  { id: "tool.send-email", label: "Send Email", type: "TOOL", owner: "Messaging Platform", identity: "spiffe://prod.example/tool/send-email", capabilities: ["EMAIL_SEND"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", definitionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", x: 286, y: 350 },
-  { id: "external.customer-email", label: "Customer Email", type: "EXTERNAL", owner: "Messaging Platform", identity: "dns://customer.example", capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-output", allowedDomains: ["customer.example"], x: 788, y: 350 },
-  { id: "external.audit-ledger", label: "Interlock Ledger", type: "EXTERNAL", owner: "Security Platform", identity: "spiffe://prod.example/interlock/ledger", capabilities: ["APPEND_ONLY_AUDIT"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 520 },
+  { id: "user.customer", label: "Customer", type: "USER", owner: "Customer Platform", identity: "oidc://customer", capabilities: ["SUPPORT_REQUEST"], dataAccess: ["D2", "D3"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-input", x: 42, y: 255 },
+  { id: "agent.support", label: "Support Agent", type: "AGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/support", capabilities: ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 2, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 255 },
+  { id: "agent.research", label: "Research Sub-Agent", type: "SUBAGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/research", capabilities: ["KNOWLEDGE_SEARCH"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 88 },
+  { id: "rag.support-knowledge", label: "Support Knowledge", type: "RAG", owner: "Knowledge Platform", identity: "spiffe://prod.example/rag/support", capabilities: ["TENANT_RETRIEVAL"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 350 },
+  { id: "tool.send-email", label: "Send Email", type: "TOOL", owner: "Messaging Platform", identity: "spiffe://prod.example/tool/send-email", capabilities: ["EMAIL_SEND"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", definitionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", x: 286, y: 350 },
+  { id: "external.customer-email", label: "Customer Email", type: "EXTERNAL", owner: "Messaging Platform", identity: "dns://customer.example", capabilities: [], dataAccess: ["D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-output", allowedDomains: ["customer.example"], x: 788, y: 350 },
+  { id: "external.audit-ledger", label: "Interlock Ledger", type: "EXTERNAL", owner: "Security Platform", identity: "spiffe://prod.example/interlock/ledger", capabilities: ["APPEND_ONLY_AUDIT"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 520 },
 ];
 
 const audit = (id: string): Control => ({ id, objective: "EVIDENCE", timing: "POST_EXECUTION", point: "AUDIT_SINK", assurance: "OBSERVED" });
@@ -387,7 +392,7 @@ export default function Home() {
       if (template) return { ...template, id, label: `${template.label} · runtime`, x: Math.min(850, template.x + 22), y: Math.min(555, template.y + 105) };
       const inferredType: NodeType = id.startsWith("agent.") ? "SUBAGENT" : id.startsWith("tool.") ? "TOOL" : id.startsWith("rag.") ? "RAG" : id.startsWith("memory.") ? "MEMORY" : "EXTERNAL";
       const externalZone = [...zones].reverse().find((zone) => zone.kind === "EXTERNAL") ?? zones[0];
-      return { id, label: "Undeclared Actor", type: inferredType, owner: "Runtime only", identity: `observed://${id}`, capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: externalZone?.kind ?? "EXTERNAL", trustZoneId: externalZone?.id ?? "zone.external-output", x: (externalZone?.x ?? 775) + 18 + (index % 2) * 25, y: Math.min(555, 420 + index * 48) };
+      return { id, label: "Undeclared Actor", type: inferredType, owner: "Runtime only", identity: `observed://${id}`, capabilities: [], dataAccess: [], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: externalZone?.kind ?? "EXTERNAL", trustZoneId: externalZone?.id ?? "zone.external-output", x: (externalZone?.x ?? 775) + 18 + (index % 2) * 25, y: Math.min(555, 420 + index * 48) };
     });
   }, [runtimeImport, nodeMap, nodes, zones]);
 
@@ -441,6 +446,7 @@ export default function Home() {
       if (node.type === "EXTERNAL" && edges.some((edge) => edge.target === node.id && edge.relationshipId === "REL-07") && !node.allowedDomains?.length) result.push({ severity: "critical", text: "External destination has no allowed domain boundary", target: node.id });
     });
     edges.forEach((edge) => {
+      if (edge.allowedData.length && !nodeMap[edge.target]?.dataAccess?.length) result.push({ severity: "warning", text: "Target actor declares no data access, so the grant comparison cannot run", target: edge.id });
       if (edge.controls.some((control) => control.assurance === "DECLARED")) result.push({ severity: "warning", text: "Declared control is not attached to a runtime enforcement point", target: edge.id });
       if (["REL-03", "REL-05", "REL-06", "REL-07"].includes(edge.relationshipId) && edge.mode === "OBSERVE") result.push({ severity: "critical", text: "High-risk relationship is OBSERVE only", target: edge.id });
       if (edge.failureMode === "FAIL_OPEN") result.push({ severity: "critical", text: "Security boundary fails open", target: edge.id });
@@ -1103,7 +1109,7 @@ export default function Home() {
       owner: node.owner,
       identity: node.identity,
       capabilities: node.capabilities,
-      dataAccess: [],
+      dataAccess: node.dataAccess ?? [],
       sideEffects: node.type === "TOOL" ? ["EXTERNAL_WRITE"] : node.type === "RAG" || node.type === "MEMORY" ? ["READ"] : [],
       tenantMode: node.tenantMode,
       failureMode: "FAIL_CLOSED",
@@ -1364,6 +1370,7 @@ export default function Home() {
               <label>Tenant boundary<select value={selectedNode.tenantMode} onChange={(e) => updateNode({ tenantMode: e.target.value as ArchitectureNode["tenantMode"] })}><option>REQUIRED</option><option>OPTIONAL</option><option>GLOBAL</option></select></label>
               {(selectedNode.type === "AGENT" || selectedNode.type === "SUBAGENT") && <label>Actor delegation limit<input type="number" min="0" max="8" value={selectedNode.maxDelegationDepth} onChange={(e) => updateNode({ maxDelegationDepth: Number(e.target.value) })} /></label>}
               {selectedNode.type === "TOOL" && <label>Definition digest<input placeholder="sha256:…" value={selectedNode.definitionDigest ?? ""} onChange={(e) => updateNode({ definitionDigest: e.target.value })} /></label>}
+              <label>Data access<input placeholder="D2, D3, D7" value={(selectedNode.dataAccess ?? []).join(", ")} onChange={(e) => updateNode({ dataAccess: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
               {selectedNode.type === "EXTERNAL" && <label>Allowed domains<input placeholder="api.example.com, files.example.com" value={(selectedNode.allowedDomains ?? []).join(", ")} onChange={(e) => updateNode({ allowedDomains: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>}
               <label>Capabilities<input placeholder="SUPPORT_REPLY, KNOWLEDGE_SEARCH" value={selectedNode.capabilities.join(", ")} onChange={(e) => updateNode({ capabilities: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
               <button className="danger-button" onClick={removeSelectedNode}><span>Remove actor</span><small>Connected relationships will also be removed</small></button>
