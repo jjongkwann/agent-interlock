@@ -591,6 +591,48 @@ class LiveQueryPathTests(unittest.TestCase):
         self.assertEqual(len(declared), 1)
         self.assertIsNone(declared[0].interaction_id)
 
+    def test_the_sdk_declares_its_own_coverage_under_its_own_enforcement_point(self):
+        from agent_interlock.sdk import Interlock
+
+        interlock = Interlock()
+        caller = interlock.define_actor(SOURCE)
+        callee = interlock.define_actor(TARGET)
+        interlock.connect(caller, callee, LinkPolicy())
+        guarded = callee.wrap(lambda arguments: {"ok": True})
+        for _ in range(2):
+            guarded({"q": "hi"}, source=caller, tenant_id="tenant-a", intent=InvocationIntent(purpose="p"))
+
+        events = interlock.ledger.interaction_lifecycles_started_between(
+            "tenant-a", "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+        )
+        declared = [event for event in events if event.event_type == "CONTROL_COVERAGE_DECLARED"]
+        self.assertEqual(len(declared), 1)  # two calls, one coverage shape
+        self.assertEqual(declared[0].payload["coverage"]["enforcementPoint"], "SDK")
+        # The SDK has no ToolRevision on any call, so the two M2 checks are ABSENT at this point
+        # rather than INAPPLICABLE on every invocation -- the distinction §3 turns on.
+        armed = {entry["id"] for entry in declared[0].payload["coverage"]["armed"]}
+        self.assertEqual(armed & {"L1-M2-DEFINITION-NOT-ACTIVE", "L1-M2-DEFINITION-DRIFT"}, set())
+
+    def test_the_broker_declares_one_coverage_over_both_of_its_scoped_profiles(self):
+        from test_a2a import broker_fixture, request_message, send_context
+
+        broker, ledger, _calls, principal = broker_fixture()
+        broker.send_message(request_message(), send_context(principal))
+
+        declared = [
+            event.payload["coverage"]
+            for event in ledger._events
+            if event.event_type == "CONTROL_COVERAGE_DECLARED"
+        ]
+        self.assertEqual(len(declared), 1)
+        self.assertEqual(declared[0]["enforcementPoint"], "A2A_BROKER")
+        # One event, two profiles: the broker answers link findings to the edge's mode and boundary
+        # findings to the boundary's, and the union of the two disjoint check sets is A2A_PROFILE.
+        armed = {entry["id"] for entry in declared[0]["armed"]}
+        self.assertTrue(armed & set(A2A_LINK_PROFILE.checks))
+        self.assertTrue(armed & set(A2A_BOUNDARY_PROFILE.checks))
+        self.assertTrue(armed <= set(A2A_PROFILE.checks))
+
     def test_every_control_record_carries_the_three_coverage_fields(self):
         from l1_harness import TENANT, build_gateway
 
