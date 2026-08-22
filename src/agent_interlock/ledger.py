@@ -462,7 +462,22 @@ class InMemoryLedger:
                 (
                     event
                     for event in self._events
-                    if event.tenant_id == tenant_id and event.interaction_id in interaction_ids
+                    if event.tenant_id == tenant_id
+                    and (
+                        event.interaction_id in interaction_ids
+                        # Coverage declarations carry no interaction_id -- what is armed belongs to
+                        # the link, not to a call -- so an interaction filter cannot see them, and
+                        # without them summarize_security_statistics reports every check ABSENT for
+                        # the whole window. One that was emitted before the window still explains a
+                        # digest used inside it, so the bound is `occurred_at < end` rather than the
+                        # window itself.
+                        # ponytail: every declaration ever emitted for the tenant, deduped by digest
+                        # downstream; narrow to the digests the window references if the count grows.
+                        or (
+                            event.event_type == "CONTROL_COVERAGE_DECLARED"
+                            and parse_event_time(event.occurred_at) < end_at
+                        )
+                    )
                 ),
                 key=lambda item: (parse_event_time(item.occurred_at), item.event_id),
             )

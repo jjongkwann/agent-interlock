@@ -344,19 +344,26 @@ class PostgreSQLLedger:
                     SELECT {_SELECT_COLUMNS}
                     FROM interlock.security_events
                     WHERE tenant_id = %s
-                      AND interaction_id IN (
-                          SELECT interaction_id
-                          FROM interlock.security_events
-                          WHERE tenant_id = %s
-                            AND event_type = 'INTERACTION_REQUESTED'
-                            AND interaction_id IS NOT NULL
-                            AND occurred_at >= %s::timestamptz AND occurred_at < %s::timestamptz
-                            AND (%s::text IS NULL OR data_source = %s::text)
+                      AND (
+                          interaction_id IN (
+                              SELECT interaction_id
+                              FROM interlock.security_events
+                              WHERE tenant_id = %s
+                                AND event_type = 'INTERACTION_REQUESTED'
+                                AND interaction_id IS NOT NULL
+                                AND occurred_at >= %s::timestamptz AND occurred_at < %s::timestamptz
+                                AND (%s::text IS NULL OR data_source = %s::text)
+                          )
+                          -- Coverage declarations carry no interaction_id, so the interaction
+                          -- filter cannot see them and the statistics would report every check
+                          -- ABSENT. See the InMemoryLedger comment for why the bound is `< end`.
+                          OR (event_type = 'CONTROL_COVERAGE_DECLARED'
+                              AND occurred_at < %s::timestamptz)
                       )
                     ORDER BY occurred_at, event_id
                     LIMIT %s
                     """,
-                    (tenant_id, tenant_id, start, end, data_source, data_source, limit + 1),
+                    (tenant_id, tenant_id, start, end, data_source, data_source, end, limit + 1),
                 )
                 values = tuple(_event_from_row(row) for row in cursor.fetchall())
             finally:

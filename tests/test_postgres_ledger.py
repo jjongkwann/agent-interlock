@@ -86,6 +86,9 @@ class PostgreSQLLedgerUnitTests(unittest.TestCase):
         query, parameters = connection.cursor_value.executed[-1]
         self.assertIn("event_type = 'INTERACTION_REQUESTED'", query)
         self.assertIn("interaction_id IN", query)
+        # Coverage declarations carry no interaction_id, so the interaction filter alone returns a
+        # window in which every check reads ABSENT. The second `end` parameter is that branch.
+        self.assertIn("event_type = 'CONTROL_COVERAGE_DECLARED'", query)
         self.assertEqual(
             parameters,
             (
@@ -95,6 +98,7 @@ class PostgreSQLLedgerUnitTests(unittest.TestCase):
                 "2026-07-20T00:00:00Z",
                 "SIMULATION",
                 "SIMULATION",
+                "2026-07-20T00:00:00Z",
                 501,
             ),
         )

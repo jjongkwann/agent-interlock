@@ -530,5 +530,93 @@ class ReducerCoverageTests(unittest.TestCase):
         self.assertIsNone(record.edge_key)  # no policyId, so it cannot be placed on the byEdge grid
 
 
+class LiveQueryPathTests(unittest.TestCase):
+    """The one production query that feeds summarize_security_statistics must see declarations.
+
+    `interaction_lifecycles_started_between` selects events by interaction id, and a coverage
+    declaration deliberately has none. Without a second branch for them the endpoint returns a
+    window in which every check reads ABSENT -- a fully "uncovered" dashboard drawn from a ledger
+    that recorded the coverage correctly. Caught here rather than in production, and asserted on
+    both the real gateway and the real query rather than on the fixture.
+    """
+
+    def test_a_real_gateway_invocation_reaches_by_check_through_the_lifecycle_query(self):
+        from l1_harness import TENANT, build_gateway
+
+        from agent_interlock import summarize_security_statistics
+
+        gateway, revision, source, _target = build_gateway(external_approval=False)
+        gateway.invoke(
+            connector=lambda arguments: {"status": "SENT"},
+            idempotency_key="idem-coverage",
+            tenant_id=TENANT,
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="notify-customer"),
+            arguments={"to": "user@customer.example", "body": "hello"},
+        )
+        events = gateway.ledger.interaction_lifecycles_started_between(
+            TENANT, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+        )
+        types = {event.event_type for event in events}
+        self.assertIn("CONTROL_COVERAGE_DECLARED", types)
+
+        summary = summarize_security_statistics([event.to_dict() for event in events])
+        partition = summary["partitions"][0]
+        self.assertTrue(partition["byCheck"], "the lifecycle query dropped the coverage declaration")
+        self.assertTrue(partition["byEdge"])
+        # The invocation was allowed and every control that looked found nothing, so the row that
+        # proves coverage is a RAN_CLEAN one -- not a flag.
+        self.assertTrue(any(row["ranCleanCount"] for row in partition["byCheck"]))
+        self.assertEqual(partition["counters"]["noControlRecordCount"], 0)
+
+    def test_the_declaration_is_emitted_once_per_digest_not_once_per_call(self):
+        from l1_harness import TENANT, build_gateway
+
+        gateway, revision, source, _target = build_gateway(external_approval=False)
+        for index in range(3):
+            gateway.invoke(
+                connector=lambda arguments: {"status": "SENT"},
+                idempotency_key=f"idem-{index}",
+                tenant_id=TENANT,
+                source_actor_id=source.id,
+                revision_id=revision.revision_id,
+                intent=InvocationIntent(purpose="notify-customer"),
+                arguments={"to": "user@customer.example", "body": "hello"},
+            )
+        events = gateway.ledger.interaction_lifecycles_started_between(
+            TENANT, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+        )
+        declared = [event for event in events if event.event_type == "CONTROL_COVERAGE_DECLARED"]
+        self.assertEqual(len(declared), 1)
+        self.assertIsNone(declared[0].interaction_id)
+
+    def test_every_control_record_carries_the_three_coverage_fields(self):
+        from l1_harness import TENANT, build_gateway
+
+        gateway, revision, source, _target = build_gateway(external_approval=False)
+        gateway.invoke(
+            connector=lambda arguments: {"status": "SENT"},
+            idempotency_key="idem-fields",
+            tenant_id=TENANT,
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="notify-customer"),
+            arguments={"to": "user@customer.example", "body": "hello"},
+        )
+        controls = [
+            event.payload["control"]
+            for event in gateway.ledger.interaction_lifecycles_started_between(
+                TENANT, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
+            )
+            if event.event_type == "CONTROL_EVALUATED"
+        ]
+        self.assertTrue(controls)
+        for control in controls:
+            self.assertEqual(control["enforcementPoint"], "MCP_GATEWAY")
+            self.assertTrue(control["evaluatedProfile"].startswith("sha256:"))
+            self.assertEqual(control["flaggedChecks"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 # Control Coverage Statistics
 
-Status: Plan 1 complete. Plan 2 open, except carry-over item 8 (the reducer), done below.
+Status: Plan 1 and Plan 2 complete. Remaining open questions are listed and none blocks the
+statistic; see the two sections at the end.
 Date: 2026-07-27
 
 ## Problem
@@ -257,11 +258,35 @@ the emitted reason codes: a denied D7 runs under check id
 gateway and `A2A-DATA-CLASS-DENIED` at the broker. Any join from coverage to
 reason codes must go through `Profile.reason_codes`, never a string match.
 
-The reducer derives the three states: in `evaluated` is RAN; in `armed` but not
-`evaluated` is INAPPLICABLE; in the catalogue but not `armed` is ABSENT. The
-catalogue is the union of all `armed` sets seen in the ledger, so the reducer
-stays a pure function of the event stream and the Studio TypeScript port needs no
-access to Python.
+**A third field, which this section originally omitted.** The reducer was to
+derive RAN from `evaluated` -- but RAN splits into RAN_CLEAN and RAN_FLAGGED, and
+nothing on the wire said which. Joining `reasonCodes` back to check ids is not
+available: `Profile.reason_codes` is not injective, since
+`L1-M9-SENSITIVE-EGRESS` and `INTERLOCK-DATA-CLASS-DENIED` both reach
+`A2A-DATA-CLASS-DENIED`, so a code cannot name the check that produced it.
+`payload.control.flaggedChecks` therefore carries check ids directly. It costs
+O(flagged), which is zero on the overwhelming majority of events.
+
+**The digest covers the whole declaration body, not only `evaluated`.** Two links
+can run the same checks with different sets armed -- one arming a control that
+stays INAPPLICABLE -- and keying on the evaluated set alone would let whichever
+declaration was seen first speak for both. Since the digest is over everything the
+payload says, a reader can recompute it from the event, and a producer emitting
+two different bodies under one digest is not expressible. Dedup is per
+enforcement-point instance, so a restart re-declares; the reducer keys on the
+digest and a repeat is a no-op.
+
+**The declaration carries no `interaction_id`.** What is armed belongs to the
+link. Stamping it with one call's id would file a link-level fact under a single
+interaction, and `reduce_interactions` -- which groups on `interaction_id` -- would
+then have to special-case it out again.
+
+The reducer derives the four states: in `flaggedChecks` is RAN_FLAGGED; otherwise
+in `evaluated` is RAN_CLEAN; in `armed` but not `evaluated` is INAPPLICABLE; in the
+catalogue but not `armed` is ABSENT. The catalogue is the union of all `armed` sets
+seen in the ledger, so the reducer stays a pure function of the event stream and
+the Studio TypeScript port needs no access to Python. A digest the stream never
+declared contributes nothing: missing evidence is not a clean bill.
 
 No separate `armedProfile` field: the armed set is a function of
 `(enforcementPoint, policyId, policyVersion)`, all already on the event.
@@ -284,8 +309,19 @@ Added to each partition in `schemas/security-statistics.schema.json`:
 - **`byEdge[].byCheck[]`** — the cross-tabulation, and the deliverable: on this
   segment, which controls applied and what happened. Entries ABSENT for every
   interaction on that edge are omitted to bound the payload.
-- **`unattributed`** — interactions matching no declared edge, kept as an
-  explicit bucket rather than dropped.
+- **`unattributed`** — interactions that cannot be placed on the byEdge grid,
+  kept as an explicit bucket rather than dropped. **Narrower than this section
+  first said**, and necessarily so: "matching no *declared* edge" needs the
+  ArchitectureGraph, which the reducer does not have and must not have, or the
+  Studio port stops being a pure function of the event stream. What the reducer
+  can see is an incomplete triple -- no target actor, or no `CONTROL_EVALUATED`
+  and therefore no `policyId`. Detecting traffic on an *undeclared* edge remains
+  `compare_observed_runtime`'s job, as **Out of scope** already says.
+- **`noControlRecordCount`** in every `counters` block. An interaction with no
+  `CONTROL_EVALUATED` reduces to `ALLOW` with an empty reason list, which is
+  shape-identical to a control that ran and allowed. It is a counter rather than
+  only a partition-level bucket because the blind spot is per row: `byActor`
+  reading "40 calls, 0 blocked" must not hide that nothing looked at them.
 
 `byReasonCode` is retained; it remains the right view for "what fired", and it is
 the only view that preserves the per-point wording.
@@ -767,38 +803,71 @@ Plan 1's execution ledger
 (`.superpowers/sdd/2026-07-27-unified-judgment-engine/progress.md`) has the full
 reasoning and measurements. These are the items Plan 2 cannot start without.
 
-**Blocking — the coverage states are not yet trustworthy.** `run_checks` returns
-`ran`, and all three call sites in `src/` discard it, so within Plan 1 the three
-states have zero observable effect. Wiring telemetry to `ran` as it stands
-under-reports:
+**Blocking — the coverage states were not trustworthy. All eight are closed;
+what each one turned out to require is recorded beside it.** `run_checks` returned
+`ran` and all three call sites in `src/` discarded it, so within Plan 1 the three
+states had zero observable effect. Wiring telemetry to `ran` as it stood would have
+under-reported:
 
-1. **A check whose subject is empty must return `None` (INAPPLICABLE), never `()`
-   (RAN_CLEAN).** State the rule once and audit all 26 against it rather than
-   patching case by case. Three known instances: `_data_classes` and
-   `_boundary_data_classes` (empty `data_classes`), and `_secret`, whose
-   `contains_secret` returns `False` vacuously for an argument map holding no
-   strings — that one is in all three profiles, and `clean_case()` itself, the
-   fixture used to prove the same bug in `_input_schema`, demonstrates it.
-   Weaker fourth: `_volume` on a zero estimate.
-2. **`armed`'s blind spots are four distinct shapes**, only one of which a wider
-   signature fixes. See §2. Note the spec's own
-   `(enforcementPoint, policyId, policyVersion)` ABSENT key cannot express actor
-   properties or edge structure.
-3. **Split the two multi-control check ids** — `L1-M5-TOKEN-AUDIENCE-MISMATCH`
-   and `L1-M9-VOLUME-EXCEEDED` — or accept that those two `byCheck` rows are
-   unreliable.
-4. **Pick one coverage convention for the three side-effect checks.**
-   `_tainted_external_write` returns `None` for a non-matching side effect while
-   `_destructive_write` and `_approval` return `()`. Read-only traffic would show
-   one at ~100% RAN_CLEAN (a working control) and the other at ~100% INAPPLICABLE
-   — same situation, opposite statistic.
-5. **The reducer must not read a missing `CONTROL_EVALUATED` as clean.**
-6. **Two A2A controls are unsatisfiable** and would count as passing:
-   `A2A-BOUNDARY-TENANT-REQUIRED` (`A2APrincipal.__post_init__` rejects an empty
-   tenant first) and `A2A-PAYLOAD-INVALID` (`A2AMessage.__post_init__` requires
-   at least one part, so `payload_bytes >= 2`).
-7. **`assertNotIn(id, ran)` passes vacuously** if that id is dropped from the
-   profile entirely — audit profile membership, not just the predicate.
+1. ~~**A check whose subject is empty must return `None`.**~~ **Done.** The rule is
+   stated once in `EmptySubjectTests` and every case is asserted with its non-empty
+   twin beside it, so the audit also fails if a check stops running when it should.
+   All four instances were real. `_secret` needed a new `has_scannable_text` in
+   `security.py`: `contains_secret` answers a security question and must stay a
+   plain bool for `sanitize_secrets`' callers, so the traversal is mirrored rather
+   than folded in. The fourth was not weak — `InvocationIntent` estimates **zero
+   bytes** by default, so out of the box a link capping bytes had a size control
+   reporting a clean pass over a size nobody supplied, on every call.
+2. ~~**`armed`'s blind spots are four distinct shapes.**~~ **Done, and the note
+   about the ABSENT key was the thing to fix.** `armed` now takes the context and
+   may read only its **link-constant** half — `policy`, `source`, `target`,
+   `boundary`, `revision`, `relationship`. That covers all four shapes: item 3's
+   bundling, the boundary switches, the actor property (`target.input_schema`,
+   shared with `run` through `_effective_schema` so the two cannot disagree about
+   whether a schema exists) and the edge structure (`boundary is None`, which all
+   five boundary checks now arm on).
+
+   Widening the signature is only safe because the ABSENT key stopped being
+   `(enforcementPoint, policyId, policyVersion)`: `CONTROL_COVERAGE_DECLARED`
+   carries the armed set **explicitly**, keyed by a digest over the whole body, so
+   the armed set no longer has to be derivable from fields already on the event.
+   The constraint that remains is that it must not vary *per invocation*, and a
+   test varies exactly the per-invocation fields across all 28 checks and fails if
+   any armed verdict moves. That test is the whole safety margin for the wider
+   signature.
+3. ~~**Split the two multi-control check ids.**~~ **Done — split, not accepted.**
+   Each half now arms on its own policy flag: `L1-M5-TOKEN-RESOURCE-MISMATCH` on
+   `require_resource` and `L1-M9-VOLUME-BYTES-EXCEEDED` on `max_export_bytes`. The
+   wire is unchanged: both new keys were already renamed (or are now) onto the code
+   their point has always emitted, and each split id sits immediately after its
+   sibling in every profile, so reason-code order does not move either. The check
+   table is 28 checks; 26 controls became 28 because two were always two.
+4. ~~**Pick one coverage convention for the three side-effect checks.**~~ **Done.**
+   The side effect a check governs *is* its subject, so a different one is
+   INAPPLICABLE for all three. `_destructive_write` and `_approval` moved to
+   `_tainted_external_write`'s convention rather than the reverse, because the
+   alternative reports a destructive-write control as exercised by traffic that
+   never wrote anything.
+5. ~~**The reducer must not read a missing `CONTROL_EVALUATED` as clean.**~~
+   **Done**, as `noControlRecordCount` in every `counters` block plus the
+   `unattributed` bucket — see §5. Fixture interaction `ia-9` is a call that
+   executed successfully with no control record at all; without it the counter's
+   cross-language parity was vacuous, which a mutation of the Studio port measured
+   before the row existed.
+6. ~~**Two A2A controls are unsatisfiable and would count as passing.**~~
+   **Recorded, not deleted.** Both are kept: the constructor is what enforces the
+   invariant today, and a second producer building a `CheckContext` directly meets
+   no guard at all — deleting a fail-closed check because a different module
+   happens to prevent its input is the unasserted cross-module assumption §6c
+   exists to stop. What is fixed is the reading. Their `byCheck` rows are 100%
+   RAN_CLEAN because nothing can trip them, which means *the constructor held*,
+   not *this control was exercised*, and both halves of that sentence are asserted
+   in `UnsatisfiableControlTests` rather than left to a docstring.
+7. ~~**`assertNotIn(id, ran)` passes vacuously.**~~ **Done.** Each profile's check
+   tuple is pinned whole in `ProfileMembershipTests`, so an id leaving a profile
+   fails there loudly instead of turning every "did not run" assertion elsewhere
+   into a tautology. The two scoped A2A profiles are additionally asserted to
+   partition `A2A_PROFILE` exactly.
 8. ~~**The reducer must count a denied permit as a block.**~~ **Done.**
    `InteractionRecord` carries `execution_permitted` / `executionPermitted`,
    reduced as the AND over the interaction's `CONTROL_EVALUATED` events with an
