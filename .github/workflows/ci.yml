@@ -44,8 +44,11 @@ jobs:
           PGPASSWORD: owner_pw
         run: |
           OWNER="postgresql://interlock_owner:owner_pw@localhost:5432/interlock"
-          for f in 0001_interaction_ledger 0002_distributed_stores 0003_definition_registry; do
-            psql "$OWNER" -v ON_ERROR_STOP=1 -f "migrations/postgresql/$f.sql"
+          # Every numbered migration in order, not a hand-kept list: 0004 registered a new event
+          # type in the security_events CHECK constraint and the list did not move with it, so the
+          # live suite would have run against a table that refuses the event the code now writes.
+          for f in migrations/postgresql/0[0-9][0-9][0-9]_*.sql; do
+            psql "$OWNER" -v ON_ERROR_STOP=1 -f "$f"
           done
           psql "$OWNER" -v ON_ERROR_STOP=1 -f ci/postgres_provision.sql
       - name: Run suite with live PostgreSQL

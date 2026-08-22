@@ -21,9 +21,10 @@ for _ in $(seq 1 30); do
 done
 
 echo "applying migrations + provisioning ..."
-psql_owner -f "$ROOT/migrations/postgresql/0001_interaction_ledger.sql"
-psql_owner -f "$ROOT/migrations/postgresql/0002_distributed_stores.sql"
-psql_owner -f "$ROOT/migrations/postgresql/0003_definition_registry.sql"
+# Every numbered migration in order, not a hand-kept list -- see the note in ci.yml.
+for f in "$ROOT"/migrations/postgresql/0[0-9][0-9][0-9]_*.sql; do
+  psql_owner -f "$f"
+done
 psql_owner -f "$ROOT/ci/postgres_provision.sql"
 
 export INTERLOCK_TEST_POSTGRES_DSN_TENANT_A="postgresql://tenant_a_app:tenant_a_pw@${HOST}:${PORT}/interlock"
