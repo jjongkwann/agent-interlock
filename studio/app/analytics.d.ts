@@ -16,6 +16,7 @@ export interface InteractionRecord {
   mode: string | null;
   decision: string;
   actualEnforced: boolean;
+  executionPermitted: boolean;
   reasonCodes: string[];
   executionAttempted: boolean;
   executionSucceeded: boolean;

@@ -21,6 +21,7 @@
  * @property {string|null} mode
  * @property {string} decision
  * @property {boolean} actualEnforced
+ * @property {boolean} executionPermitted
  * @property {string[]} reasonCodes
  * @property {boolean} executionAttempted
  * @property {boolean} executionSucceeded
@@ -47,9 +48,24 @@
 export const STATISTICS_API_VERSION = "interlock.dev/v1alpha1";
 export const STATISTICS_KIND = "SecurityStatistics";
 
-// ALLOW < SANITIZE < HOLD < BLOCK < QUARANTINE < KILL; unknown decision
-// strings fail closed to BLOCK (see `_control_decision` in analytics.py).
-const DECISION_RANK = { ALLOW: 0, SANITIZE: 1, HOLD: 2, BLOCK: 3, QUARANTINE: 4, KILL: 5 };
+// Mirrors `_DECISION_RANK` in `src/agent_interlock/models.py`, which is the
+// definition -- every ControlDecision member, no fallback rank. BYPASSED ranks
+// below ALLOW (skipped raised no objection) and ERROR sits between BLOCK and
+// QUARANTINE; see the comment there for why. Unknown decision strings fail
+// closed to BLOCK (see `_control_decision` in analytics.py).
+const DECISION_RANK = {
+  BYPASSED: 0,
+  ALLOW: 1,
+  SANITIZE: 2,
+  DEGRADE: 3,
+  CHALLENGE: 4,
+  HOLD: 5,
+  BLOCK: 6,
+  ERROR: 7,
+  QUARANTINE: 8,
+  REVOKE: 9,
+  KILL: 10,
+};
 
 /**
  * Extract raw Ledger events from either supported import envelope.
@@ -154,7 +170,10 @@ function reduceOne(interactionId, events) {
   }
 
   const first = events[requestedIndices[0]];
-  const blockDecision = decision !== "ALLOW";
+  const executionPermitted = controls.every((control) => (
+    control.executionPermitted === undefined || control.executionPermitted === true
+  ));
+  const blockDecision = decision !== "ALLOW" || !executionPermitted;
   const actualEnforced = chosen.actualEnforced === true;
   const shadowWouldBlock = blockDecision && !actualEnforced;
   const enforcedBlock = blockDecision && actualEnforced && enforcementActionCompleted && !executionAttempted && outcome === "BLOCKED";
@@ -172,6 +191,7 @@ function reduceOne(interactionId, events) {
     mode: typeof chosen.mode === "string" ? chosen.mode : null,
     decision,
     actualEnforced,
+    executionPermitted,
     reasonCodes,
     executionAttempted,
     executionSucceeded,

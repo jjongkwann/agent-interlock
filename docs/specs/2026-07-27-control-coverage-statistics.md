@@ -1,6 +1,6 @@
 # Control Coverage Statistics
 
-Status: Plan 1 complete, Plan 2 not started
+Status: Plan 1 complete. Plan 2 open, except carry-over item 8 (the reducer), done below.
 Date: 2026-07-27
 
 ## Problem
@@ -513,11 +513,16 @@ produces a sub-`ALLOW` verdict, so its record was never contradictory, and a
 reducer must read a missing key as `true`, matching
 `PolicyDecisionRecord.execution_permitted`'s default.
 
-**What Plan 2 must do, because `analytics.py` is outside this plan's write set.**
-The ledger now carries the evidence and the reducer still ignores it. On the same
-reproduction `summarize_security_statistics` reports `blockDecisionCount: 0`,
+**What Plan 2 had to do, because `analytics.py` was outside this plan's write
+set — done.** The ledger carried the evidence and the reducer ignored it. On the
+reproduction `summarize_security_statistics` reported `blockDecisionCount: 0`,
 `enforcedBlockCount: 0`, `shadowWouldBlockCount: 0` for a real enforced block;
-the identical scenario with plain `BLOCK` actions reports `1 / 1 / 0`. Required:
+the identical scenario with plain `BLOCK` actions reported `1 / 1 / 0`. All five
+edits below shipped, and fixture interaction `ia-7` is that reproduction: an
+`ALLOW` decision with `executionPermitted: false`, an enforcement
+`ACTION_EXECUTED`, no connector attempt, outcome `BLOCKED`. It now reduces to
+`blockDecision` and `enforcedBlock`, and reverting either language's predicate
+fails the golden contract test.
 
 1. `InteractionRecord` gains an `execution_permitted` field, reduced as the AND
    of `control.executionPermitted` over every `CONTROL_EVALUATED` in the
@@ -537,6 +542,21 @@ the identical scenario with plain `BLOCK` actions reports `1 / 1 / 0`. Required:
 5. The shared fixture pair `schemas/fixtures/analytics-events.json` /
    `analytics-statistics.json` needs a row carrying a denied permit under an
    `ALLOW` decision, or the parity test cannot see the new field at all.
+
+**A sixth edit, found while making the third.** `studio/app/analytics.mjs`
+carried its own six-member `DECISION_RANK` — `ALLOW < SANITIZE < HOLD < BLOCK <
+QUARANTINE < KILL`, the map as it stood before Plan 1 — and its `controlDecision`
+fails unknown strings closed to `BLOCK`. So the five members Plan 1 added or
+moved (`BYPASSED`, `DEGRADE`, `CHALLENGE`, `REVOKE`, `ERROR`) all collapsed to
+`BLOCK` there while Python ranked each distinctly: `BYPASSED` below `ALLOW` on
+one side and above it on the other, and `strongestDecision` picking a different
+`chosen` control, so `policyId` and `mode` came off the wrong event. The
+byte-identical claim was false for any ledger carrying one of the five, and the
+golden fixture carried none of them. The map now mirrors `models._DECISION_RANK`
+member for member, and fixture interaction `ia-8` straddles it with a `CHALLENGE`
+and a `HOLD` control under different policy ids — Python picks `HOLD`, the old
+map picked whichever came first. This is the fixture the "reconcile before adding
+consumers" note below says `analytics.py:147` never had.
 
 ### 6d. The M5 family shares one definition of a usable credential
 
@@ -688,9 +708,13 @@ settle them without shipping an undocumented decision.
   says "no grounds to block", the latter denies execution under ENFORCE. Both are
   defensible in isolation and the pair is fail-closed, but it is undocumented and
   falls straight out of the previous question.
-- **Six `!= ALLOW` predicates, two answers — now five.** See §6 and §6a.
-  `sdk.py:189` left the list by becoming an explicit execution-permit aggregate;
-  the remaining five gate nothing. Reconcile; do not add a sixth.
+- **Six `!= ALLOW` predicates, two answers — now four.** See §6, §6a and §6c.
+  `sdk.py` left the list by becoming an explicit execution-permit aggregate, and
+  `analytics.py` left it by reading the permit alongside the decision. The four
+  that remain are `gateway.py:273` (admits the config guard's verdict into the
+  record), `gateway.py:329` and `gateway.py:544` (outcome and severity labels)
+  and `config_guard.py:412` (severity label); none of them gates execution.
+  Reconcile; do not add a fifth.
 - **`ActorSpec.data_access` has no enforcement reader — partly mitigated, and the
   residual is measured.** The merge moved the data-class judgement onto the link
   policy's `allowed`/`denied_data_classes`; before it, `sdk.py` judged against the
@@ -775,24 +799,29 @@ under-reports:
    at least one part, so `payload_bytes >= 2`).
 7. **`assertNotIn(id, ran)` passes vacuously** if that id is dropped from the
    profile entirely — audit profile membership, not just the predicate.
-8. **The reducer must count a denied permit as a block.** `control.executionPermitted`
-   now reaches the ledger from both shared enforcement points (§6c); until
-   `analytics.py` and `studio/app/analytics.mjs` read it, a real enforced block
-   whose `decision` reduced to `ALLOW` counts as zero in `blockDecisionCount`,
-   `enforcedBlockCount` and `shadowWouldBlockCount`. §6c lists the five edits.
-   This is the first item in this list that has a fixture to reproduce it.
+8. ~~**The reducer must count a denied permit as a block.**~~ **Done.**
+   `InteractionRecord` carries `execution_permitted` / `executionPermitted`,
+   reduced as the AND over the interaction's `CONTROL_EVALUATED` events with an
+   absent key reading as `True`; `block_decision` is now `decision != ALLOW or
+   not execution_permitted`, and `shadow_would_block` / `enforced_block` /
+   `partial_or_bypass` follow it unchanged. Both languages, the schema wording
+   and the fixture pair moved together (§6c), and the stale Studio rank map found
+   in the same pass moved with them. No new counter: the refusal is folded into
+   the existing three rather than reported beside them.
 
-**Reconcile before adding consumers.** Six predicates test `!= ALLOW` and so
-disagree with `would_block` on `BYPASSED`: `analytics.py:69`, `sdk.py:189`,
-`gateway.py:259/315/530`, `config_guard.py:412`. (§6a removed `sdk.py:189` from
-that list; five remain and none of them gates execution. §6c corrects what those
-five do — `gateway.py:259` admits a second decision source into the record rather
-than setting a label — and gives `analytics.py:69` a second, independent reason to
-change.) Separately,
-`analytics.py:147`
-picks `chosen` as the first control matching the strongest decision and takes
-`policyId`, `mode` and `actualEnforced` from it — **Plan 1's re-ranking already
-moves shipped statistics through that path, untested and with no fixture.**
+**Reconcile before adding consumers.** Six predicates tested `!= ALLOW` and so
+disagreed with `would_block` on `BYPASSED`. Two have left: §6a's `sdk.py`, which
+became an explicit execution-permit aggregate, and item 8's `block_decision`,
+which now reads the permit as well as the decision — the change §6 asked for and
+the change the reducer needed, arrived at from both ends. The four that remain
+are `gateway.py:273`, `gateway.py:329`, `gateway.py:544` and
+`config_guard.py:412`; §6c corrects what they do — `gateway.py:273` admits a
+second decision source into the record rather than setting a label. Separately,
+`analytics.py` picks `chosen` as the first control matching the strongest
+decision and takes `policyId`, `mode` and `actualEnforced` from it. Plan 1's
+re-ranking moves shipped statistics through that path; §6c's sixth edit gives it
+the fixture (`ia-8`) it had none of, and syncing the Studio rank map is what that
+fixture caught.
 
 **Known and accepted.** `_definition_state` forwards arbitrary registry strings
 as reason keys, an unbounded key set that `Profile.reason_codes` renames blindly.

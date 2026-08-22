@@ -745,5 +745,252 @@
       "connectorExecutionId": null
     },
     "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0029",
+    "event_type": "INTERACTION_REQUESTED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:06:00Z",
+    "ingested_at": "2026-07-19T11:06:00Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-7",
+    "span_id": "span-0029",
+    "parent_span_id": null,
+    "interaction_id": "ia-7",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "web-search-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "INFO",
+    "payload": {
+      "invocation": {
+        "purpose": "web-search",
+        "argumentsHash": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0030",
+    "event_type": "CONTROL_EVALUATED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:06:01Z",
+    "ingested_at": "2026-07-19T11:06:01Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-7",
+    "span_id": "span-0030",
+    "parent_span_id": null,
+    "interaction_id": "ia-7",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "web-search-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "HIGH",
+    "payload": {
+      "control": {
+        "policyId": "policy.support-web",
+        "policyVersion": "1.0.0",
+        "mode": "ENFORCE",
+        "decision": "ALLOW",
+        "reasonCodes": [
+          "L1-M9-NEW-DESTINATION"
+        ],
+        "actualEnforced": true,
+        "executionPermitted": false
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0031",
+    "event_type": "ACTION_EXECUTED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:06:02Z",
+    "ingested_at": "2026-07-19T11:06:02Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-7",
+    "span_id": "span-0031",
+    "parent_span_id": null,
+    "interaction_id": "ia-7",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "web-search-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "INFO",
+    "payload": {
+      "result": "COMPLETED",
+      "connectorExecutionId": null,
+      "failure": null
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0032",
+    "event_type": "SECURITY_OUTCOME_SET",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:06:03Z",
+    "ingested_at": "2026-07-19T11:06:03Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-7",
+    "span_id": "span-0032",
+    "parent_span_id": null,
+    "interaction_id": "ia-7",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "web-search-tool",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-07",
+    "severity": "INFO",
+    "payload": {
+      "securityOutcome": "BLOCKED",
+      "connectorExecutionId": null
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0033",
+    "event_type": "INTERACTION_REQUESTED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:07:00Z",
+    "ingested_at": "2026-07-19T11:07:00Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-8",
+    "span_id": "span-0033",
+    "parent_span_id": null,
+    "interaction_id": "ia-8",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-connector",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "INFO",
+    "payload": {
+      "invocation": {
+        "purpose": "vendor-export",
+        "argumentsHash": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0034",
+    "event_type": "CONTROL_EVALUATED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:07:01Z",
+    "ingested_at": "2026-07-19T11:07:01Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-8",
+    "span_id": "span-0034",
+    "parent_span_id": null,
+    "interaction_id": "ia-8",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-connector",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "MEDIUM",
+    "payload": {
+      "control": {
+        "policyId": "policy.export-challenge",
+        "policyVersion": "1.0.0",
+        "mode": "SHADOW",
+        "decision": "CHALLENGE",
+        "reasonCodes": [
+          "INTERLOCK-APPROVAL-REQUIRED"
+        ],
+        "actualEnforced": false
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0035",
+    "event_type": "CONTROL_EVALUATED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:07:02Z",
+    "ingested_at": "2026-07-19T11:07:02Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-8",
+    "span_id": "span-0035",
+    "parent_span_id": null,
+    "interaction_id": "ia-8",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-connector",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "HIGH",
+    "payload": {
+      "control": {
+        "policyId": "policy.export-hold",
+        "policyVersion": "1.0.0",
+        "mode": "SHADOW",
+        "decision": "HOLD",
+        "reasonCodes": [
+          "INTERLOCK-TAINTED-EXTERNAL-WRITE"
+        ],
+        "actualEnforced": false
+      }
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0036",
+    "event_type": "ACTION_EXECUTED",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:07:03Z",
+    "ingested_at": "2026-07-19T11:07:03Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-8",
+    "span_id": "span-0036",
+    "parent_span_id": null,
+    "interaction_id": "ia-8",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-connector",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "INFO",
+    "payload": {
+      "result": "COMPLETED",
+      "connectorExecutionId": "exec-0008",
+      "failure": null
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "event_id": "evt-0037",
+    "event_type": "SECURITY_OUTCOME_SET",
+    "schema_version": "1.0.0",
+    "occurred_at": "2026-07-19T11:07:04Z",
+    "ingested_at": "2026-07-19T11:07:04Z",
+    "tenant_id": "tenant-a",
+    "environment": "PROD",
+    "data_source": "PRODUCTION",
+    "trace_id": "trace-ia-8",
+    "span_id": "span-0037",
+    "parent_span_id": null,
+    "interaction_id": "ia-8",
+    "source_actor_id": "support-agent",
+    "target_actor_id": "crm-connector",
+    "relationship_type": "INVOKES",
+    "relationship_id": "REL-05",
+    "severity": "INFO",
+    "payload": {
+      "securityOutcome": "SUCCEEDED",
+      "connectorExecutionId": "exec-0008"
+    },
+    "integrity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   }
 ]

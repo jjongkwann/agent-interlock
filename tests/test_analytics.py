@@ -43,15 +43,70 @@ class GoldenContractTests(unittest.TestCase):
         self.assertEqual(
             production["counters"],
             {
-                "interactionCount": 5,
-                "blockDecisionCount": 2,
-                "shadowWouldBlockCount": 1,
-                "enforcedBlockCount": 1,
-                "executionAttemptCount": 4,
-                "executionSuccessCount": 3,
+                "interactionCount": 7,
+                "blockDecisionCount": 4,
+                "shadowWouldBlockCount": 2,
+                "enforcedBlockCount": 2,
+                "executionAttemptCount": 5,
+                "executionSuccessCount": 4,
                 "partialOrBypassCount": 1,
             },
         )
+
+    def test_denied_permit_under_an_allow_decision_counts_as_a_block(self):
+        # ia-7: every decision reduces to ALLOW, one check returned BYPASSED, so the
+        # permit aggregate denies and the connector never ran. Counting the decision
+        # alone reported a real enforced block as zero.
+        record = next(r for r in reduce_interactions(self.events) if r.interaction_id == "ia-7")
+        self.assertEqual(record.decision, ControlDecision.ALLOW)
+        self.assertFalse(record.execution_permitted)
+        self.assertTrue(record.block_decision)
+        self.assertTrue(record.enforced_block)
+
+    def test_absent_execution_permitted_key_reads_as_permitted(self):
+        # The A2A broker does not emit the key, and neither did any event written
+        # before it existed. Both must keep reducing exactly as they did.
+        events = [
+            _event("INTERACTION_REQUESTED", "ia-legacy"),
+            _event(
+                "CONTROL_EVALUATED",
+                "ia-legacy",
+                payload={"control": {"policyId": "p", "mode": "ENFORCE", "decision": "ALLOW", "actualEnforced": True}},
+            ),
+        ]
+        record = reduce_interactions(events)[0]
+        self.assertTrue(record.execution_permitted)
+        self.assertFalse(record.block_decision)
+
+    def test_a_present_permit_that_is_not_true_denies(self):
+        # Fail closed on anything that is not exactly true, matching actualEnforced.
+        for value in (False, None, "true", 1):
+            with self.subTest(value=value):
+                events = [
+                    _event("INTERACTION_REQUESTED", "ia-odd"),
+                    _event(
+                        "CONTROL_EVALUATED",
+                        "ia-odd",
+                        payload={"control": {"decision": "ALLOW", "executionPermitted": value}},
+                    ),
+                ]
+                self.assertFalse(reduce_interactions(events)[0].execution_permitted)
+
+    def test_the_permit_is_an_and_over_every_control_in_the_interaction(self):
+        def control(permitted):
+            payload = {"control": {"decision": "ALLOW", "executionPermitted": permitted}}
+            return _event("CONTROL_EVALUATED", "ia-and", payload=payload)
+
+        events = [_event("INTERACTION_REQUESTED", "ia-and"), control(True), control(False)]
+        self.assertFalse(reduce_interactions(events)[0].execution_permitted)
+
+    def test_the_strongest_decision_picks_the_control_the_rank_map_ranks_highest(self):
+        # ia-8 carries CHALLENGE and HOLD. Both are members the Studio port's rank
+        # map was missing, where they fell through to BLOCK and `chosen` -- and with
+        # it policyId and mode -- came from whichever control happened to be first.
+        record = next(r for r in reduce_interactions(self.events) if r.interaction_id == "ia-8")
+        self.assertEqual(record.decision, ControlDecision.HOLD)
+        self.assertEqual(record.policy_id, "policy.export-hold")
 
     def test_reason_code_sum_may_exceed_blocked_interactions(self):
         production = summarize_security_statistics(self.events)["partitions"][0]
@@ -60,7 +115,7 @@ class GoldenContractTests(unittest.TestCase):
 
     def test_definition_level_control_events_are_ignored(self):
         records = reduce_interactions(self.events)
-        self.assertEqual(len(records), 6)
+        self.assertEqual(len(records), 8)
         self.assertNotIn(None, [record.interaction_id for record in records])
 
     def test_simulation_traffic_is_partitioned_not_merged(self):

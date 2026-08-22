@@ -17,6 +17,14 @@ Pinned semantics:
 - ``decision`` is ``strongest_decision`` over every CONTROL_EVALUATED
   ``control.decision`` in the interaction; ``mode`` / ``actualEnforced`` /
   ``policyId`` come from the first control event carrying that decision.
+- ``execution_permitted`` is the AND of ``control.executionPermitted`` over the
+  same events, and an absent key reads as ``True`` -- matching
+  ``PolicyDecisionRecord.execution_permitted``'s default, so the A2A broker
+  (which does not emit the key) and every event written before it existed are
+  unaffected. A present value that is not ``True`` denies.
+- A block is ``decision != ALLOW`` OR a denied permit. The two are separate
+  aggregates: a control that permits nothing while every decision reduces to
+  ALLOW is a real refusal, and counting only the decision reports it as zero.
 - A connector execution attempt is an ACTION_EXECUTED whose payload
   ``connectorExecutionId`` is non-null. The enforcement ACTION_EXECUTED the
   gateway emits when it blocks carries ``connectorExecutionId: null`` and is
@@ -58,6 +66,7 @@ class InteractionRecord:
     mode: str | None
     decision: ControlDecision
     actual_enforced: bool
+    execution_permitted: bool
     reason_codes: tuple[str, ...]
     execution_attempted: bool
     execution_succeeded: bool
@@ -67,7 +76,7 @@ class InteractionRecord:
 
     @property
     def block_decision(self) -> bool:
-        return self.decision != ControlDecision.ALLOW
+        return self.decision != ControlDecision.ALLOW or not self.execution_permitted
 
     @property
     def shadow_would_block(self) -> bool:
@@ -145,6 +154,7 @@ def _reduce_one(interaction_id: str, events: list[Mapping[str, Any]]) -> Interac
 
     decisions = [_control_decision(control) for control in controls]
     decision = strongest_decision(decisions)
+    permitted = all(control.get("executionPermitted", True) is True for control in controls)
     chosen: Mapping[str, Any] = {}
     for control, value in zip(controls, decisions, strict=True):
         if value == decision:
@@ -172,6 +182,7 @@ def _reduce_one(interaction_id: str, events: list[Mapping[str, Any]]) -> Interac
         mode=chosen.get("mode") if isinstance(chosen.get("mode"), str) else None,
         decision=decision,
         actual_enforced=chosen.get("actualEnforced") is True,
+        execution_permitted=permitted,
         reason_codes=tuple(reason_codes),
         execution_attempted=execution_attempted,
         execution_succeeded=execution_succeeded,

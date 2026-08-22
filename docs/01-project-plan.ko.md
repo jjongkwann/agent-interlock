@@ -1026,7 +1026,7 @@ WHERE d.decision <> 'ALLOW'
        OR o.outcome IN ('PARTIALLY_EXECUTED', 'SUCCEEDED'));
 ```
 
-> **왜 decision allowlist가 아니라 `<> 'ALLOW'`인가.** 코드에서 차단 계열은 부정으로 정의된다. `analytics.py:69`(`block_decision`)를 비롯해 `src/`의 모든 유사 술어가 `!= ALLOW`를 검사한다. 열거 목록은 판정을 소리 없이 누락시킨다. 이 질의의 이전 판본은 `('BLOCK','QUARANTINE','KILL')`을 나열했는데, 여기에는 **`HOLD`** — `new_destination_action`의 기본값(`models.py:179`)이자 `INTERLOCK-APPROVAL-REQUIRED`의 하드코딩된 판정 — 이 빠져 있었고, `REVOKE`·`CHALLENGE`·`SANITIZE`·`DEGRADE`·`ERROR`도 빠져 있었으며, 반대로 `src/`의 어떤 코드도 생성하지 않는 `KILL`을 포함하고 있었다. `HOLD`는 이 플랫폼이 방출하는 non-ALLOW 판정 중 단연 가장 흔하므로, 이 누락은 패널이 다루려던 대상의 대부분을 가리고 있었다.
+> **왜 decision allowlist가 아니라 `<> 'ALLOW'`인가.** 코드에서 차단 계열은 부정으로 정의된다. `analytics.py`의 `block_decision`과 `src/`에 남은 유사 술어 네 개가 `!= ALLOW`를 검사한다. 열거 목록은 판정을 소리 없이 누락시킨다. (`block_decision`은 실행 허가 거부도 OR로 함께 본다. 이 질의는 그것을 볼 수 없다. `security_events`가 담는 것은 decision이지 `control.executionPermitted`가 아니므로, decision이 ALLOW로 축약된 거부는 이 패널에서 누락된다.) 이 질의의 이전 판본은 `('BLOCK','QUARANTINE','KILL')`을 나열했는데, 여기에는 **`HOLD`** — `new_destination_action`의 기본값(`models.py:179`)이자 `INTERLOCK-APPROVAL-REQUIRED`의 하드코딩된 판정 — 이 빠져 있었고, `REVOKE`·`CHALLENGE`·`SANITIZE`·`DEGRADE`·`ERROR`도 빠져 있었으며, 반대로 `src/`의 어떤 코드도 생성하지 않는 `KILL`을 포함하고 있었다. `HOLD`는 이 플랫폼이 방출하는 non-ALLOW 판정 중 단연 가장 흔하므로, 이 누락은 패널이 다루려던 대상의 대부분을 가리고 있었다.
 >
 > 이 질의가 표현할 수 없는 단서가 하나 있다. `PolicyDecisionRecord.would_block`은 `!= ALLOW`가 아니라 rank map을 읽으므로, 이것과 나머지 `!= ALLOW` 술어 다섯 개는 **`BYPASSED`에서 서로 어긋난다**. `BYPASSED`는 `ALLOW`보다 낮은 rank이기 때문이다. `BYPASSED`는 현재 `src/`에 생성자가 없고 `LinkPolicy`의 action 필드 다섯 개를 운영자가 설정해야만 도달 가능하다. 두 해석을 어떻게 일치시킬지는 Plan 2의 미결 과제다.
 

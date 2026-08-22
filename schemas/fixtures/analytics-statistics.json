@@ -1,19 +1,19 @@
 {
   "apiVersion": "interlock.dev/v1alpha1",
-  "interactionCount": 6,
+  "interactionCount": 8,
   "kind": "SecurityStatistics",
   "partitions": [
     {
       "byActor": [
         {
           "counters": {
-            "blockDecisionCount": 2,
-            "enforcedBlockCount": 1,
-            "executionAttemptCount": 4,
-            "executionSuccessCount": 3,
-            "interactionCount": 5,
+            "blockDecisionCount": 4,
+            "enforcedBlockCount": 2,
+            "executionAttemptCount": 5,
+            "executionSuccessCount": 4,
+            "interactionCount": 7,
             "partialOrBypassCount": 1,
-            "shadowWouldBlockCount": 1
+            "shadowWouldBlockCount": 2
           },
           "sourceActorId": "support-agent"
         }
@@ -21,16 +21,30 @@
       "byMode": [
         {
           "counters": {
-            "blockDecisionCount": 1,
-            "enforcedBlockCount": 1,
+            "blockDecisionCount": 2,
+            "enforcedBlockCount": 2,
             "executionAttemptCount": 3,
             "executionSuccessCount": 2,
-            "interactionCount": 4,
+            "interactionCount": 5,
             "partialOrBypassCount": 1,
             "shadowWouldBlockCount": 0
           },
           "mode": "ENFORCE"
         },
+        {
+          "counters": {
+            "blockDecisionCount": 2,
+            "enforcedBlockCount": 0,
+            "executionAttemptCount": 2,
+            "executionSuccessCount": 2,
+            "interactionCount": 2,
+            "partialOrBypassCount": 0,
+            "shadowWouldBlockCount": 2
+          },
+          "mode": "SHADOW"
+        }
+      ],
+      "byPolicy": [
         {
           "counters": {
             "blockDecisionCount": 1,
@@ -41,10 +55,8 @@
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 1
           },
-          "mode": "SHADOW"
-        }
-      ],
-      "byPolicy": [
+          "policyId": "policy.export-hold"
+        },
         {
           "counters": {
             "blockDecisionCount": 1,
@@ -59,11 +71,11 @@
         },
         {
           "counters": {
-            "blockDecisionCount": 1,
-            "enforcedBlockCount": 0,
+            "blockDecisionCount": 2,
+            "enforcedBlockCount": 1,
             "executionAttemptCount": 1,
             "executionSuccessCount": 1,
-            "interactionCount": 1,
+            "interactionCount": 2,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 1
           },
@@ -73,10 +85,18 @@
       "byReasonCode": [
         {
           "interactionCount": 1,
-          "reasonCode": "L1-M2-DEFINITION-DRIFT"
+          "reasonCode": "INTERLOCK-APPROVAL-REQUIRED"
         },
         {
           "interactionCount": 1,
+          "reasonCode": "INTERLOCK-TAINTED-EXTERNAL-WRITE"
+        },
+        {
+          "interactionCount": 1,
+          "reasonCode": "L1-M2-DEFINITION-DRIFT"
+        },
+        {
+          "interactionCount": 2,
           "reasonCode": "L1-M9-NEW-DESTINATION"
         },
         {
@@ -87,23 +107,23 @@
       "byRelationship": [
         {
           "counters": {
-            "blockDecisionCount": 1,
+            "blockDecisionCount": 2,
             "enforcedBlockCount": 1,
-            "executionAttemptCount": 3,
-            "executionSuccessCount": 2,
-            "interactionCount": 4,
+            "executionAttemptCount": 4,
+            "executionSuccessCount": 3,
+            "interactionCount": 5,
             "partialOrBypassCount": 1,
-            "shadowWouldBlockCount": 0
+            "shadowWouldBlockCount": 1
           },
           "relationshipId": "REL-05"
         },
         {
           "counters": {
-            "blockDecisionCount": 1,
-            "enforcedBlockCount": 0,
+            "blockDecisionCount": 2,
+            "enforcedBlockCount": 1,
             "executionAttemptCount": 1,
             "executionSuccessCount": 1,
-            "interactionCount": 1,
+            "interactionCount": 2,
             "partialOrBypassCount": 0,
             "shadowWouldBlockCount": 1
           },
@@ -111,19 +131,19 @@
         }
       ],
       "counters": {
-        "blockDecisionCount": 2,
-        "enforcedBlockCount": 1,
-        "executionAttemptCount": 4,
-        "executionSuccessCount": 3,
-        "interactionCount": 5,
+        "blockDecisionCount": 4,
+        "enforcedBlockCount": 2,
+        "executionAttemptCount": 5,
+        "executionSuccessCount": 4,
+        "interactionCount": 7,
         "partialOrBypassCount": 1,
-        "shadowWouldBlockCount": 1
+        "shadowWouldBlockCount": 2
       },
       "dataSource": "PRODUCTION",
       "outcomes": {
-        "BLOCKED": 1,
+        "BLOCKED": 2,
         "PARTIALLY_EXECUTED": 1,
-        "SUCCEEDED": 1,
+        "SUCCEEDED": 2,
         "UNKNOWN": 2
       },
       "timeSeries": [
@@ -142,13 +162,13 @@
         {
           "bucketStart": "2026-07-19T11:00:00Z",
           "counters": {
-            "blockDecisionCount": 1,
-            "enforcedBlockCount": 0,
-            "executionAttemptCount": 3,
-            "executionSuccessCount": 2,
-            "interactionCount": 3,
+            "blockDecisionCount": 3,
+            "enforcedBlockCount": 1,
+            "executionAttemptCount": 4,
+            "executionSuccessCount": 3,
+            "interactionCount": 5,
             "partialOrBypassCount": 1,
-            "shadowWouldBlockCount": 1
+            "shadowWouldBlockCount": 2
           }
         }
       ]

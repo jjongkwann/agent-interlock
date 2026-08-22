@@ -124,17 +124,17 @@
       "properties": {
         "interactionCount": { "type": "integer", "minimum": 0 },
         "blockDecisionCount": {
-          "description": "Interactions whose strongest decision != ALLOW, regardless of mode. A decision-level metric: says nothing about whether execution was actually prevented.",
+          "description": "Interactions refused by a control: strongest decision != ALLOW, OR every CONTROL_EVALUATED did not carry control.executionPermitted true (an absent key reads as permitted). A refusal-level metric, regardless of mode: says nothing about whether execution was actually prevented.",
           "type": "integer",
           "minimum": 0
         },
         "shadowWouldBlockCount": {
-          "description": "Non-ALLOW decisions that were NOT enforced (actualEnforced false, e.g. SHADOW/OBSERVE mode): would have been blocked under ENFORCE.",
+          "description": "Refusals (see blockDecisionCount) that were NOT enforced (actualEnforced false, e.g. SHADOW/OBSERVE mode): would have been blocked under ENFORCE.",
           "type": "integer",
           "minimum": 0
         },
         "enforcedBlockCount": {
-          "description": "Non-ALLOW decisions with actualEnforced true, a completed enforcement ACTION_EXECUTED (null connectorExecutionId), no connector attempt, and final securityOutcome BLOCKED.",
+          "description": "Refusals (see blockDecisionCount) with actualEnforced true, a completed enforcement ACTION_EXECUTED (null connectorExecutionId), no connector attempt, and final securityOutcome BLOCKED.",
           "type": "integer",
           "minimum": 0
         },
@@ -149,7 +149,7 @@
           "minimum": 0
         },
         "partialOrBypassCount": {
-          "description": "Interactions whose final securityOutcome is PARTIALLY_EXECUTED, or whose enforced non-ALLOW decision was followed by a connector execution attempt anyway (enforcement bypass).",
+          "description": "Interactions whose final securityOutcome is PARTIALLY_EXECUTED, or whose enforced refusal (see blockDecisionCount) was followed by a connector execution attempt anyway (enforcement bypass).",
           "type": "integer",
           "minimum": 0
         }
