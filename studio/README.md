@@ -26,6 +26,10 @@ npm run lint
 
 The `Runtime graph` and `Drift` tabs accept Interlock Ledger events or OTLP/HTTP JSON up to 5 MB. The `Statistics` tab aggregates raw Ledger events offline or reads the scoped statistics API. Imported files stay in the browser session.
 
+## Projects
+
+The header carries the project id and version as editable fields, used by `Export manifest`. The `Projects` menu supports several projects in one browser: `New project` clears the canvas to an empty architecture with a fresh id; `Open manifest…` loads any Architecture manifest JSON produced by `Export manifest` or accepted by the Python compiler, laying out any node or task position it omits on a grid; `Save` stores the current graph under its project id in the browser's `localStorage`, and the saved-projects list opens or deletes those entries. All of it is undoable. Saved projects never leave the browser and are lost if its storage is cleared.
+
 ## Current boundary
 
 Architecture edits remain local drafts. Use the root Python CLI to lint and compile an exported manifest before rollout:

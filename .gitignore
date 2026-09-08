@@ -12,3 +12,4 @@ build/
 *.pem
 *.key
 .DS_Store
+studio/tsconfig.tsbuildinfo

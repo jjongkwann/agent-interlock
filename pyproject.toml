@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-interlock"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI Agent interaction security framework and MCP Tool Gateway core"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ dependencies = []
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1,<4"]
 jwt = ["cryptography>=42,<47"]
+anthropic = ["anthropic>=1.4,<2"]
 
 [project.scripts]
 interlock = "agent_interlock.__main__:main"

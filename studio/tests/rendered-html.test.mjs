@@ -41,16 +41,25 @@ test("server-renders the Agent Interlock Studio", async () => {
 });
 
 test("exports the backend architecture contract and removes starter artifacts", async () => {
-  const [page, panels, layout, packageJson] = await Promise.all([
+  const [page, panels, layout, packageJson, manifest] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/panels.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/manifest.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /apiVersion: "interlock\.dev\/v1alpha1"/);
-  assert.match(page, /enforcementPoint: control\.point/);
-  assert.match(page, /targetSelector:/);
+  // The manifest <-> Studio-state translation (export and import) lives in the pure
+  // studio/app/manifest.ts module so studio/tests/manifest-roundtrip.test.mjs can exercise it
+  // without React; page.tsx just calls into it.
+  assert.match(manifest, /apiVersion: "interlock\.dev\/v1alpha1"/);
+  assert.match(manifest, /enforcementPoint: control\.point/);
+  assert.match(manifest, /targetSelector:/);
+  assert.match(manifest, /trustZone: node\.trustZone/);
+  assert.match(manifest, /trustZoneId: node\.trustZoneId/);
+  assert.match(manifest, /trustZones: manifestZones/);
+  assert.match(manifest, /trustBoundaries: manifestBoundaries/);
+  assert.match(manifest, /orchestration: manifestOrchestration/);
   assert.match(page, /definitionDigest/);
   assert.match(page, /allowedDomains/);
   // The canvas must be able to say what an Actor holds. exportManifest hard-coded `dataAccess: []`
@@ -58,8 +67,8 @@ test("exports the backend architecture contract and removes starter artifacts", 
   // Studio-authored graph was covered by that CRITICAL rule at all. Three halves of the fix:
   // the export carries the real value, the inspector can edit it, and Studio raises the same
   // "cannot evaluate" finding the linter does rather than reporting the draft clean.
-  assert.match(page, /dataAccess: node\.dataAccess \?\? \[\]/);
-  assert.doesNotMatch(page, /dataAccess: \[\],\n/);
+  assert.match(manifest, /dataAccess: node\.dataAccess \?\? \[\]/);
+  assert.doesNotMatch(manifest, /dataAccess: \[\],\n/);
   assert.match(page, /Data access<input/);
   assert.match(page, /Target actor declares no data access/);
   assert.match(page, /Runtime graph/);
@@ -88,16 +97,11 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /event\.preventDefault\(\)/);
   assert.match(page, /Mouse wheel or Command\/Ctrl \+ wheel/);
   assert.match(page, /Cross-zone edges must bind a directional Trust Boundary/);
-  assert.match(page, /trustZone: node\.trustZone/);
   assert.match(page, /assignSelectedNodeToZone/);
   assert.match(page, /Add trust zone/);
   assert.match(page, /Fit around actors/);
   assert.match(page, /Move into zone/);
   assert.match(page, /Resize zone: \$\{zone\.label\}/);
-  assert.match(page, /trustZoneId: node\.trustZoneId/);
-  assert.match(page, /trustZones: manifestZones/);
-  assert.match(page, /trustBoundaries: manifestBoundaries/);
-  assert.match(page, /orchestration: manifestOrchestration/);
   assert.match(page, /Actor topology/);
   assert.match(page, /Task workflow/);
   assert.match(page, /Create matching boundary/);

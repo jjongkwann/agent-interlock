@@ -9,12 +9,32 @@ import {
 } from "./runtime";
 import { DeployPanel, RunsPanel, StatsPanel } from "./panels";
 import { ledgerEventsForStatistics } from "./analytics.mjs";
+import {
+  buildManifestPayload,
+  emptyOrchestration,
+  EMPTY_PROJECT,
+  isValidProjectId,
+  parseManifestPayload,
+  parseSavedProjects,
+  PROJECTS_STORAGE_KEY,
+  STARTER_PROJECT,
+  type Assurance,
+  type ArchitectureEdge,
+  type ArchitectureNode,
+  type ArchitectureSnapshot,
+  type Control,
+  type EnforcementPoint,
+  type Mode,
+  type NodeType,
+  type OrchestrationDesign,
+  type ProjectIdentity,
+  type SavedProjectsIndex,
+  type TrustBoundaryDefinition,
+  type TrustZone,
+  type TrustZoneDefinition,
+  type WorkflowTask,
+} from "./manifest";
 
-type NodeType = "USER" | "AGENT" | "SUBAGENT" | "RAG" | "TOOL" | "MEMORY" | "SCHEDULER" | "EXTERNAL";
-type TrustZone = "INTERNAL" | "EXTERNAL";
-type Mode = "OBSERVE" | "SHADOW" | "ENFORCE";
-type Assurance = "DECLARED" | "OBSERVED" | "ENFORCED" | "RECONCILED";
-type EnforcementPoint = "INPUT_GATEWAY" | "RAG_GATEWAY" | "MCP_GATEWAY" | "A2A_BROKER" | "EGRESS_GATEWAY" | "SANDBOX" | "AUDIT_SINK";
 type GraphView = "design" | "runtime" | "drift" | "stats" | "deploy" | "runs";
 type DesignSurface = "topology" | "workflow";
 type Selection = { kind: "node" | "edge" | "zone" | "task"; id: string };
@@ -24,117 +44,9 @@ type VisualEdge = Pick<ArchitectureEdge, "id" | "source" | "target" | "relations
   interactionId?: string;
 };
 
-type ArchitectureNode = {
-  id: string;
-  label: string;
-  type: NodeType;
-  owner: string;
-  identity: string;
-  capabilities: string[];
-  tenantMode: "REQUIRED" | "OPTIONAL" | "GLOBAL";
-  maxDelegationDepth: number;
-  trustZone: TrustZone;
-  trustZoneId: string;
-  definitionDigest?: string;
-  // What this Actor is permitted to hold. Exported as `dataAccess`, which the CLI's
-  // ARCH-DATA-CLASS-EXCEEDS-ACTOR rule compares an edge's allowedDataClasses against. It used to be
-  // exported hard-coded empty, and that rule skips an empty grant, so no Studio-authored graph was
-  // covered by it at all.
-  dataAccess: string[];
-  allowedDomains?: string[];
-  x: number;
-  y: number;
-};
-
-type TrustZoneDefinition = {
-  id: string;
-  label: string;
-  kind: TrustZone;
-  description: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
-type TrustBoundaryDefinition = {
-  id: string;
-  label: string;
-  sourceZoneId: string;
-  targetZoneId: string;
-  point: EnforcementPoint;
-  allowedRelationships: string[];
-  allowedData: string[];
-  deniedData: string[];
-  mode: Mode;
-  failureMode: "FAIL_CLOSED" | "DEGRADE_READ_ONLY" | "FAIL_OPEN";
-  requireIdentity: boolean;
-  requireTenantBinding: boolean;
-  maxPayloadBytes: number;
-  description: string;
-};
-
-type WorkflowTask = {
-  id: string;
-  label: string;
-  sourceActorId: string;
-  targetActorId: string;
-  transport: "A2A" | "MCP" | "LOCAL" | "HUMAN";
-  purpose: string;
-  dependsOn: string[];
-  dataClasses: string[];
-  acceptanceCriteria: string[];
-  maxAttempts: number;
-  timeoutSeconds: number;
-  approvalRequired: boolean;
-  onFailure: "FAIL_WORKFLOW" | "SKIP" | "CONTINUE";
-  x: number;
-  y: number;
-};
-
-type OrchestrationDesign = {
-  coordinatorActorId: string;
-  pattern: "STATE_GRAPH" | "HIERARCHICAL" | "CONVERSATIONAL" | "HYBRID";
-  maxParallelism: number;
-  maxTasks: number;
-  maxDurationSeconds: number;
-  maxMessages: number;
-  failFast: boolean;
-  tasks: WorkflowTask[];
-};
-
-type Control = {
-  id: string;
-  objective: "PREVENT" | "DETECT" | "RESPOND" | "EVIDENCE";
-  timing: "PRE_EXECUTION" | "POST_EXECUTION";
-  point: EnforcementPoint;
-  assurance: Assurance;
-};
-
-type ArchitectureEdge = {
-  id: string;
-  source: string;
-  target: string;
-  relationshipId: string;
-  relationship: string;
-  mode: Mode;
-  failureMode: "FAIL_CLOSED" | "DEGRADE_READ_ONLY" | "FAIL_OPEN";
-  allowedData: string[];
-  approvalRequired: boolean;
-  dynamic: boolean;
-  sameTenant: boolean;
-  maxDepth: number;
-  boundaryId?: string;
-  controls: Control[];
-};
-
-type ArchitectureSnapshot = {
-  nodes: ArchitectureNode[];
-  edges: ArchitectureEdge[];
-  zones: TrustZoneDefinition[];
-  boundaries: TrustBoundaryDefinition[];
-  orchestration: OrchestrationDesign;
-};
+// Undo/redo history also carries project identity, so New project / Open manifest are undoable
+// the same way an ordinary graph edit is.
+type StudioSnapshot = ArchitectureSnapshot & { projectId: string; projectVersion: string };
 
 type ZoneGesture = {
   id: string;
@@ -348,7 +260,7 @@ export default function Home() {
   const [taskDragging, setTaskDragging] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [zoneGesture, setZoneGesture] = useState<ZoneGesture | null>(null);
   const [zoneAssignmentActor, setZoneAssignmentActor] = useState("");
-  const [notice, setNotice] = useState("Architecture v1.0.0 · all changes are local drafts");
+  const [notice, setNotice] = useState("All changes are local drafts · use Projects to save or open a manifest");
   const [activeGraph, setActiveGraph] = useState<GraphView>("design");
   const [controlPlaneUrl, setControlPlaneUrl] = useState("http://127.0.0.1:8792");
   const [controlPlaneToken, setControlPlaneToken] = useState("");
@@ -356,10 +268,22 @@ export default function Home() {
   const [rawLedgerEvents, setRawLedgerEvents] = useState<Array<Record<string, unknown>> | null>(null);
   const [zoom, setZoom] = useState(1);
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
-  const [past, setPast] = useState<ArchitectureSnapshot[]>([]);
-  const [future, setFuture] = useState<ArchitectureSnapshot[]>([]);
+  const [past, setPast] = useState<StudioSnapshot[]>([]);
+  const [future, setFuture] = useState<StudioSnapshot[]>([]);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
+  const [projectId, setProjectId] = useState(STARTER_PROJECT.id);
+  const [projectVersion, setProjectVersion] = useState(STARTER_PROJECT.version);
+  const [savedProjects, setSavedProjects] = useState<SavedProjectsIndex>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      return parseSavedProjects(window.localStorage.getItem(PROJECTS_STORAGE_KEY));
+    } catch {
+      return {};
+    }
+  });
+  const [showProjectMenu, setShowProjectMenu] = useState(false);
   const telemetryInput = useRef<HTMLInputElement>(null);
+  const manifestInput = useRef<HTMLInputElement>(null);
   const canvasScroll = useRef<HTMLDivElement>(null);
   const dragCheckpointed = useRef(false);
   const zoomRef = useRef(1);
@@ -487,16 +411,18 @@ export default function Home() {
   const coverage = allControls.length ? Math.round((assuredControls / allControls.length) * 100) : 0;
 
   function checkpoint() {
-    setPast((items) => [...items.slice(-(HISTORY_LIMIT - 1)), { nodes, edges, zones, boundaries, orchestration }]);
+    setPast((items) => [...items.slice(-(HISTORY_LIMIT - 1)), { nodes, edges, zones, boundaries, orchestration, projectId, projectVersion }]);
     setFuture([]);
   }
 
-  function restoreSnapshot(snapshot: ArchitectureSnapshot) {
+  function restoreSnapshot(snapshot: StudioSnapshot) {
     setNodes(snapshot.nodes);
     setEdges(snapshot.edges);
     setZones(snapshot.zones);
     setBoundaries(snapshot.boundaries);
     setOrchestration(snapshot.orchestration);
+    setProjectId(snapshot.projectId);
+    setProjectVersion(snapshot.projectVersion);
     const selectionStillExists = selected.kind === "node"
       ? snapshot.nodes.some((node) => node.id === selected.id)
       : selected.kind === "edge"
@@ -518,7 +444,7 @@ export default function Home() {
     const snapshot = past[past.length - 1];
     if (!snapshot) return;
     setPast((items) => items.slice(0, -1));
-    setFuture((items) => [{ nodes, edges, zones, boundaries, orchestration }, ...items].slice(0, HISTORY_LIMIT));
+    setFuture((items) => [{ nodes, edges, zones, boundaries, orchestration, projectId, projectVersion }, ...items].slice(0, HISTORY_LIMIT));
     restoreSnapshot(snapshot);
     setNotice("Last architecture change undone");
   }
@@ -527,14 +453,14 @@ export default function Home() {
     const snapshot = future[0];
     if (!snapshot) return;
     setFuture((items) => items.slice(1));
-    setPast((items) => [...items.slice(-(HISTORY_LIMIT - 1)), { nodes, edges, zones, boundaries, orchestration }]);
+    setPast((items) => [...items.slice(-(HISTORY_LIMIT - 1)), { nodes, edges, zones, boundaries, orchestration, projectId, projectVersion }]);
     restoreSnapshot(snapshot);
     setNotice("Architecture change restored");
   }
 
   function resetDraft() {
     checkpoint();
-    restoreSnapshot({ nodes: initialNodes, edges: initialEdges, zones: initialZones, boundaries: initialBoundaries, orchestration: initialOrchestration });
+    restoreSnapshot({ nodes: initialNodes, edges: initialEdges, zones: initialZones, boundaries: initialBoundaries, orchestration: initialOrchestration, projectId: STARTER_PROJECT.id, projectVersion: STARTER_PROJECT.version });
     setSelected({ kind: "edge", id: "edge.support-research" });
     setNotice("Draft reset to the secure reference architecture · Undo is available");
   }
@@ -1102,80 +1028,118 @@ export default function Home() {
       : "Design revision started · review the selected drift finding before exporting a new version");
   }
 
+  function currentProject(): ProjectIdentity {
+    return { id: projectId, version: projectVersion };
+  }
+
   function exportManifest() {
-    const manifestNodes = nodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      owner: node.owner,
-      identity: node.identity,
-      capabilities: node.capabilities,
-      dataAccess: node.dataAccess ?? [],
-      sideEffects: node.type === "TOOL" ? ["EXTERNAL_WRITE"] : node.type === "RAG" || node.type === "MEMORY" ? ["READ"] : [],
-      tenantMode: node.tenantMode,
-      failureMode: "FAIL_CLOSED",
-      allowedDomains: node.allowedDomains ?? [],
-      maxDelegationDepth: node.maxDelegationDepth,
-      trustZone: node.trustZone,
-      trustZoneId: node.trustZoneId,
-      ...(node.definitionDigest ? { definitionDigest: node.definitionDigest } : {}),
-      position: { x: node.x, y: node.y },
-    }));
-    const manifestEdges = edges.map((edge) => {
-      const target = nodeMap[edge.target];
-      return {
-        id: edge.id,
-        relationshipId: edge.relationshipId,
-        source: edge.source,
-        target: edge.target,
-        relationship: edge.relationship,
-        ...(edge.boundaryId ? { boundaryId: edge.boundaryId } : {}),
-        dynamic: edge.dynamic,
-        ...(edge.dynamic && target ? { targetSelector: { types: [target.type], requiredCapabilities: target.capabilities, idPattern: `${target.id}*`, sameTenant: edge.sameTenant } } : {}),
-        policy: {
-          id: `${edge.id}-policy`,
-          version: "1.0.0",
-          mode: edge.mode,
-          allowedDataClasses: edge.allowedData,
-          deniedDataClasses: ["D5", "D8"].filter((item) => !edge.allowedData.includes(item)),
-          requireActiveDefinition: true,
-          requireDigestPin: true,
-          requireExplicitDestination: true,
-          newDestinationAction: "HOLD",
-          tokenPassthrough: false,
-          requireAudience: true,
-          requireResource: true,
-          requireActorBinding: true,
-          maxDelegationDepth: edge.maxDepth,
-          externalWriteRequiresApproval: edge.approvalRequired,
-          failureMode: edge.failureMode,
-          decisionTtlSeconds: 30,
-        },
-        controls: edge.controls.map((control) => ({ id: control.id, objective: control.objective, timing: control.timing, enforcementPoint: control.point, assurance: control.assurance })),
-      };
-    });
-    const manifestZones = zones.map((zone) => ({ id: zone.id, label: zone.label, kind: zone.kind, description: zone.description, bounds: { x: zone.x, y: zone.y, width: zone.width, height: zone.height } }));
-    const manifestBoundaries = boundaries.map((boundary) => ({ id: boundary.id, label: boundary.label, sourceZoneId: boundary.sourceZoneId, targetZoneId: boundary.targetZoneId, enforcementPoint: boundary.point, allowedRelationships: boundary.allowedRelationships, allowedDataClasses: boundary.allowedData, deniedDataClasses: boundary.deniedData, mode: boundary.mode, failureMode: boundary.failureMode, requireIdentity: boundary.requireIdentity, requireTenantBinding: boundary.requireTenantBinding, maxPayloadBytes: boundary.maxPayloadBytes, description: boundary.description }));
-    const manifestOrchestration = {
-      coordinatorActorId: orchestration.coordinatorActorId,
-      pattern: orchestration.pattern,
-      runPolicy: { maxParallelism: orchestration.maxParallelism, maxTasks: orchestration.maxTasks, maxDurationSeconds: orchestration.maxDurationSeconds, maxMessages: orchestration.maxMessages, failFast: orchestration.failFast },
-      tasks: orchestration.tasks.map((task) => ({ id: task.id, label: task.label, sourceActorId: task.sourceActorId, targetActorId: task.targetActorId, transport: task.transport, purpose: task.purpose, dependsOn: task.dependsOn, dataClasses: task.dataClasses, acceptanceCriteria: task.acceptanceCriteria, maxAttempts: task.maxAttempts, timeoutSeconds: task.timeoutSeconds, approvalRequired: task.approvalRequired, onFailure: task.onFailure, position: { x: task.x, y: task.y } })),
-    };
-    const payload = { apiVersion: "interlock.dev/v1alpha1", kind: "Architecture", metadata: { id: "customer-support-multi-agent", version: "1.0.0-draft" }, spec: { trustZones: manifestZones, trustBoundaries: manifestBoundaries, nodes: manifestNodes, edges: manifestEdges, orchestration: manifestOrchestration } };
+    if (!isValidProjectId(projectId)) {
+      setNotice("Export rejected · project id must be a lowercase slug, e.g. refund-agent");
+      return;
+    }
+    const payload = buildManifestPayload({ nodes, edges, zones, boundaries, orchestration }, currentProject());
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-    link.download = "agent-interlock-architecture.json";
+    link.download = `${projectId}.json`;
     link.click();
     URL.revokeObjectURL(link.href);
     setNotice("Draft architecture exported · review is required before policy deployment");
+  }
+
+  function newProject() {
+    checkpoint();
+    restoreSnapshot({ nodes: [], edges: [], zones: initialZones, boundaries: [], orchestration: emptyOrchestration, projectId: EMPTY_PROJECT.id, projectVersion: EMPTY_PROJECT.version });
+    setActiveGraph("design");
+    setDesignSurface("topology");
+    setNotice("New project created · Undo is available");
+  }
+
+  function applyManifestImport(value: unknown, source: string) {
+    const result = parseManifestPayload(value);
+    if (!result.ok) {
+      setNotice(`Manifest import rejected · ${result.error}`);
+      return;
+    }
+    checkpoint();
+    restoreSnapshot({ ...result.snapshot, projectId: result.project.id, projectVersion: result.project.version });
+    setActiveGraph("design");
+    setDesignSurface("topology");
+    setNotice(`${source} opened · ${result.snapshot.nodes.length} actor${result.snapshot.nodes.length === 1 ? "" : "s"}, ${result.snapshot.edges.length} relationship${result.snapshot.edges.length === 1 ? "" : "s"}`);
+  }
+
+  async function importManifestFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      applyManifestImport(JSON.parse(await file.text()), file.name);
+    } catch {
+      setNotice("Manifest import rejected · file is not valid JSON");
+    }
+  }
+
+  function persistSavedProjects(next: SavedProjectsIndex) {
+    setSavedProjects(next);
+    try {
+      window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // localStorage unavailable (private browsing, quota, disabled storage) · the project list
+      // still works for this session, it just will not survive a reload.
+    }
+  }
+
+  function saveProject() {
+    if (!isValidProjectId(projectId)) {
+      setNotice("Save rejected · project id must be a lowercase slug, e.g. refund-agent");
+      return;
+    }
+    const manifest = buildManifestPayload({ nodes, edges, zones, boundaries, orchestration }, currentProject());
+    persistSavedProjects({ ...savedProjects, [projectId]: { savedAt: new Date().toISOString(), manifest } });
+    setNotice(`${projectId} saved locally · v${projectVersion}`);
+  }
+
+  function openSavedProject(id: string) {
+    const saved = savedProjects[id];
+    if (!saved) return;
+    applyManifestImport(saved.manifest, id);
+    setShowProjectMenu(false);
+  }
+
+  function deleteSavedProject(id: string) {
+    const next = { ...savedProjects };
+    delete next[id];
+    persistSavedProjects(next);
+    setNotice(`${id} removed from saved projects`);
   }
 
   return (
     <main className="studio-shell">
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">AI</span><div><strong>Agent Interlock</strong><span>Security Architecture Studio</span></div></div>
-        <div className="architecture-title"><span className="draft-dot" />Customer Support Architecture <small>v1.0.0 draft</small></div>
+        <div className="architecture-title project-identity">
+          <span className="draft-dot" />
+          <input className={`project-id-input ${isValidProjectId(projectId) ? "" : "invalid"}`} aria-label="Project id" title="Project id · lowercase slug" value={projectId} onChange={(event) => setProjectId(event.target.value)} />
+          <small><input className="project-version-input" aria-label="Project version" title="Project version" value={projectVersion} onChange={(event) => setProjectVersion(event.target.value)} /></small>
+        </div>
         <div className="top-actions">
+          <div className="project-menu">
+            <button className="quiet-button" aria-haspopup="menu" aria-expanded={showProjectMenu} onClick={() => setShowProjectMenu((value) => !value)}>Projects</button>
+            {showProjectMenu && <div className="project-menu-panel" role="menu">
+              <button role="menuitem" onClick={() => { newProject(); setShowProjectMenu(false); }}>New project</button>
+              <button role="menuitem" onClick={() => { manifestInput.current?.click(); setShowProjectMenu(false); }}>Open manifest…</button>
+              <button role="menuitem" onClick={() => { saveProject(); setShowProjectMenu(false); }}>Save “{projectId || "untitled"}”</button>
+              <div className="project-menu-rule" />
+              <div className="project-menu-heading">Saved projects</div>
+              {Object.keys(savedProjects).length === 0 && <p className="project-menu-empty">None saved in this browser yet.</p>}
+              {Object.entries(savedProjects).sort(([, a], [, b]) => b.savedAt.localeCompare(a.savedAt)).map(([id, saved]) => (
+                <div className="project-list-item" key={id}>
+                  <button role="menuitem" onClick={() => openSavedProject(id)}><strong>{id}</strong><small>saved {new Date(saved.savedAt).toLocaleString()}</small></button>
+                  <button className="project-delete" aria-label={`Delete saved project ${id}`} onClick={() => deleteSavedProject(id)}>×</button>
+                </div>
+              ))}
+            </div>}
+          </div>
+          <input ref={manifestInput} className="file-input" type="file" accept="application/json,.json" onChange={importManifestFile} />
           {activeGraph === "design" && <><button className="quiet-button" onClick={() => setNotice(`${findings.length} findings · ${criticalCount} require attention`)}>Run security check</button><button className="primary-button" onClick={exportManifest}>Export manifest</button></>}
           {activeGraph === "deploy" && <button className="primary-button" onClick={() => selectGraph("design")}>Back to design</button>}
           {activeGraph === "runtime" && <><button className="quiet-button" onClick={() => telemetryInput.current?.click()}>Import telemetry</button><button className="primary-button" disabled={!runtimeImport} onClick={() => selectGraph("drift")}>Review drift</button></>}
