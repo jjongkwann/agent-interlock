@@ -95,6 +95,15 @@ verdict permits, and returns the sanitized result. A refused call reaches the mo
 `is_error` tool result carrying the reason codes, so the model can explain or retry within
 policy. Nothing is raised into the loop.
 
+**Approvals.** An edge with `externalWriteRequiresApproval: true` holds the first call with
+`INTERLOCK-APPROVAL-REQUIRED`. Pass `guard_tools(..., approve=...)` a function that receives the
+exact arguments the model chose and returns the approver's identity, or `None` to refuse; a grant
+is bound to those arguments and destinations and the call is judged again, so an approval cannot
+carry a denied destination through. An approval granted ahead of time with
+`gateway.grant_approval` is found by the same exact-arguments match. The hold stays in the ledger
+as an evaluation with no action, which is how the statistics tell "waited for a person" from
+"blocked".
+
 Every step is in `gateway.ledger`: `INTERACTION_REQUESTED`, `DATA_FLOW_OBSERVED`,
 `CONTROL_EVALUATED` (with the coverage of every check), `ACTION_EXECUTED`,
 `INTERACTION_COMPLETED`, `SECURITY_OUTCOME_SET`. `summarize_security_statistics` turns a ledger

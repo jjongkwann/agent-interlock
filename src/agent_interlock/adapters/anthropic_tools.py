@@ -45,8 +45,13 @@ from ..models import (
     ToolDefinition,
 )
 from ..registry import ToolRevision
+from ..security import canonical_destination
 
 Classifier = Callable[[Mapping[str, Any]], frozenset[str]]
+# Called with the exact arguments the model chose and the decision that held them for approval.
+# Returns the approver's identity to grant an approval bound to those arguments, or None to refuse.
+Approver = Callable[[Mapping[str, Any], PolicyDecisionRecord], str | None]
+APPROVAL_REQUIRED = "INTERLOCK-APPROVAL-REQUIRED"
 
 
 class GuardedToolError(Exception):
@@ -156,6 +161,7 @@ class _GuardedToolBase:
         classify: Classifier | None = None,
         credential: CredentialClaims | None = None,
         trace_id: str | None = None,
+        approve: Approver | None = None,
     ) -> None:
         self._gateway = gateway
         self._binding = binding
@@ -167,6 +173,7 @@ class _GuardedToolBase:
         self._classify = classify
         self._credential = credential
         self._trace_id = trace_id
+        self._approve = approve
         _claim_the_runnable_tool_contract()
 
     @property
@@ -212,13 +219,43 @@ class _GuardedToolBase:
         if side_effect is None:
             side_effect = _strongest_declared(self._gateway.actor(self._binding.actor_id))
         data_classes = self._classify(arguments) if self._classify is not None else None
+        # An approval is bound to the exact arguments and destinations, never to a tool or a
+        # session, so the lookup is by what this call carries. The model never sees an approval id.
+        approval = self._gateway.find_approval(
+            tenant_id=self._tenant_id, arguments=arguments, destinations=derived.destinations
+        )
         intent = InvocationIntent(
             purpose=self._binding.purpose,
             destinations=derived.destinations,
             estimated_side_effect=side_effect,
             estimated_record_count=0,
+            approval_id=approval.approval_id if approval is not None else None,
         )
         return intent if data_classes is None else replace(intent, data_classes=data_classes)
+
+    def _decide(self, arguments: Mapping[str, Any]) -> PolicyDecisionRecord:
+        """Evaluate, and give an operator one chance to approve a call held only for approval.
+
+        The first evaluation stays in the ledger as the HOLD it was: a CONTROL_EVALUATED with
+        INTERLOCK-APPROVAL-REQUIRED and no action, which is what "waited for a human" looks like
+        in the statistics. When the approver grants, the approval is bound to these exact
+        arguments and destinations and the call is evaluated again; every other control still has
+        to clear on that second pass, so an approval cannot launder a denied destination.
+        """
+        decision = self._evaluate(arguments)
+        if decision.permits_execution or self._approve is None or APPROVAL_REQUIRED not in decision.reason_codes:
+            return decision
+        approver = self._approve(arguments, decision)
+        if approver is None:
+            return decision
+        destinations = self._declared_intent(arguments).destinations
+        self._gateway.grant_approval(
+            tenant_id=self._tenant_id,
+            arguments=arguments,
+            canonical_destinations=tuple(canonical_destination(item) for item in destinations),
+            approver=approver,
+        )
+        return self._evaluate(arguments)
 
     def _evaluate(self, arguments: Mapping[str, Any]) -> PolicyDecisionRecord:
         return self._gateway.evaluate_invocation(
@@ -243,7 +280,7 @@ class GuardedTool(_GuardedToolBase):
 
     def call(self, input: object) -> str:
         arguments = _arguments(input)
-        decision = self._evaluate(arguments)
+        decision = self._decide(arguments)
         try:
             result = self._gateway.execute_approved_call(
                 decision.decision_id,
@@ -270,7 +307,7 @@ class GuardedAsyncTool(_GuardedToolBase):
 
     async def call(self, input: object) -> str:
         arguments = _arguments(input)
-        decision = self._evaluate(arguments)
+        decision = self._decide(arguments)
         loop = asyncio.get_running_loop()
 
         def connector(call_arguments: Mapping[str, Any]) -> Any:
@@ -349,6 +386,7 @@ def guard_tools(
     classify: Classifier | None = None,
     credential: CredentialClaims | None = None,
     trace_id: str | None = None,
+    approve: Approver | None = None,
 ) -> tuple[GuardedTool | GuardedAsyncTool, ...]:
     """Admit each definition and return the runnable tools to hand the tool runner.
 
@@ -413,6 +451,7 @@ def guard_tools(
                 classify=classify,
                 credential=credential,
                 trace_id=trace_id,
+                approve=approve,
             )
         )
     return tuple(guarded)

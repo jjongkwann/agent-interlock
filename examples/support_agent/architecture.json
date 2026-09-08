@@ -275,7 +275,7 @@
           "requireDigestPin": true,
           "requireExplicitDestination": true,
           "newDestinationAction": "HOLD",
-          "externalWriteRequiresApproval": false,
+          "externalWriteRequiresApproval": true,
           "failureMode": "FAIL_CLOSED"
         },
         "controls": [

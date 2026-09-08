@@ -139,13 +139,32 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(len(tools.OUTBOX), 1)
         self.assertEqual(tools.OUTBOX[0]["to"], "dana@customer.example")
         records = reduce_interactions([event.to_dict() for event in gateway.ledger.all()])
+        # The send is judged twice: held for approval first, then executed once the demo operator
+        # approved the exact arguments. The hold is an evaluation with no action, not a block.
         self.assertEqual(
             [record.target_actor_id for record in records],
-            ["tool.lookup-order", "tool.send-email"],
+            ["tool.lookup-order", "tool.send-email", "tool.send-email"],
         )
-        self.assertTrue(all(record.execution_succeeded for record in records))
-        self.assertFalse(any(record.block_decision for record in records))
+        lookup, held, sent = records
+        self.assertTrue(lookup.execution_succeeded)
+        self.assertIn("INTERLOCK-APPROVAL-REQUIRED", held.reason_codes)
+        self.assertFalse(held.execution_attempted)
+        self.assertFalse(held.enforced_block)
+        self.assertTrue(sent.execution_succeeded)
+        self.assertFalse(sent.block_decision)
         self.assertFalse(any(block.get("is_error") for block in self.tool_results()))
+
+    def test_a_refused_approval_holds_the_send_and_tells_the_model_why(self):
+        gateway, _ = run.main(PROMPT, client=self.client(), approve=lambda arguments, decision: None)
+
+        self.assertEqual(tools.OUTBOX, [])
+        errors = [block for block in self.tool_results() if block.get("is_error")]
+        self.assertEqual(len(errors), 1)
+        self.assertIn("INTERLOCK-APPROVAL-REQUIRED", json.dumps(errors[0]["content"]))
+        records = reduce_interactions([event.to_dict() for event in gateway.ledger.all()])
+        email = [record for record in records if record.target_actor_id == "tool.send-email"]
+        self.assertEqual(len(email), 1)
+        self.assertTrue(email[0].enforced_block)
 
     def test_a_recipient_outside_the_allowlist_comes_back_to_the_model_as_an_error(self):
         self.send_email_input()["to"] = "a@evil.example"

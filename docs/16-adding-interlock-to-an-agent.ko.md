@@ -92,6 +92,13 @@ final = runner.until_done()
 사유 코드를 담은 `is_error` tool result로 모델에 전달되어 모델이 정책 안에서 설명하거나 재시도할 수
 있습니다. 루프 밖으로 예외가 던져지지 않습니다.
 
+**승인.** `externalWriteRequiresApproval: true`인 edge는 첫 호출을 `INTERLOCK-APPROVAL-REQUIRED`로
+보류합니다. `guard_tools(..., approve=...)`에 모델이 고른 정확한 인자를 받아 승인자 신원을 돌려주거나
+`None`으로 거부하는 함수를 넘기면, 그 인자와 목적지에 묶인 승인이 발급되고 호출이 다시 판정됩니다.
+그래서 승인이 거부된 목적지를 통과시킬 수 없습니다. `gateway.grant_approval`로 미리 발급한 승인도
+같은 정확 인자 일치로 찾아집니다. 보류는 ledger에 행동 없는 판정으로 남아, 통계가 "사람을 기다림"과
+"차단됨"을 구분합니다.
+
 모든 단계가 `gateway.ledger`에 남습니다. `INTERACTION_REQUESTED`, `DATA_FLOW_OBSERVED`,
 `CONTROL_EVALUATED`(모든 체크의 coverage 포함), `ACTION_EXECUTED`, `INTERACTION_COMPLETED`,
 `SECURITY_OUTCOME_SET`. `summarize_security_statistics`가 ledger를 Studio가 보여주는 통계로

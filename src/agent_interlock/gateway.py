@@ -158,6 +158,12 @@ class MCPToolGateway:
             ttl_seconds=ttl_seconds,
         )
 
+    def find_approval(
+        self, *, tenant_id: str, arguments: Mapping[str, Any], destinations: tuple[str, ...]
+    ) -> Approval | None:
+        """The unexpired approval bound to exactly these arguments and destinations, if any."""
+        return self._approvals.find(tenant_id, arguments, destinations)
+
     def evaluate_invocation(
         self,
         *,

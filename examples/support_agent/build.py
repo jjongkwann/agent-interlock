@@ -17,13 +17,14 @@ compiling, which is what makes the compile pass ``ARCH-TOOL-DIGEST-UNPINNED``. A
 carries a pin is left exactly as authored: a pin that disagrees with the definition is M2 drift and
 has to be reported by ``L1-M2-DEFINITION-DRIFT`` at call time, not quietly corrected here.
 
-**Why no approval step.** The email edge sets ``externalWriteRequiresApproval: false``. The guarded
-tool declares its intent from the model's own arguments and has no channel for an approval id
-(``InvocationIntent.approval_id`` is never set by the adapter), so
-``ApprovalStore.valid`` would refuse every approval this module could grant and every send would
-end at ``INTERLOCK-APPROVAL-REQUIRED``. The destination allowlist on ``tool.send-email``
-(``customer.example``) is what actually bounds the send, and it is enforced on the arguments the
-model chose. A project that wants a human in the loop puts one in front of ``run.main`` instead.
+**The approval step.** The email edge keeps ``externalWriteRequiresApproval: true``, so the first
+time the model asks to send, the gateway holds the call with ``INTERLOCK-APPROVAL-REQUIRED`` and
+the guarded tool hands the exact arguments to the ``approve`` hook ``build()`` was given. When the
+hook returns an approver identity, an approval bound to those arguments and destinations is
+granted and the call is judged again; every other control still has to clear on that pass. The
+demo approver in ``run.py`` stands in for the operator screen: it approves recipients under
+``customer.example`` and prints what it approved. Without a hook the send stays held, which is
+what ``interlock verify`` sees when it imports this module.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from agent_interlock import (
     bind_architecture,
     guard_tools,
 )
-from agent_interlock.adapters.anthropic_tools import GuardedAsyncTool, GuardedTool
+from agent_interlock.adapters.anthropic_tools import Approver, GuardedAsyncTool, GuardedTool
 from agent_interlock.canonical import canonical_digest
 
 from .tools import LOOKUP_ORDER, SEND_EMAIL, lookup_order, send_email
@@ -73,11 +74,13 @@ def build(
     bindings: Sequence[ToolBinding] = BINDINGS,
     *,
     ledger: Ledger | None = None,
+    approve: Approver | None = None,
 ) -> tuple[MCPToolGateway, tuple[GuardedTool | GuardedAsyncTool, ...]]:
     """Compile the manifest, admit the definitions, and return ``(gateway, guarded tools)``.
 
     ``bindings`` is a parameter so a test can swap a function or a definition without a second copy
-    of the wiring; ``ledger`` so a project can keep its evidence somewhere durable.
+    of the wiring; ``ledger`` so a project can keep its evidence somewhere durable; ``approve`` is
+    the operator hook a held external write is offered to (see the module docstring).
     """
     graph = ArchitectureGraph.from_dict(json.loads(MANIFEST.read_text(encoding="utf-8")))
     compiled = _pin_definitions(graph, bindings)
@@ -94,5 +97,6 @@ def build(
         source_actor_id=SOURCE_ACTOR_ID,
         bindings=list(bindings),
         approver=APPROVER,
+        approve=approve,
     )
     return gateway, tools

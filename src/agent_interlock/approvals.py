@@ -53,6 +53,28 @@ class ApprovalStore:
         self._approvals[approval.approval_id] = approval
         return approval
 
+    def find(self, tenant_id: str, arguments: Mapping[str, Any], destinations: tuple[str, ...]) -> Approval | None:
+        """The unexpired approval bound to exactly these arguments and destinations, if one exists.
+
+        This is how a caller that does not hold an approval id -- an adapter relaying a model's
+        tool call -- still gets to use an approval an operator granted for that exact call.
+        """
+        try:
+            canonical = tuple(canonical_destination(item) for item in destinations)
+        except ValueError:
+            return None
+        arguments_hash = canonical_digest(arguments)
+        now = time.time()
+        for approval in self._approvals.values():
+            if (
+                approval.tenant_id == tenant_id
+                and approval.arguments_hash == arguments_hash
+                and approval.destinations == canonical
+                and approval.expires_at_epoch >= now
+            ):
+                return approval
+        return None
+
     def valid(self, intent: InvocationIntent, tenant_id: str, arguments: Mapping[str, Any]) -> bool:
         if not intent.approval_id:
             return False

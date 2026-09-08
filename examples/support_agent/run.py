@@ -15,20 +15,41 @@ allowed to do, not a log the tools wrote about themselves.
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
+from typing import Any
 
 from agent_interlock import MCPToolGateway
+from agent_interlock.models import PolicyDecisionRecord
 
-from .build import build
+from .build import Approver, build
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 16000
+APPROVED_DOMAIN = "customer.example"
 
 
-def main(prompt: str, client: object | None = None) -> tuple[MCPToolGateway, str]:
+def approve_support_reply(arguments: Mapping[str, Any], decision: PolicyDecisionRecord) -> str | None:
+    """The demo stand-in for an operator screen.
+
+    The gateway held the call with ``INTERLOCK-APPROVAL-REQUIRED``; this sees the exact arguments
+    the model chose and either names the approver or refuses. A real deployment shows the same
+    arguments to a person.
+    """
+    recipient = str(arguments.get("to", ""))
+    if recipient.endswith(f"@{APPROVED_DOMAIN}"):
+        print(f"operator approved send to {recipient} ({decision.decision.value} -> approved)")
+        return "support-operator"
+    print(f"operator refused send to {recipient}")
+    return None
+
+
+def main(
+    prompt: str, client: object | None = None, *, approve: Approver | None = approve_support_reply
+) -> tuple[MCPToolGateway, str]:
     """Run one prompt to completion and print the reply and the evidence trail."""
     import anthropic
 
-    gateway, tools = build()
+    gateway, tools = build(approve=approve)
     if client is None:
         client = anthropic.Anthropic()
     runner = client.beta.messages.tool_runner(
