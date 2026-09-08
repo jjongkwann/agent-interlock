@@ -1,0 +1,46 @@
+{
+  "id": "msg_refund_tool_use",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "I'll look up order 2001, issue the refund, and email the customer.",
+      "citations": null
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_lookup_order",
+      "name": "lookup_order",
+      "input": {
+        "orderId": "2001"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_issue_refund",
+      "name": "issue_refund",
+      "input": {
+        "orderId": "2001",
+        "amount": 42.5
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_notify_customer",
+      "name": "notify_customer",
+      "input": {
+        "to": "dana@customer.example",
+        "subject": "Your refund for order 2001",
+        "body": "We've issued a refund of 42.5 for order 2001."
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 430,
+    "output_tokens": 112
+  }
+}

@@ -1,0 +1,448 @@
+{
+  "apiVersion": "interlock.dev/v1alpha1",
+  "kind": "Architecture",
+  "metadata": {
+    "id": "refund-agent",
+    "version": "1.0.0"
+  },
+  "spec": {
+    "nodes": [
+      {
+        "id": "user.customer",
+        "type": "USER",
+        "owner": "refund-platform",
+        "identity": "oidc://refund-customer",
+        "capabilities": [
+          "REFUND_REQUEST"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3"
+        ],
+        "trustZone": "EXTERNAL"
+      },
+      {
+        "id": "agent.refund",
+        "type": "AGENT",
+        "owner": "refund-platform",
+        "identity": "spiffe://prod.example/agent/refund",
+        "capabilities": [
+          "REFUND_LOOKUP",
+          "REFUND_ISSUE",
+          "REFUND_NOTIFY"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "tool.lookup-order",
+        "type": "TOOL",
+        "owner": "refund-platform",
+        "identity": "spiffe://prod.example/tool/refund-lookup-order",
+        "capabilities": [
+          "ORDER_LOOKUP"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "READ"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "orderId"
+          ],
+          "properties": {
+            "orderId": {
+              "type": "string",
+              "maxLength": 32
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "orderId",
+            "status",
+            "amount",
+            "customerEmail"
+          ],
+          "properties": {
+            "orderId": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "amount": {
+              "type": "number"
+            },
+            "customerEmail": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "additionalProperties": false
+        },
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "tool.issue-refund",
+        "type": "TOOL",
+        "owner": "refund-platform",
+        "identity": "spiffe://prod.example/tool/issue-refund",
+        "capabilities": [
+          "REFUND_ISSUE"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "EXTERNAL_WRITE"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "orderId",
+            "amount"
+          ],
+          "properties": {
+            "orderId": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "amount": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "refundId",
+            "amount",
+            "status"
+          ],
+          "properties": {
+            "refundId": {
+              "type": "string"
+            },
+            "amount": {
+              "type": "number"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "tool.notify-customer",
+        "type": "TOOL",
+        "owner": "refund-platform",
+        "identity": "spiffe://prod.example/tool/notify-customer",
+        "capabilities": [
+          "NOTIFY_SEND"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "EXTERNAL_WRITE"
+        ],
+        "allowedDomains": [
+          "customer.example"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "to",
+            "subject",
+            "body"
+          ],
+          "properties": {
+            "to": {
+              "type": "string",
+              "format": "email"
+            },
+            "subject": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "body": {
+              "type": "string",
+              "maxLength": 4000
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "status",
+            "to"
+          ],
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "additionalProperties": false
+        },
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "external.customer-email",
+        "type": "EXTERNAL",
+        "owner": "refund-platform",
+        "identity": "dns://customer.example",
+        "allowedDomains": [
+          "customer.example"
+        ],
+        "dataAccess": [
+          "D3",
+          "D7"
+        ],
+        "trustZone": "EXTERNAL"
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge.customer-refund-request",
+        "relationshipId": "REL-01",
+        "source": "user.customer",
+        "target": "agent.refund",
+        "relationship": "REQUESTS",
+        "policy": {
+          "id": "refund-request-input",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "REFUND_REQUEST"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "input-identity-and-taint",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "INPUT_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "input-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.refund-lookup-order",
+        "relationshipId": "REL-05",
+        "source": "agent.refund",
+        "target": "tool.lookup-order",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "refund-lookup-invoke",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "REFUND_LOOKUP"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireActiveDefinition": true,
+          "requireDigestPin": true,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "lookup-definition-and-call-guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "lookup-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.refund-issue-refund",
+        "relationshipId": "REL-05",
+        "source": "agent.refund",
+        "target": "tool.issue-refund",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "refund-issue-invoke",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "REFUND_ISSUE"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireActiveDefinition": true,
+          "requireDigestPin": true,
+          "requireExplicitDestination": false,
+          "externalWriteRequiresApproval": true,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "issue-refund-definition-and-call-guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "issue-refund-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.refund-notify-customer",
+        "relationshipId": "REL-05",
+        "source": "agent.refund",
+        "target": "tool.notify-customer",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "refund-notify-invoke",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "REFUND_NOTIFY"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireActiveDefinition": true,
+          "requireDigestPin": true,
+          "requireExplicitDestination": true,
+          "newDestinationAction": "HOLD",
+          "externalWriteRequiresApproval": false,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "notify-definition-and-call-guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "notify-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.email-customer",
+        "relationshipId": "REL-07",
+        "source": "tool.notify-customer",
+        "target": "external.customer-email",
+        "relationship": "SENDS",
+        "policy": {
+          "id": "customer-email-egress",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "REFUND_NOTIFY"
+          ],
+          "allowedDataClasses": [
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireExplicitDestination": true,
+          "newDestinationAction": "HOLD",
+          "externalWriteRequiresApproval": false,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "egress-destination-and-dlp",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "EGRESS_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "egress-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      }
+    ]
+  }
+}
