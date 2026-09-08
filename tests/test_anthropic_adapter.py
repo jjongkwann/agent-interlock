@@ -319,6 +319,14 @@ class AdapterCases:
         self.assertNotIn("INTERLOCK-APPROVAL-REQUIRED", str(caught.exception))
         self.assertEqual(mailer.calls, [])
 
+    def test_a_destination_that_does_not_parse_keeps_its_refusal_instead_of_a_parse_error(self):
+        gateway, tool, mailer = build_requiring_approval(lambda arguments, decision: "support-operator")
+        with self.assertRaises(self.tool_error_class) as caught:
+            tool.call({"to": "@", "body": "hi"})
+
+        self.assertIn("L1-M9-NEW-DESTINATION", str(caught.exception))
+        self.assertEqual(mailer.calls, [])
+
     def test_without_an_approver_the_held_call_is_refused_and_says_so(self):
         gateway, tool, mailer = build_requiring_approval()
         with self.assertRaises(self.tool_error_class) as caught:

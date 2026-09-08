@@ -248,11 +248,20 @@ class _GuardedToolBase:
         approver = self._approve(arguments, decision)
         if approver is None:
             return decision
-        destinations = self._declared_intent(arguments).destinations
+        try:
+            destinations = tuple(
+                canonical_destination(item) for item in self._declared_intent(arguments).destinations
+            )
+        except ValueError:
+            # A destination the canonicaliser cannot read is already a finding of its own
+            # (L1-M9-NEW-DESTINATION), so the second pass would refuse the call anyway. Returning
+            # the first decision keeps the refusal and its reason codes rather than replacing them
+            # with a parse error the model cannot act on.
+            return decision
         self._gateway.grant_approval(
             tenant_id=self._tenant_id,
             arguments=arguments,
-            canonical_destinations=tuple(canonical_destination(item) for item in destinations),
+            canonical_destinations=destinations,
             approver=approver,
         )
         return self._evaluate(arguments)
