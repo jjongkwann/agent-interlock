@@ -117,6 +117,13 @@ class CompileShadowTests(unittest.TestCase):
         self.assertTrue(bundle["links"])
         self.assertTrue(all(link["mode"] == "SHADOW" for link in bundle["links"]))
         self.assertEqual(bundle["architecture"]["kind"], "Architecture")
+        # The example manifest authors every edge as ENFORCE; --shadow must rewrite the
+        # architecture body itself (not just the derived links) so both stay consistent (D5).
+        source_manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertTrue(all(edge["policy"]["mode"] == "ENFORCE" for edge in source_manifest["spec"]["edges"]))
+        self.assertTrue(
+            all(edge["policy"]["mode"] == "SHADOW" for edge in bundle["architecture"]["spec"]["edges"])
+        )
         self.assertEqual(
             len(bundle["architecture"]["spec"]["trustBoundaries"]),
             len(ArchitectureGraph.from_dict(json.loads(MANIFEST.read_text(encoding="utf-8"))).boundaries),

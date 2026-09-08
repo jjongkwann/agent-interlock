@@ -24,7 +24,7 @@ from agent_interlock import (
     canonical_json,
 )
 from agent_interlock.gateway import GatewayError
-from agent_interlock.security import canonical_destination, validate_authorization_url
+from agent_interlock.security import canonical_destination, unsupported_schema_keywords, validate_authorization_url
 
 INPUT_SCHEMA = {
     "type": "object",
@@ -441,6 +441,51 @@ class SecurityHelperTests(unittest.TestCase):
         self.assertFalse(validate_authorization_url("file:///etc/passwd", allowed_hosts=allowed)[0])
         self.assertFalse(validate_authorization_url("https://127.0.0.1/callback", allowed_hosts=allowed)[0])
         self.assertTrue(validate_authorization_url("https://auth.example/oauth", allowed_hosts=allowed)[0])
+
+
+class SchemaKeywordTests(unittest.TestCase):
+    def test_unsupported_schema_keywords_reports_path_qualified_names(self):
+        schema = {
+            "type": "object",
+            "oneOf": [{"type": "string"}],
+            "properties": {
+                "to": {"type": "integer", "minimum": 0},
+                "attachments": {"type": "array", "items": {"$ref": "#/$defs/attachment"}},
+            },
+        }
+        self.assertEqual(
+            unsupported_schema_keywords(schema),
+            ("$.properties.attachments.items: $ref", "$.properties.to: minimum", "$: oneOf"),
+        )
+
+    def test_supported_keywords_plus_documentation_keys_pass(self):
+        schema = {
+            "type": "object",
+            "description": "Send a message.",
+            "properties": {"to": {"type": "string", "format": "email", "description": "recipient"}},
+            "additionalProperties": False,
+        }
+        self.assertEqual(unsupported_schema_keywords(schema), ())
+
+    def test_actor_spec_rejects_unsupported_schema_keyword(self):
+        with self.assertRaises(ValueError):
+            ActorSpec(
+                id="tool.x",
+                type=ActorType.TOOL,
+                owner="team",
+                identity="spiffe://example/tool/x",
+                input_schema={"type": "object", "properties": {"n": {"type": "integer", "minimum": 0}}},
+            )
+
+    def test_tool_definition_with_ref_is_observed_and_quarantined(self):
+        gateway = MCPToolGateway()
+        definition = replace(
+            tool_definition(),
+            input_schema={"type": "object", "properties": {"attachment": {"$ref": "#/$defs/attachment"}}},
+        )
+        revision = gateway.observe_definition(definition, tenant_id="tenant-a")
+        self.assertEqual(revision.state, DefinitionState.QUARANTINED)
+        self.assertIn("L1-M1-SCHEMA-KEYWORD-UNSUPPORTED", revision.reason_codes)
 
 
 class SDKTests(unittest.TestCase):

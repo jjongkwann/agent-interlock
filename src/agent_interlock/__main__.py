@@ -33,7 +33,13 @@ def _finding_value(finding) -> dict[str, str | None]:
 
 
 def _compile_shadow(graph, compiler, findings) -> int:  # noqa: ANN001
-    """Review gate + SHADOW deploy: block on critical findings, else emit a SHADOW bundle."""
+    """Review gate + SHADOW deploy: block on critical findings, else emit a SHADOW bundle.
+
+    Every edge policy mode is rewritten to SHADOW before compiling and before
+    ``to_manifest()``, so the bundle's ``architecture`` section and its
+    derived ``links[].mode`` are consistent, and both are covered by the
+    digest.
+    """
     if any(item.severity == FindingSeverity.CRITICAL for item in findings):
         print(
             json.dumps(
@@ -49,24 +55,28 @@ def _compile_shadow(graph, compiler, findings) -> int:  # noqa: ANN001
             )
         )
         return 2
-    compiled = compiler.compile(graph, reject_critical=False)
+    shadow_graph = replace(
+        graph,
+        edges=tuple(replace(edge, policy=replace(edge.policy, mode=PolicyMode.SHADOW)) for edge in graph.edges),
+    )
+    compiled = compiler.compile(shadow_graph, reject_critical=False)
     links = [
         {
             "edgeId": edge.id,
-            "policyId": replace(compiled.links[edge.id], mode=PolicyMode.SHADOW).id,
+            "policyId": compiled.links[edge.id].id,
             "source": edge.source,
             "target": edge.target,
             "relationship": edge.relationship,
-            "mode": PolicyMode.SHADOW.value,
+            "mode": compiled.links[edge.id].mode.value,
         }
-        for edge in graph.edges
+        for edge in shadow_graph.edges
     ]
     body = {
-        "architectureId": graph.id,
-        "version": graph.version,
+        "architectureId": shadow_graph.id,
+        "version": shadow_graph.version,
         "actors": sorted(compiled.actors),
         "links": links,
-        "architecture": graph.to_manifest(),
+        "architecture": shadow_graph.to_manifest(),
     }
     print(
         json.dumps(
@@ -193,7 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     compile_command.add_argument(
         "--shadow",
         action="store_true",
-        help="gate on critical findings, force every edge to SHADOW, and emit a deployable bundle",
+        help="gate on critical findings, rewrite every edge policy mode to SHADOW, and emit a deployable bundle",
     )
     runtime_diff = actions.add_parser("runtime-diff")
     runtime_diff.add_argument("manifest")

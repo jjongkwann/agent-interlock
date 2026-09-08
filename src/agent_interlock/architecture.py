@@ -1138,9 +1138,10 @@ def _parse_node(value: Any) -> ArchitectureNode:
     if position_value is not None:
         position_map = _mapping(position_value, "node.position")
         position = (float(position_map.get("x", 0)), float(position_map.get("y", 0)))
-    return ArchitectureNode(
-        actor=ActorSpec(
-            id=_required_string(item, "id"),
+    node_id = _required_string(item, "id")
+    try:
+        actor = ActorSpec(
+            id=node_id,
             type=ActorType(_required_string(item, "type")),
             owner=_required_string(item, "owner"),
             identity=_required_string(item, "identity"),
@@ -1154,7 +1155,11 @@ def _parse_node(value: Any) -> ArchitectureNode:
             allowed_domains=frozenset(_strings(item.get("allowedDomains", []), "allowedDomains")),
             max_delegation_depth=int(item.get("maxDelegationDepth", 1)),
             definition_digest=item.get("definitionDigest"),
-        ),
+        )
+    except ValueError as error:
+        raise ValueError(f"node {node_id}: {error}") from error
+    return ArchitectureNode(
+        actor=actor,
         controls=tuple(_parse_control(control) for control in _sequence(item.get("controls", []), "controls")),
         position=position,
         trust_zone=TrustZone(str(item["trustZone"])) if item.get("trustZone") is not None else None,

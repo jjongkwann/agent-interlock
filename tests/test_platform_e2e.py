@@ -54,6 +54,7 @@ from agent_interlock import (
     WorkflowTaskState,
     compare_runtime,
     create_a2a_http_server,
+    deployed_architecture,
     ed25519_public_key_bytes,
     sign_deployment_approval,
     summarize_security_statistics,
@@ -340,8 +341,9 @@ class FakePlatformE2ETests(unittest.TestCase):
             store.promote(bundle.bundle_digest, approvals, trusted_approvers=trusted)
             self.assertEqual(store.active()["mode"], "ENFORCE")
 
-            # Reconstruct the exact promoted architecture rather than using an unreviewed object.
-            deployed_graph = ArchitectureGraph.from_dict(bundle.body["architecture"])
+            # Reconstruct the exact promoted architecture, with the deployment record's mode
+            # applied to every edge, rather than using an unreviewed object.
+            deployed_graph = deployed_architecture(bundle.body, store.active()["mode"])
             compiled = ArchitectureCompiler().compile(deployed_graph)
             mcp_transport.bind_compiled_architecture(
                 compiled,

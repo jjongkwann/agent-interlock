@@ -164,25 +164,34 @@ ActorGuard는 기존 비즈니스 로직의 앞뒤에서 다음 처리를 수행
 
 SDK가 없어도 Proxy로 통신은 관측할 수 있지만, plan step·memory provenance·sub-agent tree 같은 의미는 SDK가 있어야 정확히 수집할 수 있다.
 
-### 4.2 `wrap()`은 집행하지만 승인할 수는 없다
+### 4.2 `wrap()`은 집행하며, 이제 승인도 할 수 있다
 
-`wrap()`은 관측 전용이 아니다. `PolicyMode.ENFORCE`에서는 `SDK_PROFILE`의 check 18개를 실행하고(`sdk.py:152`), 종합 판정이 거부면 `GatewayError`를 raise한다(`sdk.py:199`). 호출은 일어나지 않는다. gateway의 check 20개 중 18개가 여기서 실행되며, 빠지는 것은 M2 definition check 2개뿐이다. SDK는 `ToolRevision`을 보유하지 않기 때문이다.
+`wrap()`은 관측 전용이 아니다. `PolicyMode.ENFORCE`에서는 `SDK_PROFILE`의 check 18개를 실행하고(`sdk.py:152`), 종합 판정이 거부면 `GatewayError`를 raise한다. 호출은 일어나지 않는다. gateway의 check 20개 중 18개가 여기서 실행되며, 빠지는 것은 M2 definition check 2개뿐이다. SDK는 `ToolRevision`을 보유하지 않기 때문이다.
 
-**`wrap()`으로 감싼 Tool은 기본 `LinkPolicy`에서 외부 쓰기를 수행할 수 없다.** `external_write_requires_approval`의 기본값이 `True`이므로 `approval_valid`가 설정되지 않는 한 모든 `EXTERNAL_WRITE` intent에서 `INTERLOCK-APPROVAL-REQUIRED`가 발생하는데, SDK 경로는 이 값을 설정하지 않는다. `CheckContext.approval_valid`의 기본값은 `False`이고(`policy.py:81`), `_invoke`는 이 값을 전달하지 않으며, `Interlock`도 `Actor`도 승인 API를 노출하지 않는다. `grant_approval`은 `MCPToolGateway`에만 있다(`gateway.py:140`).
-
-모든 것을 올바로 선언해도 — 승인된 목적지, 선언된 부작용, taint 없음 — 여기에 도달한다.
+**`wrap()`으로 감싼 Tool은 일치하는 승인을 보유하면 외부 쓰기를 수행할 수 있다.** `external_write_requires_approval`의 기본값이 `True`이므로 `approval_valid`가 설정되지 않는 한 모든 `EXTERNAL_WRITE` intent에서 `INTERLOCK-APPROVAL-REQUIRED`가 발생한다. 이제 gateway와 SDK는 승인 저장소 하나(`approvals.ApprovalStore`)를 공유한다. `Interlock.grant_approval(...)`은 `MCPToolGateway.grant_approval`과 같은 방식으로 승인을 발급하고, `_invoke`는 매 호출마다 이를 조회해 `CheckContext.approval_valid`로 전달한다. 승인은 발급 당시의 정확한 인자 해시, canonical 목적지 집합, tenant, 만료 시각에 바인딩되며 그 외에는 아무것도 검증하지 않는다.
 
 ```python
 agent.connect(tool, LinkPolicy(id="p", version="1", mode=PolicyMode.ENFORCE))
 send = tool.wrap(send_email)
-send({"to": "user@customer.example"}, source=agent, tenant_id="t",
+arguments = {"to": "user@customer.example"}
+approval = interlock.grant_approval(
+    tenant_id="t",
+    arguments=arguments,
+    canonical_destinations=(canonical_destination("user@customer.example"),),
+    approver="operator",
+)
+send(arguments, source=agent, tenant_id="t",
      intent=InvocationIntent(purpose="reply",
                              destinations=("user@customer.example",),
-                             estimated_side_effect=SideEffect.EXTERNAL_WRITE))
+                             estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+                             approval_id=approval.approval_id))
+# 실행된다 -- approval_id 없이 같은 호출을 하면 여전히 다음을 raise한다
 # GatewayError: actor invocation blocked: INTERLOCK-APPROVAL-REQUIRED
 ```
 
-동작은 fail-closed이고 방향은 옳지만, 승인 경로는 단순히 미구현인 것이 아니라 **설계상 도달할 수 없다**. SDK에 승인 표면이 생기기 전까지 in-process 외부 쓰기에는 둘 중 하나가 필요하다. 통제를 내려놓는 명시적이고 감사 가능한 결정인 `LinkPolicy(external_write_requires_approval=False)`를 쓰거나, 승인을 보유할 수 있는 `MCPToolGateway`를 경유하는 것이다. 부작용을 `EXTERNAL_WRITE`가 아닌 다른 값으로 선언해 우회해서는 안 된다. 그렇게 하면 눈에 보이는 차단을 잘해야 조용한 `L1-UNDECLARED-SIDE-EFFECT`로, 최악의 경우 탐지되지 않은 외부 쓰기로 바꾸는 것이다.
+`_invoke`는 gateway의 결과 처리도 공유한다. 반환되는 모든 값은 `results.inspect_tool_result`를 거치며, 이는 비밀정보를 redact하고 결과를 target의 output schema로 검증한다. `ENFORCE`에서는 schema가 유효하지 않은 결과가 gateway와 동일한 quarantine 값으로 교체되고, 인자 쪽 check가 아무것도 flag하지 않았더라도 `SECURITY_OUTCOME_SET`은 이 quarantine을 `SUCCEEDED`로 기록한다. `SHADOW`/`OBSERVE`에서는 sanitize만 되고 quarantine되지 않은 값이 반환되며 schema 오류는 결과를 바꾸지 않은 채 기록된다.
+
+`LinkPolicy(external_write_requires_approval=False)`는 통제를 완전히 내려놓는 명시적이고 감사 가능한 결정으로 여전히 사용할 수 있다. 승인이 없다고 부작용을 `EXTERNAL_WRITE`가 아닌 다른 값으로 선언해 우회해서는 안 된다. 그렇게 하면 눈에 보이는 hold를 잘해야 조용한 `L1-UNDECLARED-SIDE-EFFECT`로, 최악의 경우 탐지되지 않은 외부 쓰기로 바꾸는 것이다.
 
 ## 5. InterlockLink와 LinkPolicy
 
@@ -366,7 +375,7 @@ Gateway event 없음 + Target event 있음   → CONTROL_BYPASS
 ## 11. MVP 완료 기준
 
 - 개발자가 Actor 두 개를 선언하고 `connect()`로 관계를 만들 수 있다.
-- 기존 Tool을 `wrap()`해 호출 전 정책을 집행할 수 있다. *(충족. 단 막다른 길이 하나 있다 — 외부 쓰기는 SDK에서 승인할 수 없다. §4.2 참고.)*
+- 기존 Tool을 `wrap()`해 호출 전 정책을 집행할 수 있으며, `Interlock.grant_approval`로 승인받은 외부 쓰기도 포함한다. *(충족. §4.2 참고.)*
 - 모든 호출에 trace와 Interaction Event가 생성된다.
 - 선언되지 않은 Actor 관계를 탐지한다.
 - 비신뢰 입력이 외부 쓰기 Tool로 전달될 때 HOLD/BLOCK한다.

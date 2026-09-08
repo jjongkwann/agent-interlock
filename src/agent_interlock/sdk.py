@@ -8,12 +8,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .approvals import Approval, ApprovalStore
 from .canonical import canonical_digest, canonical_json
 from .gateway import GatewayError
 from .ledger import InMemoryLedger, Ledger, declare_coverage
 from .models import ActorSpec, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode
 from .policy import SDK_PROFILE, CheckContext, control_coverage, execution_permitted, run_checks, strongest_decision
-from .security import validate_schema
+from .results import inspect_tool_result
 
 
 class UndeclaredRelationship(GatewayError):
@@ -60,6 +61,7 @@ class Interlock:
         self._links: dict[tuple[str, str], LinkPolicy] = {}
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
         self._declared_coverage: set[tuple[str, ...]] = set()
+        self._approvals = ApprovalStore()
 
     def define_actor(self, spec: ActorSpec) -> Actor:
         if spec.id in self._actors:
@@ -72,6 +74,23 @@ class Interlock:
         if source.spec.id not in self._actors or target.spec.id not in self._actors:
             raise ValueError("actors must belong to this Interlock instance")
         self._links[(source.spec.id, target.spec.id)] = policy
+
+    def grant_approval(
+        self,
+        *,
+        tenant_id: str,
+        arguments: Mapping[str, Any],
+        canonical_destinations: tuple[str, ...],
+        approver: str,
+        ttl_seconds: int = 300,
+    ) -> Approval:
+        return self._approvals.grant(
+            tenant_id=tenant_id,
+            arguments=arguments,
+            canonical_destinations=canonical_destinations,
+            approver=approver,
+            ttl_seconds=ttl_seconds,
+        )
 
     def design_graph(self) -> dict[str, Any]:
         return {
@@ -162,6 +181,7 @@ class Interlock:
                 trace_id=trace,
                 span_id=span,
                 credential=credential,
+                approval_valid=self._approvals.valid(intent, tenant_id, arguments),
                 relationship=policy.relationship,
                 payload_bytes=len(canonical_json(dict(arguments))),
             ),
@@ -222,15 +242,28 @@ class Interlock:
             payload={"result": "COMPLETED", "connectorExecutionId": execution_id},
             **common,
         )
-        output_errors = validate_schema(result, target.spec.output_schema)
+        inspection = inspect_tool_result(result, target.spec.output_schema)
+        # ENFORCE returns the same quarantine value the gateway emits for a schema-invalid
+        # result; SHADOW/OBSERVE return the sanitized-but-unquarantined value since they do not
+        # enforce, and only record the errors.
+        return_value = inspection.clean if enforced else inspection.sanitized
         self.ledger.append(
             "INTERACTION_COMPLETED",
-            payload={"resultHash": canonical_digest(result), "schemaErrors": output_errors},
+            payload={
+                "resultHash": canonical_digest(return_value),
+                "labels": list(inspection.labels),
+                "secretDetected": inspection.secret_detected,
+                "schemaErrors": list(inspection.schema_errors),
+            },
             **common,
         )
+        # Same reasons-based outcome the gateway derives from its pre-execution decision, with one
+        # addition: a result quarantined under ENFORCE is a control acting, even when nothing was
+        # flagged before execution -- so it must not read as SecurityOutcome.UNKNOWN.
+        security_outcome = "SUCCEEDED" if reasons or (enforced and inspection.schema_errors) else "UNKNOWN"
         self.ledger.append(
             "SECURITY_OUTCOME_SET",
-            payload={"securityOutcome": "SUCCEEDED" if reasons else "UNKNOWN"},
+            payload={"securityOutcome": security_outcome},
             **common,
         )
-        return result
+        return return_value

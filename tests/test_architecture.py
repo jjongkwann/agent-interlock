@@ -59,6 +59,16 @@ class ArchitectureModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ArchitectureGraph.from_dict(value)
 
+    def test_node_schema_with_unsupported_keyword_is_rejected_with_node_context(self):
+        value = manifest()
+        node = value["spec"]["nodes"][0]
+        node["inputSchema"] = {"type": "object", "properties": {"to": {"type": "string", "minLength": 1}}}
+        with self.assertRaises(ValueError) as ctx:
+            ArchitectureGraph.from_dict(value)
+        message = str(ctx.exception)
+        self.assertIn(node["id"], message)
+        self.assertIn("minLength", message)
+
     def test_graph_rejects_duplicate_control_ids(self):
         value = manifest()
         value["spec"]["edges"][1]["controls"][0]["id"] = value["spec"]["edges"][0]["controls"][0]["id"]

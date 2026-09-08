@@ -17,9 +17,11 @@ from pathlib import Path
 from agent_interlock import (
     DeploymentBundle,
     GitBundleStore,
+    PolicyMode,
     SigningBackendUnavailable,
     StudioDeploymentError,
     TrustedApprovalKey,
+    deployed_architecture,
     ed25519_public_key_bytes,
     sign_deployment_approval,
 )
@@ -198,6 +200,37 @@ class StudioDeploymentTests(unittest.TestCase):
         with self.assertRaises(StudioDeploymentError) as raised:
             DeploymentBundle.from_compile_output(value)
         self.assertEqual(raised.exception.reason_code, "L1-STUDIO-BUNDLE-DIGEST-MISMATCH")
+
+
+class DeployedArchitectureTests(unittest.TestCase):
+    """D5: the deployment record's mode always wins over per-edge modes in the bundle body."""
+
+    def test_applies_enforce_to_a_body_whose_edges_are_shadow(self):
+        bundle = compile_bundle()  # --shadow: every edge in the body is already SHADOW
+        edges = bundle.body["architecture"]["spec"]["edges"]
+        self.assertTrue(all(edge["policy"]["mode"] == "SHADOW" for edge in edges))
+
+        graph = deployed_architecture(bundle.body, "ENFORCE")
+        self.assertTrue(graph.edges)
+        self.assertTrue(all(edge.policy.mode == PolicyMode.ENFORCE for edge in graph.edges))
+
+    def test_applies_shadow_to_a_body_whose_edges_are_enforce(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(["architecture", "compile", str(MANIFEST)])
+        self.assertEqual(code, 0)
+        body = json.loads(out.getvalue())
+        edges = body["architecture"]["spec"]["edges"]
+        self.assertTrue(all(edge["policy"]["mode"] == "ENFORCE" for edge in edges))
+
+        graph = deployed_architecture(body, "SHADOW")
+        self.assertTrue(graph.edges)
+        self.assertTrue(all(edge.policy.mode == PolicyMode.SHADOW for edge in graph.edges))
+
+    def test_missing_architecture_is_rejected(self):
+        with self.assertRaises(StudioDeploymentError) as raised:
+            deployed_architecture({"architectureId": "a", "version": "1"}, "ENFORCE")
+        self.assertEqual(raised.exception.reason_code, "L1-STUDIO-BUNDLE-UNKNOWN")
 
 
 def _compile_dict(manifest: dict) -> DeploymentBundle:

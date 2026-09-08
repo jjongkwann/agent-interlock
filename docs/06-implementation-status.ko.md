@@ -22,7 +22,7 @@ status: active
 
 | 계약 | 구현 | 검증 |
 |---|---|---|
-| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests`(**시험 한 개** — `define`/`connect`/graph 배선만), `tests/test_sdk_profile.py`(시험 14개: `wrap()`이 실행하는 check 18개, 그 rename map, 실행 게이트) |
+| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests`(**시험 한 개** — `define`/`connect`/graph 배선만), `tests/test_sdk_profile.py`(시험 14개: `wrap()`이 실행하는 check 18개, 그 rename map, 실행 게이트), `tests/test_sdk_results.py`(시험 8개: `Interlock.grant_approval`과 공유되는 `results.inspect_tool_result` 실행 후 처리) |
 | 통합 check 표·profile | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(28)·`run_checks` | `tests/test_check_table.py`(시험 20개: 표 구성, 커버리지 상태 4종(`RAN_CLEAN`, `RAN_FLAGGED`, `INAPPLICABLE`, `ABSENT`), check별 `armed`, 중복 id 거부) |
 | 집행점별 profile | `GATEWAY_PROFILE`(20) · `SDK_PROFILE`(18) · `A2A_PROFILE`(17) → `A2A_LINK_PROFILE`(12)·`A2A_BOUNDARY_PROFILE`(5) | profile마다 산출되는 코드 집합만이 아니라 rename map **전체**를 고정; 방출 가능한 reason key가 모두 매핑돼 있는지 정적 감사 |
 | 판정 심각도 순서 | `models.py` `_DECISION_RANK`(`ControlDecision` 멤버 11개 전부, fallback 없음; 완전하지 않으면 import 시점에 `RuntimeError`) | `tests/test_decision_ranking.py`(시험 12개: 완전성, 충돌 쌍을 이름으로 지목하는 유일성, `BYPASSED`가 `ALLOW`보다 아래, `ERROR`가 `QUARANTINE`보다 아래) |

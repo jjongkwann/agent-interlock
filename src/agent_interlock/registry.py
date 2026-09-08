@@ -11,6 +11,7 @@ from typing import Protocol
 
 from .canonical import CANONICALIZER_VERSION, canonical_digest, raw_digest
 from .models import DefinitionState, ToolDefinition
+from .security import unsupported_schema_keywords
 
 
 class InvalidStateTransition(ValueError):
@@ -193,6 +194,10 @@ class DefinitionRegistry:
     def _inspect(definition: ToolDefinition) -> Iterable[str]:
         if _METADATA_INSTRUCTION.search(definition.description):
             yield "L1-M1-METADATA-INSTRUCTION"
+        if unsupported_schema_keywords(definition.input_schema) or unsupported_schema_keywords(
+            definition.output_schema
+        ):
+            yield "L1-M1-SCHEMA-KEYWORD-UNSUPPORTED"
         description = definition.description.casefold()
         own_name = definition.tool_name.casefold()
         cross_ref = re.findall(r"(?:tool|server)\s+[`'\"]?([a-z0-9_.:/-]+)", description)

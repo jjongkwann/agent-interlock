@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from .approvals import Approval, ApprovalStore
 from .canonical import canonical_digest
 from .config_guard import ConfigDecision, ConfigGuard, ConfigPrincipal, ConfigRole, RuntimeConfigProbe
 from .ledger import InMemoryLedger, Ledger, declare_coverage
@@ -31,7 +32,8 @@ from .models import (
 from .policy import EvaluationInput, evaluate, execution_permitted, strongest_decision
 from .receipts import FakeExternalReceiptStore
 from .registry import DefinitionRegistry, ToolRevision
-from .security import canonical_destination, destination_domain, sanitize_secrets, validate_schema
+from .results import inspect_tool_result
+from .security import destination_domain
 
 
 class GatewayError(RuntimeError):
@@ -50,16 +52,6 @@ class ArgumentBindingError(GatewayError):
 
 class ResultRejected(GatewayError):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class Approval:
-    approval_id: str
-    tenant_id: str
-    arguments_hash: str
-    destinations: tuple[str, ...]
-    expires_at_epoch: float
-    approver: str
 
 
 @dataclass(slots=True)
@@ -95,7 +87,7 @@ class MCPToolGateway:
         self._decisions: dict[str, _Pending] = {}
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
         self._declared_coverage: set[tuple[str, ...]] = set()
-        self._approvals: dict[str, Approval] = {}
+        self._approvals = ApprovalStore()
         self._idempotency: dict[tuple[str, str], tuple[str, InvocationResult]] = {}
         self._execution_decisions: dict[str, str] = {}
 
@@ -148,16 +140,13 @@ class MCPToolGateway:
         approver: str,
         ttl_seconds: int = 300,
     ) -> Approval:
-        approval = Approval(
-            approval_id=str(uuid.uuid4()),
+        return self._approvals.grant(
             tenant_id=tenant_id,
-            arguments_hash=canonical_digest(arguments),
-            destinations=canonical_destinations,
-            expires_at_epoch=time.time() + ttl_seconds,
+            arguments=arguments,
+            canonical_destinations=canonical_destinations,
             approver=approver,
+            ttl_seconds=ttl_seconds,
         )
-        self._approvals[approval.approval_id] = approval
-        return approval
 
     def evaluate_invocation(
         self,
@@ -180,7 +169,7 @@ class MCPToolGateway:
         interaction_id = str(uuid.uuid4())
         trace = trace_id or f"trace-{uuid.uuid4()}"
         span = span_id or f"span-{uuid.uuid4()}"
-        approval_valid = self._approval_valid(intent, tenant_id, arguments)
+        approval_valid = self._approvals.valid(intent, tenant_id, arguments)
 
         self.ledger.append(
             "INTERACTION_REQUESTED",
@@ -354,28 +343,7 @@ class MCPToolGateway:
     def inspect_result(
         self, pending: _Pending, connector_execution_id: str, raw_result: Any
     ) -> tuple[Any, tuple[str, ...]]:
-        clean, secret_detected = sanitize_secrets(raw_result)
-        schema_value = (
-            clean["structuredContent"] if isinstance(clean, Mapping) and "structuredContent" in clean else clean
-        )
-        schema_errors = validate_schema(schema_value, pending.revision.definition.output_schema)
-        labels = ["UNTRUSTED_TOOL_RESULT"]
-        if secret_detected:
-            labels.append("D5_REDACTED")
-        if schema_errors:
-            labels.append("SCHEMA_INVALID")
-            if isinstance(clean, Mapping) and any(key in clean for key in ("content", "structuredContent", "isError")):
-                clean = {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Tool result quarantined by Agent Interlock.",
-                        }
-                    ],
-                    "isError": True,
-                }
-            else:
-                clean = {"quarantined": True, "reason": "result schema validation failed"}
+        inspection = inspect_tool_result(raw_result, pending.revision.definition.output_schema)
         self.ledger.append(
             "INTERACTION_COMPLETED",
             tenant_id=pending.tenant_id,
@@ -386,15 +354,15 @@ class MCPToolGateway:
             target_actor_id=pending.target.id,
             payload={
                 "connectorExecutionId": connector_execution_id,
-                "resultHash": canonical_digest(clean),
-                "labels": labels,
-                "secretDetected": secret_detected,
-                "schemaErrors": schema_errors,
+                "resultHash": canonical_digest(inspection.clean),
+                "labels": list(inspection.labels),
+                "secretDetected": inspection.secret_detected,
+                "schemaErrors": list(inspection.schema_errors),
             },
             environment=pending.environment,
             data_source=pending.data_source,
         )
-        return clean, tuple(labels)
+        return inspection.clean, inspection.labels
 
     def reconcile_transaction(
         self,
@@ -492,22 +460,6 @@ class MCPToolGateway:
             compensation_completed=summary.compensation_completed,
             downstream_byte_count=summary.byte_count,
             downstream_record_count=summary.record_count,
-        )
-
-    def _approval_valid(self, intent: InvocationIntent, tenant_id: str, arguments: Mapping[str, Any]) -> bool:
-        if not intent.approval_id:
-            return False
-        approval = self._approvals.get(intent.approval_id)
-        try:
-            destinations = tuple(canonical_destination(item) for item in intent.destinations)
-        except ValueError:
-            return False
-        return bool(
-            approval
-            and approval.tenant_id == tenant_id
-            and approval.arguments_hash == canonical_digest(arguments)
-            and approval.destinations == destinations
-            and approval.expires_at_epoch >= time.time()
         )
 
     @staticmethod

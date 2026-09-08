@@ -15,7 +15,6 @@ from typing import Any
 
 from .architecture import (
     ArchitectureCompiler,
-    ArchitectureGraph,
     CompiledArchitecture,
     OrchestrationTask,
     TaskTransport,
@@ -32,7 +31,7 @@ from .orchestration import (
     WorkflowRunStore,
     WorkflowTaskState,
 )
-from .studio_deploy import GitBundleStore
+from .studio_deploy import GitBundleStore, deployed_architecture
 
 AdapterProvider = Callable[[CompiledArchitecture], Mapping[TaskTransport, OrchestrationTaskAdapter]]
 
@@ -129,6 +128,16 @@ class RunControlService:
                 result.append(self._public_run(run, binding.bundle_digest))
             return tuple(result)
 
+    def edge_modes(self, *, tenant_id: str, run_id: str) -> dict[str, str]:
+        """Read-only view of the compiled edge policy modes bound to one run.
+
+        Reflects what Run Control actually enforces after applying the
+        deployment record's mode (D5), not the manifest's authored modes.
+        """
+        with self._lock:
+            binding = self._binding(tenant_id, run_id)
+            return {edge_id: policy.mode.value for edge_id, policy in binding.engine.architecture.links.items()}
+
     def resume(self, *, tenant_id: str, run_id: str) -> dict[str, Any]:
         with self._lock:
             binding = self._binding(tenant_id, run_id)
@@ -190,6 +199,7 @@ class RunControlService:
         if cached is not None:
             return digest, cached
         bundle = self.deployment_store.bundle(digest)
+        active_mode = active["mode"]
         architecture = bundle.body.get("architecture")
         if not isinstance(architecture, Mapping):
             raise RunControlError(
@@ -198,12 +208,22 @@ class RunControlService:
                 "active bundle does not contain an executable architecture",
             )
         try:
-            compiled = ArchitectureCompiler().compile(ArchitectureGraph.from_dict(architecture))
+            graph = deployed_architecture(bundle.body, active_mode)
+            compiled = ArchitectureCompiler().compile(graph)
             adapters = dict(self.adapter_provider(compiled))
         except RunControlError:
             raise
         except Exception as error:
             raise RunControlError(422, "RUN-ARCHITECTURE-INVALID", "active architecture cannot be loaded") from error
+        mismatched = sorted(
+            edge_id for edge_id, policy in compiled.links.items() if policy.mode.value != active_mode
+        )
+        if mismatched:
+            raise RunControlError(
+                422,
+                "RUN-MODE-MISMATCH",
+                f"compiled edge mode disagrees with the deployment record for: {', '.join(mismatched)}",
+            )
         definition = compiled.graph.orchestration
         if definition is None:
             raise RunControlError(422, "RUN-WORKFLOW-MISSING", "active architecture has no workflow")

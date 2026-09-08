@@ -29,6 +29,7 @@ from .a2a_http import (
     create_a2a_http_server,
 )
 from .analytics import InteractionRecord, reduce_interactions, summarize_security_statistics
+from .approvals import Approval, ApprovalStore
 from .architecture import (
     ArchitectureBoundary,
     ArchitectureCompileError,
@@ -251,6 +252,7 @@ from .receipts import (
     ReceiptSummary,
 )
 from .registry import DefinitionRegistry, InMemoryRevisionStore, InvalidStateTransition, RevisionStore, ToolRevision
+from .results import ToolResultInspection, inspect_tool_result
 from .run_control import RunBinding, RunControlError, RunControlService
 from .sandbox_supervisor import SandboxHealth, SandboxSupervisor, SupervisedProcess
 from .sdk import Actor, Interlock
@@ -270,6 +272,7 @@ from .studio_deploy import (
     StudioDeploymentError,
     TrustedApprovalKey,
     approval_signature_statement,
+    deployed_architecture,
     deployment_approval_statement,
     sign_deployment_approval,
 )
@@ -349,6 +352,8 @@ __all__ = [
     "ArchitectureNode",
     "ArchitectureTrustZone",
     "ArgumentBindingError",
+    "Approval",
+    "ApprovalStore",
     "ArtifactAdmissionDecision",
     "ArtifactAdmissionPolicy",
     "ArtifactProvenance",
@@ -402,6 +407,7 @@ __all__ = [
     "StudioDeploymentError",
     "TrustedApprovalKey",
     "approval_signature_statement",
+    "deployed_architecture",
     "deployment_approval_statement",
     "sign_deployment_approval",
     "DynamicTargetSelector",
@@ -536,7 +542,9 @@ __all__ = [
     "StdioSandboxProfile",
     "StaticBearerAuthenticator",
     "ToolDefinition",
+    "ToolResultInspection",
     "ToolRevision",
+    "inspect_tool_result",
     "TelemetryImportIssue",
     "VerifiedAccessTokenClaims",
     "SEMCONV_ALIASES",

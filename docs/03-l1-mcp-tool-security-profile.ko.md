@@ -94,7 +94,7 @@ MCP Host는 사용자의 의도와 모델 컨텍스트를 소유하고, MCP Clie
 
 **필수 관측.** 원본·정규화 description, schema, server namespace, definition digest, model-visible 여부, D2 purpose, 선택된 Tool, D3 데이터 등급·목적지, 선행 D8 read와 후행 external write를 같은 trace로 연결한다.
 
-**통제.** D1을 비신뢰로 태깅하고 명령형·비가시 유니코드·과도한 권한 요구를 검사한다. 정의가 승인되기 전 격리하며, D2와 무관한 D8/D5 접근 또는 외부 쓰기를 LinkPolicy가 차단한다. description 필터 하나에 의존하지 않는다.
+**통제.** D1을 비신뢰로 태깅하고 명령형·비가시 유니코드·과도한 권한 요구를 검사한다. 정의가 승인되기 전 격리하며, D2와 무관한 D8/D5 접근 또는 외부 쓰기를 LinkPolicy가 차단한다. description 필터 하나에 의존하지 않는다. 같은 등록 단계에서 검증기가 실제로 확인하지 않는 제약을 악성 Server가 몰래 끼워 넣을 수 있는, 보안 관련 subset 밖의 schema keyword(`oneOf`, `$ref` 등)도 함께 거부한다(`L1-M1-SCHEMA-KEYWORD-UNSUPPORTED`).
 
 ### 6.2 M2 — AI Supply Chain Rug Pull
 

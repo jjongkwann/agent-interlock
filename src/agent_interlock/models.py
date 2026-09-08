@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from .security import unsupported_schema_keywords
+
 
 class ActorType(StrEnum):
     USER = "USER"
@@ -159,6 +161,10 @@ class ActorSpec:
             raise ValueError("invalid tenant_mode")
         if self.max_delegation_depth < 0:
             raise ValueError("max_delegation_depth must be non-negative")
+        for schema_name, schema in (("input_schema", self.input_schema), ("output_schema", self.output_schema)):
+            unsupported = unsupported_schema_keywords(schema)
+            if unsupported:
+                raise ValueError(f"unsupported schema keyword in {schema_name}: {', '.join(unsupported)}")
 
 
 @dataclass(frozen=True, slots=True)

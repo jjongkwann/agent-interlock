@@ -321,6 +321,47 @@ class RunControlAPITests(unittest.TestCase):
             release.set()
             self.assertEqual(plane.wait_for_state(run_id, "CANCELED")["state"], "CANCELED")
 
+    def test_run_edges_are_enforced_regardless_of_the_bundles_authored_mode(self) -> None:
+        def adapter_provider(_compiled):  # noqa: ANN001
+            def a2a(value):  # noqa: ANN001
+                return TaskExecutionResult(output={"evidenceIds": ["kb-test-only-001"]}, metadata={"accepted": True})
+
+            def mcp(value):  # noqa: ANN001
+                return TaskExecutionResult(
+                    output={"receiptId": "receipt-test-only-001", "status": "TEST_ONLY"},
+                    metadata={"accepted": True},
+                )
+
+            return {
+                TaskTransport.A2A: CallableTaskAdapter(a2a),
+                TaskTransport.MCP: CallableTaskAdapter(mcp),
+            }
+
+        with tempfile.TemporaryDirectory() as root, RunningRunControl(root, adapter_provider) as plane:
+            active = plane.store.active()
+            self.assertEqual(active["mode"], "ENFORCE")
+            promoted_bundle = plane.store.bundle(active["bundleDigest"])
+            # compile --shadow authors every edge in the bundle body as SHADOW; the deployment
+            # record's mode (ENFORCE) is still what Run Control must actually enforce (D5).
+            self.assertTrue(
+                all(
+                    edge["policy"]["mode"] == "SHADOW"
+                    for edge in promoted_bundle.body["architecture"]["spec"]["edges"]
+                )
+            )
+
+            status, body = plane.request(
+                "POST",
+                "/v1/runs",
+                body={"runId": "run-mode-test-only-001", "input": {}},
+            )
+            self.assertEqual(status, 202)
+            run_id = body["run"]["id"]
+
+            modes = plane.run_service.edge_modes(tenant_id="tenant-run-a", run_id=run_id)
+            self.assertTrue(modes)
+            self.assertTrue(all(mode == "ENFORCE" for mode in modes.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,11 +13,13 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .architecture import ArchitectureGraph
 from .canonical import canonical_digest
+from .models import PolicyMode
 from .signing import sign_canonical_ed25519, verify_canonical_ed25519
 
 REASON_TWO_PERSON_REQUIRED = "L1-STUDIO-TWO-PERSON-APPROVAL-REQUIRED"
@@ -74,6 +76,25 @@ class DeploymentBundle:
         if recomputed != value.get("bundleDigest"):
             raise StudioDeploymentError(REASON_DIGEST_MISMATCH, "bundle digest does not match its body")
         return cls(value["architectureId"], str(value["version"]), recomputed, body)
+
+
+def deployed_architecture(bundle_body: Mapping[str, Any], mode: str) -> ArchitectureGraph:
+    """Parse a bundle's architecture and apply the deployment record's mode to every edge.
+
+    The source of truth for a deployed run is the deployment record, not the
+    per-edge modes baked into the reviewed bundle (D5). Every caller that
+    loads an active bundle for execution must go through this helper so the
+    applied mode always matches the record.
+    """
+    architecture = bundle_body.get("architecture")
+    if not isinstance(architecture, Mapping):
+        raise StudioDeploymentError(REASON_BUNDLE_UNKNOWN, "bundle does not contain an executable architecture")
+    graph = ArchitectureGraph.from_dict(architecture)
+    applied_mode = PolicyMode(mode)
+    return replace(
+        graph,
+        edges=tuple(replace(edge, policy=replace(edge.policy, mode=applied_mode)) for edge in graph.edges),
+    )
 
 
 def deployment_approval_statement(bundle: DeploymentBundle, *, from_digest: str | None, to_mode: str) -> dict[str, Any]:

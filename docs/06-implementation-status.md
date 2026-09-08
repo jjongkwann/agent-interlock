@@ -22,7 +22,7 @@ This document is the traceability map between the design contract and the curren
 
 | Contract | Implementation | Verification |
 |---|---|---|
-| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests` (**one** test — `define`/`connect`/graph wiring only), `tests/test_sdk_profile.py` (14 tests: the 18 checks `wrap()` runs, its rename map, and its execution gate) |
+| Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests` (**one** test — `define`/`connect`/graph wiring only), `tests/test_sdk_profile.py` (14 tests: the 18 checks `wrap()` runs, its rename map, and its execution gate), `tests/test_sdk_results.py` (8 tests: `Interlock.grant_approval` and the shared `results.inspect_tool_result` post-execution handling) |
 | Unified check table · profiles | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(28)·`run_checks` | `tests/test_check_table.py` (20 tests: table construction, the four coverage states (`RAN_CLEAN`, `RAN_FLAGGED`, `INAPPLICABLE`, `ABSENT`), per-check `armed`, duplicate-id rejection) |
 | Per-enforcement-point profiles | `GATEWAY_PROFILE`(20) · `SDK_PROFILE`(18) · `A2A_PROFILE`(17) → `A2A_LINK_PROFILE`(12)·`A2A_BOUNDARY_PROFILE`(5) | each profile's **whole** rename map pinned, not just the code set it yields; static audit that every emittable reason key is mapped |
 | Decision severity ordering | `models.py` `_DECISION_RANK` (all 11 `ControlDecision` members, no fallback; `RuntimeError` at import if not total) | `tests/test_decision_ranking.py` (12 tests: totality, distinctness naming the colliding pair, `BYPASSED` below `ALLOW`, `ERROR` below `QUARANTINE`) |

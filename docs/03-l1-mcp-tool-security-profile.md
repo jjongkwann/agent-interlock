@@ -94,7 +94,7 @@ The MCP Host owns the user's intent and the model context, while the MCP Client 
 
 **Required observations.** Link the raw/normalized description, schema, server namespace, definition digest, model-visible flag, D2 purpose, selected Tool, D3 data class/destination, the preceding D8 read, and the subsequent external write within the same trace.
 
-**Controls.** Tag D1 as untrusted and inspect it for imperative phrasing, invisible Unicode, and excessive permission requests. Quarantine the definition before approval, and have LinkPolicy block D8/D5 access or external writes unrelated to D2. Do not rely on a single description filter.
+**Controls.** Tag D1 as untrusted and inspect it for imperative phrasing, invisible Unicode, and excessive permission requests. Quarantine the definition before approval, and have LinkPolicy block D8/D5 access or external writes unrelated to D2. Do not rely on a single description filter. The same registration step also rejects a schema outside the security-relevant subset it can enforce — a JSON Schema keyword such as `oneOf` or `$ref` that lets a malicious Server smuggle constraints the validator never checks (`L1-M1-SCHEMA-KEYWORD-UNSUPPORTED`).
 
 ### 6.2 M2 — AI Supply Chain Rug Pull
 

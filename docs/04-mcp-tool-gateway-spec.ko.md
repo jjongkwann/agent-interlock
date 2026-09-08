@@ -342,13 +342,14 @@ payload:
 
 Gateway 집행 전체의 일부이지만 공유 check 표의 어떤 `Check`도 아닌 다른 컴포넌트가 만들어내는 코드다.
 
-**그중 둘은 전달(forwarding)을 통해 여전히 `payload.control.reasonCodes`에 도달한다.** `registry.py`가 `L1-M1-METADATA-INSTRUCTION`과 `L1-M3-CROSS-SERVER-REFERENCE`를 `ToolRevision.reason_codes`에 기록하고, `_definition_state`가 revision이 `ACTIVE`가 아닐 때마다 그 tuple을 그대로 전달한다. 그래서 격리된 revision은 check id `L1-M2-DEFINITION-NOT-ACTIVE` 아래에서 `reasonCodes: ["L1-M1-METADATA-INSTRUCTION"]`을 낸다. 이 표의 나머지 코드는 각자의 경로에서 방출되며 `CONTROL_EVALUATED` control 블록에는 나타나지 않는다.
+**그중 셋은 전달(forwarding)을 통해 여전히 `payload.control.reasonCodes`에 도달한다.** `registry.py`가 `L1-M1-METADATA-INSTRUCTION`, `L1-M1-SCHEMA-KEYWORD-UNSUPPORTED`, `L1-M3-CROSS-SERVER-REFERENCE`를 `ToolRevision.reason_codes`에 기록하고, `_definition_state`가 revision이 `ACTIVE`가 아닐 때마다 그 tuple을 그대로 전달한다. 그래서 격리된 revision은 check id `L1-M2-DEFINITION-NOT-ACTIVE` 아래에서 `reasonCodes: ["L1-M1-METADATA-INSTRUCTION"]`을 낸다. 이 표의 나머지 코드는 각자의 경로에서 방출되며 `CONTROL_EVALUATED` control 블록에는 나타나지 않는다.
 
 이 전달은 통계에 영향을 준다. 방출된 key가 그것을 만든 check id와 다를 수 있고, key 집합이 **닫혀 있지 않다** — registry가 기록한 것이 곧 key다. profile의 `reason_codes` map은 그런 문자열이 rename key와 우연히 겹치면 그대로 rename해버린다. 커버리지와 reason code의 join은 `Profile.reason_codes`를 거치고, 이 표에 대한 문자열 매칭으로 하지 않는다.
 
 | Code | 생성 주체 | 조건 | 기본 판정 |
 |---|---|---|---|
 | `L1-M1-METADATA-INSTRUCTION` | `registry.py` | D1에 기능과 무관한 명령·데이터 접근 요구 | `QUARANTINE` |
+| `L1-M1-SCHEMA-KEYWORD-UNSUPPORTED` | `registry.py` | D1의 input/output schema가 `validate_schema`가 검증하는 subset 밖의 keyword를 사용 | `QUARANTINE` |
 | `L1-M3-CROSS-SERVER-REFERENCE` | `registry.py` | D1이 다른 namespace Tool을 조종 | `BLOCK` |
 | `L1-M4-UNTRUSTED-PUBLISHER` | `supply_chain.py` | provenance/signature 정책 실패 | `QUARANTINE` |
 | `L1-M4-SIGNATURE-INVALID` | `supply_chain.py` | trusted publisher의 provenance 서명 누락·불일치 | `QUARANTINE` |

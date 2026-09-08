@@ -164,25 +164,34 @@ Receive input
 
 Even without an SDK, a Proxy can observe communication, but semantics such as plan steps, memory provenance, and sub-agent trees can only be captured accurately with an SDK.
 
-### 4.2 `wrap()` Enforces, and It Cannot Approve
+### 4.2 `wrap()` Enforces, and Can Now Approve
 
-`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 18 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses (`sdk.py:199`). The call does not happen. Eighteen of the gateway's twenty checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
+`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 18 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses. The call does not happen. Eighteen of the gateway's twenty checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
 
-**A wrapped Tool cannot perform an external write under a stock `LinkPolicy`.** `external_write_requires_approval` defaults `True`, so `INTERLOCK-APPROVAL-REQUIRED` fires on every `EXTERNAL_WRITE` intent unless `approval_valid` is set — and the SDK path never sets it. `CheckContext.approval_valid` defaults `False` (`policy.py:81`), `_invoke` does not pass it, and neither `Interlock` nor `Actor` exposes an approval API; `grant_approval` exists only on `MCPToolGateway` (`gateway.py:140`).
-
-This is reachable with everything declared correctly — an approved destination, a declared side effect, no taint:
+**A wrapped Tool can perform an external write once it holds a matching approval.** `external_write_requires_approval` defaults `True`, so `INTERLOCK-APPROVAL-REQUIRED` fires on every `EXTERNAL_WRITE` intent unless `approval_valid` is set. The gateway and the SDK now share one approval store (`approvals.ApprovalStore`): `Interlock.grant_approval(...)` grants an approval the same way `MCPToolGateway.grant_approval` does, and `_invoke` looks it up and passes the result into `CheckContext.approval_valid` on every call. An approval binds to the exact arguments hash, canonical destination set, tenant, and expiry it was granted for — nothing else validates against it.
 
 ```python
 agent.connect(tool, LinkPolicy(id="p", version="1", mode=PolicyMode.ENFORCE))
 send = tool.wrap(send_email)
-send({"to": "user@customer.example"}, source=agent, tenant_id="t",
+arguments = {"to": "user@customer.example"}
+approval = interlock.grant_approval(
+    tenant_id="t",
+    arguments=arguments,
+    canonical_destinations=(canonical_destination("user@customer.example"),),
+    approver="operator",
+)
+send(arguments, source=agent, tenant_id="t",
      intent=InvocationIntent(purpose="reply",
                              destinations=("user@customer.example",),
-                             estimated_side_effect=SideEffect.EXTERNAL_WRITE))
+                             estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+                             approval_id=approval.approval_id))
+# executes -- the same call without approval_id still raises
 # GatewayError: actor invocation blocked: INTERLOCK-APPROVAL-REQUIRED
 ```
 
-The behaviour is fail-closed, which is the right direction, but the approval path is **unreachable by design** rather than merely unimplemented. Until the SDK gains an approval surface, an in-process external write needs either `LinkPolicy(external_write_requires_approval=False)` — an explicit, auditable decision to drop the control — or routing through `MCPToolGateway`, which can hold an approval. Do not work around it by declaring the side effect as something other than `EXTERNAL_WRITE`; that trades a visible block for a silent `L1-UNDECLARED-SIDE-EFFECT` at best and an undetected write at worst.
+`_invoke` also shares the gateway's result handling: every returned value passes through `results.inspect_tool_result`, which redacts secrets and validates the result against the target's output schema. Under `ENFORCE` a schema-invalid result is replaced by the same quarantine value the gateway emits, and `SECURITY_OUTCOME_SET` records `SUCCEEDED` for that quarantine even when no argument-side check flagged the call. Under `SHADOW`/`OBSERVE` the sanitized-but-unquarantined value is returned and the schema errors are recorded without altering the result.
+
+`LinkPolicy(external_write_requires_approval=False)` remains available as an explicit, auditable decision to drop the control entirely. Do not work around a missing approval by declaring the side effect as something other than `EXTERNAL_WRITE`; that trades a visible hold for a silent `L1-UNDECLARED-SIDE-EFFECT` at best and an undetected write at worst.
 
 ## 5. InterlockLink and LinkPolicy
 
@@ -366,7 +375,7 @@ No Gateway event + Target event exists   → CONTROL_BYPASS
 ## 11. MVP Completion Criteria
 
 - A developer can declare two Actors and create a relationship with `connect()`.
-- An existing Tool can be `wrap()`ped to enforce policy before the call. *(Met, with one dead end — an external write cannot be approved from the SDK; see §4.2.)*
+- An existing Tool can be `wrap()`ped to enforce policy before the call, including an external write once approved through `Interlock.grant_approval`. *(Met; see §4.2.)*
 - Every call generates a trace and an Interaction Event.
 - Undeclared Actor relationships are detected.
 - HOLD/BLOCK is applied when untrusted input is passed to an external-write Tool.

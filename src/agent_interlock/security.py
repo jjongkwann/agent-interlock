@@ -68,6 +68,43 @@ def sanitize_secrets(value: Any) -> tuple[Any, bool]:
     return value, False
 
 
+_SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {"type", "required", "properties", "additionalProperties", "items", "enum", "maxLength", "pattern"}
+)
+_IGNORED_SCHEMA_KEYWORDS = frozenset(
+    {"description", "title", "default", "examples", "format", "x-interlock-destination"}
+)
+
+
+def unsupported_schema_keywords(schema: Mapping[str, Any]) -> tuple[str, ...]:
+    """List, path-qualified, the keywords in ``schema`` that ``validate_schema`` ignores.
+
+    Walks nested schemas through ``properties`` values and ``items``. Keywords in the
+    subset ``validate_schema`` enforces are allowed, as are a handful of documentation
+    and annotation keys it ignores harmlessly (``format`` is allowed because a future
+    intent-derivation pass reads it). Anything else is reported as ``"<path>: <keyword>"``,
+    e.g. ``"$.properties.to: minimum"``.
+    """
+    found: set[str] = set()
+
+    def walk(node: Any, path: str) -> None:
+        if not isinstance(node, Mapping):
+            return
+        for keyword in node:
+            if keyword not in _SUPPORTED_SCHEMA_KEYWORDS and keyword not in _IGNORED_SCHEMA_KEYWORDS:
+                found.add(f"{path}: {keyword}")
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            for name, sub_schema in properties.items():
+                walk(sub_schema, f"{path}.properties.{name}")
+        items = node.get("items")
+        if items is not None:
+            walk(items, f"{path}.items")
+
+    walk(schema, "$")
+    return tuple(sorted(found))
+
+
 def validate_schema(value: Any, schema: Mapping[str, Any], path: str = "$") -> tuple[str, ...]:
     """Validate the security-relevant JSON Schema subset without a runtime dependency."""
     if not schema:

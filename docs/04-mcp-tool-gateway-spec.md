@@ -342,13 +342,14 @@ Three things this table encodes that are easy to get wrong:
 
 These are part of the gateway's overall enforcement story but are produced by other components, not by any `Check` in the shared table.
 
-**Two of them still reach `payload.control.reasonCodes`, by forwarding.** `registry.py` writes `L1-M1-METADATA-INSTRUCTION` and `L1-M3-CROSS-SERVER-REFERENCE` into `ToolRevision.reason_codes`, and `_definition_state` forwards that tuple verbatim whenever the revision is not `ACTIVE` — so a quarantined revision yields `reasonCodes: ["L1-M1-METADATA-INSTRUCTION"]` under check id `L1-M2-DEFINITION-NOT-ACTIVE`. The remaining codes in this table are emitted on their own paths and never appear in a `CONTROL_EVALUATED` control block.
+**Three of them still reach `payload.control.reasonCodes`, by forwarding.** `registry.py` writes `L1-M1-METADATA-INSTRUCTION`, `L1-M1-SCHEMA-KEYWORD-UNSUPPORTED`, and `L1-M3-CROSS-SERVER-REFERENCE` into `ToolRevision.reason_codes`, and `_definition_state` forwards that tuple verbatim whenever the revision is not `ACTIVE` — so a quarantined revision yields `reasonCodes: ["L1-M1-METADATA-INSTRUCTION"]` under check id `L1-M2-DEFINITION-NOT-ACTIVE`. The remaining codes in this table are emitted on their own paths and never appear in a `CONTROL_EVALUATED` control block.
 
 The forwarding has a consequence for statistics: the emitted key can differ from the check id that produced it, and the key set is **unbounded** — it is whatever the registry wrote. A profile's `reason_codes` map renames such a string blindly if it happens to collide with a rename key. Join coverage to reason codes through `Profile.reason_codes`, never by matching the string against this table.
 
 | Code | Producer | Condition | Default Verdict |
 |---|---|---|---|
 | `L1-M1-METADATA-INSTRUCTION` | `registry.py` | D1 requests commands or data access unrelated to its function | `QUARANTINE` |
+| `L1-M1-SCHEMA-KEYWORD-UNSUPPORTED` | `registry.py` | D1's input or output schema uses a JSON Schema keyword outside the subset `validate_schema` enforces | `QUARANTINE` |
 | `L1-M3-CROSS-SERVER-REFERENCE` | `registry.py` | D1 manipulates a Tool in another namespace | `BLOCK` |
 | `L1-M4-UNTRUSTED-PUBLISHER` | `supply_chain.py` | provenance/signature policy failure | `QUARANTINE` |
 | `L1-M4-SIGNATURE-INVALID` | `supply_chain.py` | Missing or mismatched provenance signature from a trusted publisher | `QUARANTINE` |
