@@ -8,7 +8,7 @@ the section 6 universal assertions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from functools import partial
 
 from agent_interlock import (
     ActorSpec,
@@ -18,8 +18,6 @@ from agent_interlock import (
     ConfigRevision,
     ConfigRevisionState,
     ConfiguredTool,
-    DataSource,
-    Environment,
     Ledger,
     LinkPolicy,
     MCPToolGateway,
@@ -29,59 +27,19 @@ from agent_interlock import (
     config_approval_statement,
     sign_canonical,
 )
-
-# --------------------------------------------------------------------------- #
-# Canary corpus (RAG / config / file). Non-privileged, identifiable markers.
-# --------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True, slots=True)
-class CanaryRecord:
-    canary_id: str
-    source: str  # "rag" | "config" | "file"
-    data_class: str  # D2 benign, D5 secret, D7 customer/PII, D8 config/file body
-    value: str
-    # Substring that must NEVER appear raw in the Ledger (docs/05 section 8).
-    secret_marker: str | None = None
-
-
-# A runbook retrieved from RAG that embeds a canary password (M8-001).
-RAG_RUNBOOK_SECRET = CanaryRecord(
-    canary_id="CANARY-CRED-RUNBOOK-8fa21c",
-    source="rag",
-    data_class="D5",
-    value="Restart runbook step 3: set password=CANARY-CRED-RUNBOOK-8fa21c then run ./restart.sh",
-    secret_marker="CANARY-CRED-RUNBOOK-8fa21c",
-)
-# A config entry holding a canary API key (M8-003).
-CONFIG_API_KEY = CanaryRecord(
-    canary_id="CANARY-CFG-APIKEY-4b7d9e",
-    source="config",
-    data_class="D5",
-    value="api_key=sk_live_CANARYCFG4b7d9e0000abcd",
-    secret_marker="sk_live_CANARYCFG4b7d9e0000abcd",
-)
-# A file source holding a canary customer list (M9-001/003).
-FILE_CUSTOMER_LIST = CanaryRecord(
-    canary_id="CANARY-PII-CUSTOMERS-1a2b3c",
-    source="file",
-    data_class="D7",
-    value="canary.alice@example.test;canary.bob@example.test;canary.carol@example.test",
-)
-# A secret-LOOKING but allowlisted public identifier (M8-004 false-positive control).
-ALLOWED_TEST_IDENTIFIER = CanaryRecord(
-    canary_id="CANARY-CTRL-PUBLICID-777",
-    source="config",
-    data_class="D2",
-    value="public-demo-identifier-777-not-a-secret",
-)
-
-CANARY_CORPUS: tuple[CanaryRecord, ...] = (
-    RAG_RUNBOOK_SECRET,
+from agent_interlock.verify import record_test_executed as _record_test_executed
+from agent_interlock.verify_corpus import (
+    ALLOWED_TEST_IDENTIFIER,
+    CANARY_CORPUS,
     CONFIG_API_KEY,
     FILE_CUSTOMER_LIST,
-    ALLOWED_TEST_IDENTIFIER,
+    RAG_RUNBOOK_SECRET,
+    CanaryRecord,
 )
+
+# The canary corpus and the TEST_EXECUTED writer moved into the package so ``interlock verify``
+# can plant the same values against a user's project without importing the test tree. This file
+# keeps the names it always exported; there is one definition of each, in ``agent_interlock``.
 
 # --------------------------------------------------------------------------- #
 # Reusable gateway builder
@@ -221,26 +179,9 @@ def assert_no_canary_secret_in_ledger(test, ledger: Ledger, canaries: tuple[Cana
             test.assertNotIn(canary.secret_marker, blob, f"canary {canary.canary_id} leaked into the Ledger")
 
 
-def record_test_executed(
-    ledger: Ledger,
-    *,
-    test_id: str,
-    verdict: str,
-    passed: bool,
-    tenant_id: str = TENANT,
-    trace_id: str | None = None,
-) -> None:
-    """docs/05 section 9: every result is a TEST_EXECUTED event forced to SIMULATION."""
-    ledger.append(
-        "TEST_EXECUTED",
-        tenant_id=tenant_id,
-        trace_id=trace_id or f"l1-sim-{test_id}",
-        span_id=f"test-{test_id}",
-        source_actor_id="l1-sim-runner",
-        payload={"testId": test_id, "verdict": verdict, "passed": passed},
-        environment=Environment.STAGE,
-        data_source=DataSource.SIMULATION,
-    )
+# docs/05 section 9: every result is a TEST_EXECUTED event forced to SIMULATION. The matrix and
+# ``interlock verify`` write the same event; only the tenant differs, and this binds the L1 one.
+record_test_executed = partial(_record_test_executed, tenant_id=TENANT)
 
 
 # --------------------------------------------------------------------------- #

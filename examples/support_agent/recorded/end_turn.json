@@ -1,0 +1,19 @@
+{
+  "id": "msg_support_end_turn",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "Order 1001 has shipped and arrives Tuesday. I emailed the customer at dana@customer.example.",
+      "citations": null
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 530,
+    "output_tokens": 41
+  }
+}

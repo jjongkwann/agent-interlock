@@ -1,0 +1,37 @@
+{
+  "id": "msg_support_tool_use",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "I'll look up order 1001 and email the customer.",
+      "citations": null
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_lookup_order",
+      "name": "lookup_order",
+      "input": {
+        "order_id": "1001"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_send_email",
+      "name": "send_email",
+      "input": {
+        "to": "dana@customer.example",
+        "subject": "Your order 1001",
+        "body": "Order 1001 has shipped and arrives Tuesday."
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 412,
+    "output_tokens": 96
+  }
+}

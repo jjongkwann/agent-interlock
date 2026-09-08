@@ -1,0 +1,343 @@
+{
+  "apiVersion": "interlock.dev/v1alpha1",
+  "kind": "Architecture",
+  "metadata": {
+    "id": "support-agent",
+    "version": "1.0.0"
+  },
+  "spec": {
+    "nodes": [
+      {
+        "id": "user.customer",
+        "type": "USER",
+        "owner": "support-platform",
+        "identity": "oidc://customer",
+        "capabilities": [
+          "SUPPORT_REQUEST"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3"
+        ],
+        "trustZone": "EXTERNAL"
+      },
+      {
+        "id": "agent.support",
+        "type": "AGENT",
+        "owner": "support-platform",
+        "identity": "spiffe://prod.example/agent/support",
+        "capabilities": [
+          "SUPPORT_LOOKUP",
+          "SUPPORT_REPLY"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "tool.lookup-order",
+        "type": "TOOL",
+        "owner": "support-platform",
+        "identity": "spiffe://prod.example/tool/lookup-order",
+        "capabilities": [
+          "ORDER_LOOKUP"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "READ"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "order_id"
+          ],
+          "properties": {
+            "order_id": {
+              "type": "string",
+              "maxLength": 32
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "order_id",
+            "status",
+            "customer_email"
+          ],
+          "properties": {
+            "order_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "customer_email": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "additionalProperties": false
+        },
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "tool.send-email",
+        "type": "TOOL",
+        "owner": "support-platform",
+        "identity": "spiffe://prod.example/tool/send-email",
+        "capabilities": [
+          "EMAIL_SEND"
+        ],
+        "dataAccess": [
+          "D2",
+          "D3",
+          "D7"
+        ],
+        "sideEffects": [
+          "EXTERNAL_WRITE"
+        ],
+        "allowedDomains": [
+          "customer.example"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "to",
+            "subject",
+            "body"
+          ],
+          "properties": {
+            "to": {
+              "type": "string",
+              "format": "email"
+            },
+            "subject": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "body": {
+              "type": "string",
+              "maxLength": 4000
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "status",
+            "to"
+          ],
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "additionalProperties": false
+        },
+        "trustZone": "INTERNAL"
+      },
+      {
+        "id": "external.customer-email",
+        "type": "EXTERNAL",
+        "owner": "support-platform",
+        "identity": "dns://customer.example",
+        "allowedDomains": [
+          "customer.example"
+        ],
+        "dataAccess": [
+          "D3",
+          "D7"
+        ],
+        "trustZone": "EXTERNAL"
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge.customer-support",
+        "relationshipId": "REL-01",
+        "source": "user.customer",
+        "target": "agent.support",
+        "relationship": "REQUESTS",
+        "policy": {
+          "id": "support-request-input",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "SUPPORT_REQUEST"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "input-identity-and-taint",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "INPUT_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "input-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.support-lookup-order",
+        "relationshipId": "REL-05",
+        "source": "agent.support",
+        "target": "tool.lookup-order",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "support-lookup-invoke",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "SUPPORT_LOOKUP"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireActiveDefinition": true,
+          "requireDigestPin": true,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "lookup-definition-and-call-guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "lookup-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.support-send-email",
+        "relationshipId": "REL-05",
+        "source": "agent.support",
+        "target": "tool.send-email",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "support-email-invoke",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "SUPPORT_REPLY"
+          ],
+          "allowedDataClasses": [
+            "D2",
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireActiveDefinition": true,
+          "requireDigestPin": true,
+          "requireExplicitDestination": true,
+          "newDestinationAction": "HOLD",
+          "externalWriteRequiresApproval": false,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "email-definition-and-call-guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "email-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.email-customer",
+        "relationshipId": "REL-07",
+        "source": "tool.send-email",
+        "target": "external.customer-email",
+        "relationship": "SENDS",
+        "policy": {
+          "id": "customer-email-egress",
+          "version": "1.0.0",
+          "mode": "ENFORCE",
+          "allowedPurposes": [
+            "SUPPORT_REPLY"
+          ],
+          "allowedDataClasses": [
+            "D3",
+            "D7"
+          ],
+          "deniedDataClasses": [
+            "D5",
+            "D8"
+          ],
+          "requireExplicitDestination": true,
+          "newDestinationAction": "HOLD",
+          "externalWriteRequiresApproval": false,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "egress-destination-and-dlp",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "EGRESS_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "egress-audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      }
+    ]
+  }
+}

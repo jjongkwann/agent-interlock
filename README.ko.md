@@ -34,6 +34,9 @@ MCP·Tool 위협 M1–M9 전체를 데이터 흐름 단위로 집행한다. 각 
 # 별도 설치 없이 테스트 (zero-dependency reference core)
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
+# 고객 지원 Agent: 두 Tool을 모두 guard한 Claude Tool Runner 실행
+PYTHONPATH=src python3 -m examples.support_agent.run "Where is order 1001? Email the customer."
+
 # 안전한 email Tool 호출 예제
 PYTHONPATH=src python3 examples/secure_email.py
 
@@ -65,7 +68,14 @@ python3 -m pip install -e .
 
 # PostgreSQL adapter까지 설치하는 경우
 python3 -m pip install -e '.[postgres]'
+
+# 지원 Agent 예제가 쓰는 Anthropic Tool Runner adapter 포함
+python3 -m pip install -e '.[anthropic]'
 ```
+
+지원 Agent 예제는 Claude API를 호출하며 자격 증명은 Anthropic SDK가 처리한다(`ANTHROPIC_API_KEY`).
+자격 증명이 없으면 `tests/test_example_support_agent.py`가 `examples/support_agent/recorded/`의
+녹화된 turn을 재생해 동일한 `build()`와 동일한 guard된 Tool 경로를 그대로 검증한다.
 
 ## 제품 구성
 

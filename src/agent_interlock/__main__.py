@@ -190,6 +190,26 @@ def _studio_main(args: argparse.Namespace) -> int:
         return 2
 
 
+def _verify_main(args) -> int:  # noqa: ANN001
+    """Exit 0 when every scenario passed, 1 when one did not, 2 when the project cannot be loaded.
+
+    The three codes are what a CI job reads: 1 is "your project has a gap", 2 is "I never got to
+    look", and collapsing them would make a broken entrypoint indistinguishable from a clean run.
+    """
+    from .verify import VerifyError, run_verification
+
+    try:
+        report = run_verification(args.project, out=args.out)
+    except VerifyError as error:
+        print(
+            json.dumps({"error": {"code": "INTERLOCK-VERIFY-PROJECT-INVALID", "message": str(error)}}, indent=2),
+            file=sys.stderr,
+        )
+        return 2
+    print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if report.passed else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="interlock")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -237,9 +257,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     status = studio_actions.add_parser("status")
     status.add_argument("--repo", required=True)
 
+    verify = commands.add_parser(
+        "verify",
+        help="run the L1 threat corpus against one project's own guarded tools",
+    )
+    verify.add_argument("project", help="dotted module name, or a path to the project's .py module")
+    verify.add_argument("--out", help="also write the report JSON to this file")
+
     args = parser.parse_args(argv)
     if args.command == "studio":
         return _studio_main(args)
+    if args.command == "verify":
+        return _verify_main(args)
 
     graph = _load(args.manifest)
     compiler = ArchitectureCompiler()
@@ -252,7 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         skeleton_path = out_dir / f"{base}_skeleton.py"
         tests_path = out_dir / f"test_{base}_security.py"
-        skeleton_path.write_text(generate_skeleton(graph), encoding="utf-8")
+        skeleton_path.write_text(generate_skeleton(graph, Path(args.manifest).resolve()), encoding="utf-8")
         tests_path.write_text(generate_security_tests(graph, f"{base}_skeleton"), encoding="utf-8")
         print(
             json.dumps(

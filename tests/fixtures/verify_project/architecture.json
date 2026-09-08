@@ -1,0 +1,96 @@
+{
+  "apiVersion": "interlock.dev/v1alpha1",
+  "kind": "Architecture",
+  "metadata": { "id": "verify-fixture", "version": "1.0.0" },
+  "spec": {
+    "nodes": [
+      {
+        "id": "agent.support",
+        "type": "AGENT",
+        "owner": "support",
+        "identity": "spiffe://verify.example/agent/support",
+        "dataAccess": ["D2", "D3", "D7"]
+      },
+      {
+        "id": "tool.lookup-case",
+        "type": "TOOL",
+        "owner": "support",
+        "identity": "spiffe://verify.example/tool/lookup-case",
+        "dataAccess": ["D2", "D3", "D7"],
+        "sideEffects": ["READ"],
+        "allowedDomains": []
+      },
+      {
+        "id": "tool.send-email",
+        "type": "TOOL",
+        "owner": "messaging",
+        "identity": "spiffe://verify.example/tool/send-email",
+        "dataAccess": ["D2", "D3", "D7"],
+        "sideEffects": ["EXTERNAL_WRITE"],
+        "allowedDomains": ["customer.example"]
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge.support-case",
+        "relationshipId": "REL-05",
+        "source": "agent.support",
+        "target": "tool.lookup-case",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "support-tools",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["CASE_LOOKUP", "SUPPORT_REPLY"],
+          "externalWriteRequiresApproval": false,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "edge.support-case.guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "edge.support-case.audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      },
+      {
+        "id": "edge.support-email",
+        "relationshipId": "REL-05",
+        "source": "agent.support",
+        "target": "tool.send-email",
+        "relationship": "INVOKES",
+        "policy": {
+          "id": "support-tools",
+          "mode": "ENFORCE",
+          "allowedPurposes": ["CASE_LOOKUP", "SUPPORT_REPLY"],
+          "externalWriteRequiresApproval": false,
+          "failureMode": "FAIL_CLOSED"
+        },
+        "controls": [
+          {
+            "id": "edge.support-email.guard",
+            "objective": "PREVENT",
+            "timing": "PRE_EXECUTION",
+            "enforcementPoint": "MCP_GATEWAY",
+            "assurance": "ENFORCED"
+          },
+          {
+            "id": "edge.support-email.audit",
+            "objective": "EVIDENCE",
+            "timing": "POST_EXECUTION",
+            "enforcementPoint": "AUDIT_SINK",
+            "assurance": "OBSERVED"
+          }
+        ]
+      }
+    ]
+  }
+}

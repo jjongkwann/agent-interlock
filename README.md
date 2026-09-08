@@ -34,6 +34,9 @@ Verdicts are promoted in stages — observe (OBSERVE) → shadow enforcement (SH
 # Run the tests with no installation (zero-dependency reference core)
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
+# Customer-support agent: the Claude Tool Runner with both tools guarded
+PYTHONPATH=src python3 -m examples.support_agent.run "Where is order 1001? Email the customer."
+
 # Secure email tool-call example
 PYTHONPATH=src python3 examples/secure_email.py
 
@@ -65,7 +68,15 @@ python3 -m pip install -e .
 
 # With the PostgreSQL adapter
 python3 -m pip install -e '.[postgres]'
+
+# With the Anthropic Tool Runner adapter, which the support-agent example needs
+python3 -m pip install -e '.[anthropic]'
 ```
+
+The support-agent example calls the Claude API and takes its credentials from the Anthropic SDK
+(`ANTHROPIC_API_KEY`). With no credentials, `tests/test_example_support_agent.py` drives the same
+`build()` and the same guarded tools by replaying the recorded turns in
+`examples/support_agent/recorded/`.
 
 ## Product components
 

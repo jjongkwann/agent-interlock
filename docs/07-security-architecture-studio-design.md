@@ -207,7 +207,7 @@ The JSON contract is authoritative in `schemas/architecture.schema.json`, and th
 - A Drift view that separates undeclared relationships, unobserved Design Edges, and control bypasses
 - A Ledger interaction statistics view (offline import + read-only Live Attach, aggregated by data source · mode · relationship · Actor · policy · reason; the contract also carries `byCheck` (coverage per check id) and `byEdge`/`unattributed`, which the Studio UI does not yet render)
 - The CLI `architecture compile --shadow`'s CRITICAL review gate · all-Edge SHADOW enforcement · stable bundle digest
-- Manifest-based Python SDK skeleton · security-test generation
+- Manifest-based Python project skeleton whose `build()` returns the gateway and the guarded tools the Anthropic Tool Runner takes · security-test generation per guarded Tool
 - An Ed25519 two-person-approval propose→promote→rollback-to-a-past-active-bundle CLI, integrated with the Control Plane
 - A runtime adapter that compiles REL-07's source Tool/External `allowedDomains`/LinkPolicy into a tenant/artifact/provenance/sandbox-bound egress policy
 - Zooming only the graph — separate from browser page zoom — via the regular wheel and macOS `Command + =/-`/Windows `Ctrl + =/-` while the pointer is over the Canvas

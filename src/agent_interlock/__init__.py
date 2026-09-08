@@ -304,6 +304,16 @@ from .vendor_telemetry import (
     langfuse_traces_to_otlp,
     langsmith_runs_to_otlp,
 )
+from .verify import (
+    SCENARIOS,
+    Scenario,
+    ScenarioResult,
+    VerificationReport,
+    VerifyError,
+    load_project,
+    run_verification,
+)
+from .verify_corpus import CANARY_CORPUS, CanaryRecord
 
 __all__ = [
     "A2AAgentCard",
@@ -352,6 +362,13 @@ __all__ = [
     "GuardedAsyncTool",
     "GuardedTool",
     "ToolBinding",
+    "SCENARIOS",
+    "Scenario",
+    "ScenarioResult",
+    "VerificationReport",
+    "VerifyError",
+    "CANARY_CORPUS",
+    "CanaryRecord",
     "bind_architecture",
     "guard_tools",
     "ActionResult",
@@ -581,12 +598,14 @@ __all__ = [
     "evaluate_acceptance_criteria",
     "generate_pkce_verifier",
     "import_runtime_telemetry",
+    "load_project",
     "parse_acceptance_criterion",
     "parse_bearer_challenge",
     "pkce_s256_challenge",
     "raw_digest",
     "reduce_interactions",
     "run_consent",
+    "run_verification",
     "sha256_file",
     "sign_attestation",
     "sign_artifact_provenance",
