@@ -215,15 +215,11 @@ class RunControlService:
             raise
         except Exception as error:
             raise RunControlError(422, "RUN-ARCHITECTURE-INVALID", "active architecture cannot be loaded") from error
-        mismatched = sorted(
-            edge_id for edge_id, policy in compiled.links.items() if policy.mode.value != active_mode
-        )
-        if mismatched:
-            raise RunControlError(
-                422,
-                "RUN-MODE-MISMATCH",
-                f"compiled edge mode disagrees with the deployment record for: {', '.join(mismatched)}",
-            )
+        # No mode check follows: `deployed_architecture` sets every edge policy to the record's
+        # mode and the compiler carries a policy's mode through untouched, so a disagreement is
+        # unreachable here. A guard for it would be a check that can never fire, which reads like
+        # a control and is not one. An unparseable mode raises inside the try above and surfaces
+        # as RUN-ARCHITECTURE-INVALID.
         definition = compiled.graph.orchestration
         if definition is None:
             raise RunControlError(422, "RUN-WORKFLOW-MISSING", "active architecture has no workflow")

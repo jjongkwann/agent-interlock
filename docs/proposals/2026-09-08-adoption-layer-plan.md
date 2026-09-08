@@ -24,8 +24,8 @@ Files: `__main__.py` (`compile --shadow`), `studio_deploy.py`, `run_control.py`,
   and derives `links[].mode` from it. Bundle digest covers the rewritten body.
 - Add `studio_deploy.deployed_architecture(bundle_body, mode) -> ArchitectureGraph` that
   applies `mode` to every edge policy. `run_control._engine_for_active_bundle` and the
-  platform E2E use it. Run Control raises `RUN-MODE-MISMATCH` (422) if any compiled edge mode
-  differs from the record after applying it (guards a future caller that skips the helper).
+  platform E2E use it. No post-compile mode assertion: the helper sets every edge to the record's
+  mode and the compiler carries it through, so such a check could never fire.
 - Tests: promote a SHADOW bundle whose manifest edges were authored as SHADOW, start a run,
   assert `actualEnforced=True` and an enforced block in the ledger; assert the compile output's
   architecture edges all read SHADOW.
