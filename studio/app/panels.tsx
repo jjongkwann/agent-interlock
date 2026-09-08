@@ -201,7 +201,12 @@ type RunTask = {
   errorCode?: string | null;
   errorMessage?: string | null;
   externalTaskId?: string | null;
+  executed?: boolean;
+  goalMet?: boolean | null;
+  securityMet?: boolean | null;
 };
+
+type RunOutcomes = { executed: number; goalMet: number; securityMet: number; total: number };
 
 type WorkflowRun = {
   id: string;
@@ -215,7 +220,42 @@ type WorkflowRun = {
   messagesUsed: number;
   errorCode?: string | null;
   bundleDigest: string;
+  outcomes?: RunOutcomes;
 };
+
+const OUTCOME_COLORS: Record<"yes" | "no" | "unknown", string> = {
+  yes: "#1a7f37",
+  no: "#c62828",
+  unknown: "#8a8f98",
+};
+
+function outcomeState(value: boolean | null | undefined): "yes" | "no" | "unknown" {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  return "unknown";
+}
+
+function OutcomeBadge({ label, value }: { label: string; value: boolean | null | undefined }) {
+  const state = outcomeState(value);
+  return (
+    <span
+      className={`outcome-badge outcome-${state}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.3em",
+        padding: "0.05em 0.5em",
+        borderRadius: "999px",
+        border: `1px solid ${OUTCOME_COLORS[state]}`,
+        color: OUTCOME_COLORS[state],
+        fontSize: "0.78em",
+        fontWeight: 600,
+      }}
+    >
+      {label} · {state}
+    </span>
+  );
+}
 
 type RunEvent = {
   [key: string]: unknown;
@@ -416,6 +456,11 @@ export function RunsPanel({
               <i className={`run-state state-${selectedRun.state.toLowerCase()}`}>{selectedRun.state.replaceAll("_", " ")}</i>
             </div>
             <div className="run-meta"><span><b>Trace</b><code>{selectedRun.traceId}</code></span><span><b>Messages</b>{selectedRun.messagesUsed}</span><span><b>Updated</b>{selectedRun.updatedAt}</span>{selectedRun.errorCode && <span className="run-error"><b>Error</b>{selectedRun.errorCode}</span>}</div>
+            {selectedRun.outcomes && <div className="run-meta run-outcomes-summary">
+              <span><b>Executed</b>{selectedRun.outcomes.executed}/{selectedRun.outcomes.total}</span>
+              <span><b>Goal met</b>{selectedRun.outcomes.goalMet}/{selectedRun.outcomes.total}</span>
+              <span><b>Security met</b>{selectedRun.outcomes.securityMet}/{selectedRun.outcomes.total}</span>
+            </div>}
             <div className="run-actions">
               <button className="secondary-button" disabled={busy} onClick={() => void loadRun(selectedRun.id, true)}>Refresh</button>
               <button className="primary-button" disabled={busy || events.length === 0} onClick={() => onOpenRuntimeTelemetry(events, `Run ${selectedRun.id}`)}>Open runtime graph</button>
@@ -426,6 +471,11 @@ export function RunsPanel({
             <div className="run-task-list">
               {selectedTasks.map(([taskId, task]) => <article className="run-task" key={taskId}>
                 <div><span><strong>{taskId}</strong><small>{task.attempts} attempt{task.attempts === 1 ? "" : "s"}{task.externalTaskId ? ` · ${task.externalTaskId}` : ""}</small></span><i className={`run-state state-${task.state.toLowerCase()}`}>{task.state.replaceAll("_", " ")}</i></div>
+                <div className="run-task-outcomes" style={{ display: "flex", gap: "0.4em", flexWrap: "wrap", margin: "0.35em 0" }}>
+                  <OutcomeBadge label="Executed" value={task.executed ?? false} />
+                  <OutcomeBadge label="Goal" value={task.goalMet ?? null} />
+                  <OutcomeBadge label="Security" value={task.securityMet ?? null} />
+                </div>
                 {(task.errorCode || task.errorMessage) && <p className="run-task-error">{task.errorCode}{task.errorMessage ? ` · ${task.errorMessage}` : ""}</p>}
                 {task.output && Object.keys(task.output).length > 0 && <pre><code>{JSON.stringify(task.output, null, 2)}</code></pre>}
                 {task.state === "WAITING_APPROVAL" && <button className="primary-button approve-task" disabled={busy} onClick={() => void approveTask(taskId)}>Approve task</button>}

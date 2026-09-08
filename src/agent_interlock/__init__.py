@@ -31,6 +31,7 @@ from .a2a_http import (
 from .analytics import InteractionRecord, reduce_interactions, summarize_security_statistics
 from .approvals import Approval, ApprovalStore
 from .architecture import (
+    AcceptanceCriterion,
     ArchitectureBoundary,
     ArchitectureCompileError,
     ArchitectureCompiler,
@@ -59,6 +60,7 @@ from .architecture import (
     TrustZone,
     compare_observed_runtime,
     compare_runtime,
+    parse_acceptance_criterion,
 )
 from .audit_sink import (
     AuditSinkError,
@@ -222,6 +224,7 @@ from .orchestration import (
     WorkflowRunState,
     WorkflowTaskRun,
     WorkflowTaskState,
+    evaluate_acceptance_criteria,
 )
 from .otlp_semconv import SEMCONV_ALIASES, normalize_otlp_semconv, normalize_semconv_attributes
 from .postgres_ledger import (
@@ -343,6 +346,7 @@ __all__ = [
     "Actor",
     "ActorSpec",
     "ActorType",
+    "AcceptanceCriterion",
     "ArchitectureCompileError",
     "ArchitectureCompiler",
     "ArchitectureEdge",
@@ -562,8 +566,10 @@ __all__ = [
     "create_mcp_http_server",
     "create_control_plane_server",
     "create_ledger_http_server",
+    "evaluate_acceptance_criteria",
     "generate_pkce_verifier",
     "import_runtime_telemetry",
+    "parse_acceptance_criterion",
     "parse_bearer_challenge",
     "pkce_s256_challenge",
     "raw_digest",

@@ -31,9 +31,12 @@ from agent_interlock.architecture import ArchitectureCompiler, ArchitectureGraph
 from agent_interlock.ledger import InMemoryLedger
 from agent_interlock.orchestration import (
     A2AOrchestrationAdapter,
+    CallableTaskAdapter,
     OrchestrationEngine,
+    TaskExecutionResult,
     WorkflowRunState,
     WorkflowTaskState,
+    evaluate_acceptance_criteria,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,7 +108,7 @@ def orchestration_manifest(*, approval_required: bool = False) -> dict:
                 "transport": "A2A",
                 "purpose": "SUPPORT_RESEARCH",
                 "dataClasses": ["D2", "D3"],
-                "acceptanceCriteria": ["Answer contains grounded evidence"],
+                "acceptanceCriteria": ["nonempty:artifacts"],
                 "maxAttempts": 2,
                 "timeoutSeconds": 5,
                 "position": {"x": 100, "y": 100},
@@ -119,7 +122,7 @@ def orchestration_manifest(*, approval_required: bool = False) -> dict:
                 "purpose": "SUPPORT_RESEARCH",
                 "dependsOn": ["task.research"],
                 "dataClasses": ["D2", "D3"],
-                "acceptanceCriteria": ["Answer is safe to use"],
+                "acceptanceCriteria": ["required:a2aTaskId"],
                 "approvalRequired": approval_required,
                 "maxAttempts": 1,
                 "timeoutSeconds": 5,
@@ -514,7 +517,7 @@ class A2AHTTPTests(unittest.TestCase):
 class OrchestrationEngineTests(unittest.TestCase):
     @staticmethod
     def _engine(*, approval_required=False, approval_provider=None):
-        broker, _, calls, _ = broker_fixture(
+        broker, ledger, calls, _ = broker_fixture(
             orchestration_manifest(approval_required=approval_required)
         )
 
@@ -529,15 +532,19 @@ class OrchestrationEngineTests(unittest.TestCase):
             )
 
         adapter = A2AOrchestrationAdapter(broker, principal_provider)
+        # The engine and the broker share one ledger, exactly as a real host would wire it:
+        # WORKFLOW_* events and the broker's CONTROL_EVALUATED / SECURITY_OUTCOME_SET evidence
+        # must land in the same trace for security_met to be computable at all.
         engine = OrchestrationEngine(
             broker.architecture,
             adapters={TaskTransport.A2A: adapter},
             approval_provider=approval_provider,
+            ledger=ledger,
         )
-        return engine, calls
+        return engine, calls, ledger
 
     def test_dependency_graph_executes_a2a_tasks_to_completion(self):
-        engine, calls = self._engine()
+        engine, calls, _ = self._engine()
         run = engine.start(
             tenant_id="tenant-a",
             workflow_input={"question": "How do I reset the device?"},
@@ -549,6 +556,11 @@ class OrchestrationEngineTests(unittest.TestCase):
         self.assertEqual(run.tasks["task.verify"].state, WorkflowTaskState.COMPLETED)
         self.assertEqual(run.messages_used, 2)
         self.assertEqual(len(calls), 2)
+        research = run.tasks["task.research"]
+        self.assertTrue(research.executed)
+        self.assertTrue(research.goal_met)
+        self.assertTrue(research.security_met)
+        self.assertEqual(run.outcomes(), {"executed": 2, "goalMet": 2, "securityMet": 2, "total": 2})
 
     def test_approval_gate_pauses_and_resume_does_not_replay_completed_task(self):
         approved = {"value": False}
@@ -556,7 +568,7 @@ class OrchestrationEngineTests(unittest.TestCase):
         def approval_provider(tenant_id, run_id, task, context):
             return approved["value"]
 
-        engine, calls = self._engine(approval_required=True, approval_provider=approval_provider)
+        engine, calls, _ = self._engine(approval_required=True, approval_provider=approval_provider)
         paused = engine.start(
             tenant_id="tenant-a",
             workflow_input={"question": "Reset?"},
@@ -583,6 +595,97 @@ class OrchestrationEngineTests(unittest.TestCase):
         )
         self.assertEqual(run.state, WorkflowRunState.FAILED)
         self.assertEqual(run.tasks["task.research"].error_code, "ORCH-ADAPTER-MISSING")
+        research = run.tasks["task.research"]
+        self.assertFalse(research.executed)
+        self.assertIsNone(research.goal_met)
+        self.assertIsNone(research.security_met)
+
+    def test_missing_required_output_field_fails_acceptance_with_goal_not_met(self):
+        broker, _, _, _ = broker_fixture(orchestration_manifest())
+
+        def flaky(value):  # noqa: ANN001
+            return TaskExecutionResult(output={"unrelated": True}, metadata={"accepted": True})
+
+        engine = OrchestrationEngine(
+            broker.architecture,
+            adapters={TaskTransport.A2A: CallableTaskAdapter(flaky)},
+        )
+        run = engine.start(
+            tenant_id="tenant-a",
+            workflow_input={"question": "Reset?"},
+            run_id="workflow-goal-miss",
+        )
+        research = run.tasks["task.research"]
+        self.assertEqual(research.state, WorkflowTaskState.FAILED)
+        self.assertEqual(research.error_code, "ORCH-ACCEPTANCE-FAILED")
+        self.assertTrue(research.executed)
+        self.assertFalse(research.goal_met)
+
+    def test_security_met_is_false_when_the_boundary_blocked_every_attempt(self):
+        broker, ledger, _, principal = broker_fixture(orchestration_manifest())
+
+        def blocked(value):  # noqa: ANN001
+            context = A2ASendContext(
+                principal=principal,
+                source_actor_id=value.task.source_actor_id,
+                target_actor_id=value.task.target_actor_id,
+                purpose=value.task.purpose,
+                data_classes=frozenset({"D5"}),
+                idempotency_key=f"{value.run_id}:{value.task.id}:{value.attempt}",
+                trace_id=value.trace_id,
+            )
+            try:
+                broker.send_message(request_message(), context)
+            except A2APolicyError as error:
+                raise RuntimeError("; ".join(error.reason_codes)) from error
+            raise AssertionError("expected the boundary to deny a D5 data class")
+
+        engine = OrchestrationEngine(
+            broker.architecture,
+            adapters={TaskTransport.A2A: CallableTaskAdapter(blocked)},
+            ledger=ledger,
+        )
+        run = engine.start(
+            tenant_id="tenant-a",
+            workflow_input={"question": "Reset?"},
+            run_id="workflow-blocked",
+            trace_id="trace-blocked",
+        )
+        research = run.tasks["task.research"]
+        self.assertEqual(research.state, WorkflowTaskState.FAILED)
+        self.assertTrue(research.executed)
+        self.assertIsNone(research.goal_met)
+        self.assertFalse(research.security_met)
+        self.assertEqual(run.outcomes()["securityMet"], 0)
+
+
+class AcceptanceCriteriaEvaluationTests(unittest.TestCase):
+    def test_required_passes_when_the_path_exists(self):
+        self.assertEqual(evaluate_acceptance_criteria(("required:a.b",), {"a": {"b": 1}}), (True, None))
+
+    def test_required_fails_when_the_path_is_missing(self):
+        accepted, reason = evaluate_acceptance_criteria(("required:receiptId",), {})
+        self.assertFalse(accepted)
+        self.assertIn("required:receiptId", reason)
+
+    def test_nonempty_fails_on_an_empty_list(self):
+        accepted, _ = evaluate_acceptance_criteria(("nonempty:artifacts",), {"artifacts": []})
+        self.assertFalse(accepted)
+
+    def test_nonempty_passes_on_a_nonzero_number(self):
+        accepted, _ = evaluate_acceptance_criteria(("nonempty:count",), {"count": 3})
+        self.assertTrue(accepted)
+
+    def test_equals_compares_the_string_form_of_the_value(self):
+        accepted, _ = evaluate_acceptance_criteria(("equals:status=DELIVERED",), {"status": "DELIVERED"})
+        self.assertTrue(accepted)
+        accepted, _ = evaluate_acceptance_criteria(("equals:status=DELIVERED",), {"status": "PENDING"})
+        self.assertFalse(accepted)
+
+    def test_an_entry_outside_the_grammar_fails_with_the_documented_reason(self):
+        accepted, reason = evaluate_acceptance_criteria(("Answer is grounded",), {})
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "ORCH-ACCEPTANCE-CRITERION-INVALID:Answer is grounded")
 
 
 if __name__ == "__main__":

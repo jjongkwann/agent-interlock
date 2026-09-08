@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from agent_interlock import (
+    AcceptanceCriterion,
     ArchitectureCompileError,
     ArchitectureCompiler,
     ArchitectureGraph,
@@ -14,6 +15,7 @@ from agent_interlock import (
     FindingSeverity,
     InMemoryLedger,
     compare_runtime,
+    parse_acceptance_criterion,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -309,6 +311,41 @@ class RuntimeGraphDiffTests(unittest.TestCase):
         diff = compare_runtime(minimal, ledger.all())
         self.assertTrue(diff.conforms)
         self.assertEqual(diff.unobserved_edge_ids, ())
+
+
+class AcceptanceCriterionGrammarTests(unittest.TestCase):
+    def test_required_parses_a_dotted_path(self):
+        self.assertEqual(
+            parse_acceptance_criterion("required:receiptId"),
+            AcceptanceCriterion("required", ("receiptId",)),
+        )
+
+    def test_nonempty_parses_a_nested_path(self):
+        self.assertEqual(
+            parse_acceptance_criterion("nonempty:delivery.receiptId"),
+            AcceptanceCriterion("nonempty", ("delivery", "receiptId")),
+        )
+
+    def test_equals_parses_path_and_value(self):
+        self.assertEqual(
+            parse_acceptance_criterion("equals:status=DELIVERED"),
+            AcceptanceCriterion("equals", ("status",), "DELIVERED"),
+        )
+
+    def test_entries_outside_the_grammar_do_not_parse(self):
+        for entry in ("Answer is grounded", "required:", "equals:status", "nonempty:a..b", "unknown:status"):
+            self.assertIsNone(parse_acceptance_criterion(entry), entry)
+
+    def test_invalid_criterion_is_a_critical_lint_finding_and_blocks_compile(self):
+        value = manifest()
+        task = value["spec"]["orchestration"]["tasks"][0]
+        task["acceptanceCriteria"] = ["Answer is grounded in tenant-scoped support knowledge"]
+        findings = ArchitectureLinter().lint(ArchitectureGraph.from_dict(value))
+        matches = [item for item in findings if item.code == "ARCH-TASK-ACCEPTANCE-INVALID"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].severity, FindingSeverity.CRITICAL)
+        with self.assertRaises(ArchitectureCompileError):
+            ArchitectureCompiler().compile(ArchitectureGraph.from_dict(value))
 
 
 if __name__ == "__main__":

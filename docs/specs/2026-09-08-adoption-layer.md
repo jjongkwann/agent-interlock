@@ -60,8 +60,11 @@ loop starts, so M1–M3 run on the real definitions the model sees.
 **D4. Intent is derived from arguments, and a declared intent must cover the derivation.**
 `intent.py` derives destinations from arguments using the input schema (`format: email`,
 `format: uri`, `format: hostname`, or `x-interlock-destination: true` on a property),
-and the side effect from MCP tool annotations (`readOnlyHint`, `destructiveHint`) and
-the target actor's declared side effects. A new check `INTERLOCK-INTENT-ARGUMENT-MISMATCH`
+and the side effect from MCP tool annotations (`readOnlyHint`, `destructiveHint`).
+`ActorSpec.side_effects` is not a source: it is a capability allowlist that
+`L1-UNDECLARED-SIDE-EFFECT` already reads as one, and reading it as an assertion about
+this call would make the two controls contradict each other. A new check
+`INTERLOCK-INTENT-ARGUMENT-MISMATCH`
 in the shared table (GATEWAY and SDK profiles) fires when the declared destinations do
 not cover the derived ones or the declared side effect is weaker than the derived one.
 When nothing can be derived the check reports INAPPLICABLE through the coverage channel;

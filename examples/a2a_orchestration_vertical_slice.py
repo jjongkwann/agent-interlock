@@ -102,7 +102,11 @@ def demo_mcp_adapter(value):
 
     research = value.dependency_outputs["task.research"]
     return TaskExecutionResult(
-        output={"delivery": "simulated", "researchTask": research["a2aTaskId"]},
+        output={
+            "delivery": "simulated",
+            "researchTask": research["a2aTaskId"],
+            "receiptId": f"receipt-demo-{research['a2aTaskId']}",
+        },
         metadata={"accepted": True, "transport": "MCP-demo"},
     )
 

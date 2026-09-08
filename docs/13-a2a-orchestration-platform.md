@@ -114,7 +114,7 @@ Implementation locations:
 
 Of its 17 checks, **9 are shared with the MCP gateway** (actor type, purpose, data class, secret, and the five M5 token/delegation checks) and **8 are its own** (identity binding, message-part schema, payload presence, and the five boundary checks).
 
-Eleven gateway controls have **no counterpart here at all**: `L1-M9-NEW-DESTINATION`, `L1-M9-VOLUME-EXCEEDED`, `L1-M9-VOLUME-BYTES-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`, and the two M2 definition checks. The broker has no egress-destination, export-volume, side-effect or taint control. The merge unified the mechanism, not the coverage — do not read an absent `A2A-*` finding as the corresponding gateway control having passed.
+Twelve gateway controls have **no counterpart here at all**: `L1-M9-NEW-DESTINATION`, `INTERLOCK-INTENT-ARGUMENT-MISMATCH`, `L1-M9-VOLUME-EXCEEDED`, `L1-M9-VOLUME-BYTES-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`, and the two M2 definition checks. The broker has no egress-destination, export-volume, side-effect or taint control. The merge unified the mechanism, not the coverage — do not read an absent `A2A-*` finding as the corresponding gateway control having passed.
 
 The current A2A 1.0 scope is `SendMessage`, `GetTask`, `CancelTask`, the Agent Card, and synchronous Task processing. `ListTasks`, SSE streaming/subscription, push notifications, the authenticated extended card, and JWS Agent Card admission are production extension items.
 
@@ -141,7 +141,7 @@ The manifest's `spec.orchestration` is the execution DAG.
       "transport": "A2A",
       "purpose": "SUPPORT_RESEARCH",
       "dataClasses": ["D2", "D3"],
-      "acceptanceCriteria": ["Tenant-scoped evidence must exist"],
+      "acceptanceCriteria": ["nonempty:artifacts"],
       "maxAttempts": 2,
       "timeoutSeconds": 120
     }
@@ -179,6 +179,42 @@ There is no capability to forcibly terminate an arbitrary in-process adapter. A 
 The tenant ID is taken only from the authenticated principal, never from the request body. The run/trace ID is checked for safe characters and a maximum length, and run input and output pass through common redaction before the API response. The current reference worker and run store are a single-process bounded-memory implementation, so production must add a durable store, queue lease, heartbeat, fencing, and adapter idempotency.
 
 Studio's Deploy and Runs tabs share the same Control Plane URL/token in the current React session memory. Connection info persists across tab switches but is never written to `localStorage` or `sessionStorage`, and it is cleared on page reload.
+
+### 5.2 Acceptance Criteria Grammar and the Three Outcomes (spec D9)
+
+`acceptanceCriteria` entries are parsed against a small, fixed grammar. An entry outside it is a
+compile-time `ARCH-TASK-ACCEPTANCE-INVALID` (CRITICAL) lint finding, so a criterion that cannot
+compile can never reach a run.
+
+- `required:<path>` -- the dot-separated path exists in the task's output.
+- `nonempty:<path>` -- the path exists and holds a non-empty string, list, mapping, or non-zero number.
+- `equals:<path>=<value>` -- the string form of the value at `<path>` equals `<value>`.
+
+The parser (`parse_acceptance_criterion` in `architecture.py`) is shared by the linter and by the
+runtime evaluator (`evaluate_acceptance_criteria` in `orchestration.py`), so the check that gates
+compilation is the same check that gates a run. A result the adapter itself flags
+`accepted: False` fails before criteria are even evaluated; a task with no `acceptanceCriteria`
+is accepted once its adapter succeeds (the linter still reports `ARCH-TASK-ACCEPTANCE-MISSING` as
+a WARNING).
+
+Every task run records three independent outcomes:
+
+| Outcome | Meaning | Values |
+|---|---|---|
+| `executed` | The adapter was actually invoked (returned or raised) for this task | `true` / `false` |
+| `goalMet` | The task's acceptance criteria were evaluated and passed | `true` / `false` / `null` (not evaluated) |
+| `securityMet` | Every ledger interaction naming this task's source->target actor pair permitted execution and was not an enforced block | `true` / `false` / `null` (nothing to judge) |
+
+`securityMet` is computed after the task ends by reducing the run's whole trace
+(`ledger.trace(tenant_id, run.trace_id)`) with `analytics.reduce_interactions` and keeping only the
+interactions whose `(source_actor_id, target_actor_id)` matches the task's. It is independent of
+`goalMet`: an adapter can return an accepted result for a call the A2A boundary or MCP gateway
+still recorded as an enforced block, and the task then reports `goalMet: true, securityMet: false`.
+
+`WorkflowRun.outcomes` aggregates these into `{"executed": n, "goalMet": n, "securityMet": n,
+"total": n}`, exposed both in `RunControlService`'s public run dict and in the
+`WORKFLOW_RUN_*`/`WORKFLOW_TASK_STATUS_UPDATED` Ledger event payloads. Studio's Runs tab renders
+the three flags as per-task badges (yes/no/unknown) plus the run-level counts.
 
 ## 6. The Design Graph Does Not Become the Runtime Graph
 

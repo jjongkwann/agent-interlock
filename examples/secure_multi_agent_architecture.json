@@ -567,7 +567,7 @@
             "D7"
           ],
           "acceptanceCriteria": [
-            "Answer is grounded in tenant-scoped support knowledge"
+            "nonempty:artifacts"
           ],
           "maxAttempts": 2,
           "timeoutSeconds": 120,
@@ -592,7 +592,7 @@
             "D7"
           ],
           "acceptanceCriteria": [
-            "Delivery receipt is reconciled with the approved destination"
+            "required:receiptId"
           ],
           "maxAttempts": 1,
           "timeoutSeconds": 60,

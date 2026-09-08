@@ -114,7 +114,7 @@ Cross-zone Edge에는 `boundaryId`가 반드시 있어야 한다. compiler는 �
 
 check 17개 중 **9개는 MCP gateway와 공유**하고(actor type, purpose, data class, secret과 M5 token/delegation check 5개) **8개는 broker 자체 통제**다(identity binding, message-part schema, payload 존재, boundary check 5개).
 
-gateway 통제 11개는 여기에 **대응물이 아예 없다**: `L1-M9-NEW-DESTINATION`, `L1-M9-VOLUME-EXCEEDED`, `L1-M9-VOLUME-BYTES-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`과 M2 definition check 2개다. broker에는 egress 목적지·export 용량·side effect·taint 통제가 없다. 이번 병합이 통합한 것은 메커니즘이지 커버리지가 아니다 — `A2A-*` finding이 없다고 해서 대응되는 gateway 통제가 통과한 것으로 읽어서는 안 된다.
+gateway 통제 12개는 여기에 **대응물이 아예 없다**: `L1-M9-NEW-DESTINATION`, `INTERLOCK-INTENT-ARGUMENT-MISMATCH`, `L1-M9-VOLUME-EXCEEDED`, `L1-M9-VOLUME-BYTES-EXCEEDED`, `INTERLOCK-TAINTED-EXTERNAL-WRITE`, `L1-UNDECLARED-SIDE-EFFECT`, `INTERLOCK-DESTRUCTIVE-WRITE`, `INTERLOCK-APPROVAL-REQUIRED`, `INTERLOCK-INPUT-SCHEMA-INVALID`, `L1-M5-CREDENTIAL-MISSING`과 M2 definition check 2개다. broker에는 egress 목적지·export 용량·side effect·taint 통제가 없다. 이번 병합이 통합한 것은 메커니즘이지 커버리지가 아니다 — `A2A-*` finding이 없다고 해서 대응되는 gateway 통제가 통과한 것으로 읽어서는 안 된다.
 
 현재 A2A 1.0 범위는 `SendMessage`, `GetTask`, `CancelTask`, Agent Card와 동기 Task 처리다. `ListTasks`, SSE streaming/subscription, push notification, authenticated extended card, JWS Agent Card admission은 운영 확장 항목이다.
 
@@ -141,7 +141,7 @@ Manifest의 `spec.orchestration`은 실행 DAG다.
       "transport": "A2A",
       "purpose": "SUPPORT_RESEARCH",
       "dataClasses": ["D2", "D3"],
-      "acceptanceCriteria": ["Tenant-scoped evidence가 있어야 한다"],
+      "acceptanceCriteria": ["nonempty:artifacts"],
       "maxAttempts": 2,
       "timeoutSeconds": 120
     }
@@ -179,6 +179,41 @@ in-process 임의 adapter를 강제 종료하는 기능은 없다. deadline을 �
 tenant ID는 request body가 아니라 인증 principal에서만 가져온다. run/trace ID는 안전한 문자와 최대 길이를 검사하고, run input과 output은 API 응답 전에 공통 redaction을 거친다. 현재 reference worker와 run store는 단일 프로세스 bounded memory 구현이므로 프로덕션에서는 durable store, queue lease, heartbeat, fencing, adapter idempotency를 구현해야 한다.
 
 Studio의 Deploy와 Runs는 같은 Control Plane URL/token을 현재 React 세션 메모리에서 공유한다. 탭을 이동해도 연결 정보는 유지되지만 `localStorage`나 `sessionStorage`에는 기록하지 않으며, 페이지 reload 시 제거된다.
+
+### 5.2 Acceptance Criteria 문법과 세 가지 결과 (spec D9)
+
+`acceptanceCriteria` 항목은 고정된 소규모 문법으로 파싱된다. 이 문법 밖의 항목은 compile 시점에
+`ARCH-TASK-ACCEPTANCE-INVALID`(CRITICAL) lint finding이 되므로, compile을 통과하지 못하는
+criterion은 run에 도달할 수 없다.
+
+- `required:<path>` -- dot로 구분한 path가 task output에 존재한다.
+- `nonempty:<path>` -- path가 존재하고 비어 있지 않은 문자열·리스트·mapping이거나 0이 아닌 숫자다.
+- `equals:<path>=<value>` -- `<path>`의 값을 문자열로 변환한 결과가 `<value>`와 같다.
+
+이 parser(`architecture.py`의 `parse_acceptance_criterion`)는 linter와 runtime evaluator
+(`orchestration.py`의 `evaluate_acceptance_criteria`)가 공유하므로, compile을 막는 검사와 run을
+막는 검사가 동일하다. adapter 자신이 `accepted: False`로 표시한 결과는 criteria 평가 이전에 먼저
+실패하며, `acceptanceCriteria`가 없는 task는 adapter가 성공하면 그대로 accepted 처리된다(linter는
+여전히 `ARCH-TASK-ACCEPTANCE-MISSING`을 WARNING으로 보고한다).
+
+모든 task run은 서로 독립적인 세 가지 결과를 기록한다.
+
+| 결과 | 의미 | 값 |
+|---|---|---|
+| `executed` | 이 task에 대해 adapter가 실제로 호출됐다(반환했거나 예외를 던졌다) | `true` / `false` |
+| `goalMet` | task의 acceptance criteria가 평가되어 통과했다 | `true` / `false` / `null`(평가되지 않음) |
+| `securityMet` | 이 task의 source->target actor 쌍을 가리키는 모든 ledger interaction이 실행을 허용했고 enforced block이 아니었다 | `true` / `false` / `null`(판단할 대상 없음) |
+
+`securityMet`은 task가 끝난 뒤 run 전체 trace(`ledger.trace(tenant_id, run.trace_id)`)를
+`analytics.reduce_interactions`로 reduce하고, `(source_actor_id, target_actor_id)`가 task와
+일치하는 interaction만 남겨서 계산한다. `goalMet`과는 독립적이다. adapter가 accepted 결과를
+반환했더라도 A2A boundary나 MCP gateway가 그 호출을 enforced block으로 기록했다면 task는
+`goalMet: true, securityMet: false`로 보고된다.
+
+`WorkflowRun.outcomes`는 이를 `{"executed": n, "goalMet": n, "securityMet": n, "total": n}`로
+집계하며, `RunControlService`의 공개 run dict와 `WORKFLOW_RUN_*`/`WORKFLOW_TASK_STATUS_UPDATED`
+Ledger event payload 양쪽에 모두 노출된다. Studio의 Runs 탭은 이 세 flag를 task별 배지(yes/no/
+unknown)로, run 단위 개수는 별도로 보여준다.
 
 ## 6. Design Graph는 Runtime Graph로 바뀌지 않는다
 

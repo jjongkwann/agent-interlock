@@ -179,7 +179,7 @@ class RunControlAPITests(unittest.TestCase):
             def a2a(value):  # noqa: ANN001
                 calls["a2a"] += 1
                 return TaskExecutionResult(
-                    output={"evidenceIds": ["kb-test-only-001"]},
+                    output={"evidenceIds": ["kb-test-only-001"], "artifacts": [{"artifactId": "test-only"}]},
                     metadata={"accepted": True},
                 )
 
@@ -223,6 +223,14 @@ class RunControlAPITests(unittest.TestCase):
             completed = plane.wait_for_state(run_id, "COMPLETED")
             self.assertEqual(completed["tasks"]["task.send-reply"]["output"]["status"], "TEST_ONLY")
             self.assertEqual(calls, {"a2a": 1, "mcp": 1})
+
+            self.assertEqual(
+                completed["outcomes"],
+                {"executed": 2, "goalMet": 2, "securityMet": 0, "total": 2},
+            )
+            self.assertTrue(completed["tasks"]["task.research"]["executed"])
+            self.assertTrue(completed["tasks"]["task.research"]["goalMet"])
+            self.assertIsNone(completed["tasks"]["task.research"]["securityMet"])
 
             status, listed = plane.request("GET", "/v1/runs", token=VIEWER_TOKEN)
             self.assertEqual(status, 200)
@@ -324,7 +332,10 @@ class RunControlAPITests(unittest.TestCase):
     def test_run_edges_are_enforced_regardless_of_the_bundles_authored_mode(self) -> None:
         def adapter_provider(_compiled):  # noqa: ANN001
             def a2a(value):  # noqa: ANN001
-                return TaskExecutionResult(output={"evidenceIds": ["kb-test-only-001"]}, metadata={"accepted": True})
+                return TaskExecutionResult(
+                    output={"evidenceIds": ["kb-test-only-001"], "artifacts": [{"artifactId": "test-only"}]},
+                    metadata={"accepted": True},
+                )
 
             def mcp(value):  # noqa: ANN001
                 return TaskExecutionResult(

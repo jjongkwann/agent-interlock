@@ -22,14 +22,74 @@ from .a2a import (
     A2ASendContext,
     A2ATaskState,
 )
+from .analytics import reduce_interactions
 from .architecture import (
+    AcceptanceCriterion,
     CompiledArchitecture,
     OrchestrationTask,
     TaskFailureAction,
     TaskTransport,
+    parse_acceptance_criterion,
 )
 from .ledger import InMemoryLedger, Ledger
 from .models import DataSource, Environment
+
+_MISSING = object()
+
+
+def _lookup_path(output: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = output
+    for segment in path:
+        if not isinstance(current, Mapping) or segment not in current:
+            return _MISSING
+        current = current[segment]
+    return current
+
+
+def _is_nonempty(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (str, list, tuple, Mapping)):
+        return len(value) > 0
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
+def _evaluate_criterion(criterion: AcceptanceCriterion, output: Mapping[str, Any]) -> tuple[bool, str | None]:
+    value = _lookup_path(output, criterion.path)
+    path = ".".join(criterion.path)
+    if criterion.kind == "required":
+        if value is _MISSING:
+            return False, f"ORCH-ACCEPTANCE-FAILED:required:{path} is missing"
+        return True, None
+    if criterion.kind == "nonempty":
+        if value is _MISSING or not _is_nonempty(value):
+            return False, f"ORCH-ACCEPTANCE-FAILED:nonempty:{path} is missing or empty"
+        return True, None
+    if value is _MISSING or str(value) != criterion.value:
+        return False, f"ORCH-ACCEPTANCE-FAILED:equals:{path} did not match the expected value"
+    return True, None
+
+
+def evaluate_acceptance_criteria(
+    criteria: tuple[str, ...], output: Mapping[str, Any]
+) -> tuple[bool, str | None]:
+    """Evaluate a task's acceptance-criteria grammar against its execution output.
+
+    An entry outside the fixed grammar (``required:``/``nonempty:``/``equals:``) fails the
+    task rather than being ignored -- the linter's ``ARCH-TASK-ACCEPTANCE-INVALID`` should
+    already have caught it at compile time, but a run must not trust that it did.
+    """
+
+    for entry in criteria:
+        parsed = parse_acceptance_criterion(entry)
+        if parsed is None:
+            return False, f"ORCH-ACCEPTANCE-CRITERION-INVALID:{entry}"
+        accepted, reason = _evaluate_criterion(parsed, output)
+        if not accepted:
+            return False, reason
+    return True, None
 
 
 class OrchestrationError(RuntimeError):
@@ -188,6 +248,9 @@ class WorkflowTaskRun:
     external_task_id: str | None = None
     started_at: str | None = None
     ended_at: str | None = None
+    executed: bool = False
+    goal_met: bool | None = None
+    security_met: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -200,6 +263,9 @@ class WorkflowTaskRun:
             "externalTaskId": self.external_task_id,
             "startedAt": self.started_at,
             "endedAt": self.ended_at,
+            "executed": self.executed,
+            "goalMet": self.goal_met,
+            "securityMet": self.security_met,
         }
 
 
@@ -218,6 +284,15 @@ class WorkflowRun:
     messages_used: int = 0
     error_code: str | None = None
 
+    def outcomes(self) -> dict[str, int]:
+        tasks = self.tasks.values()
+        return {
+            "executed": sum(1 for task in tasks if task.executed),
+            "goalMet": sum(1 for task in tasks if task.goal_met is True),
+            "securityMet": sum(1 for task in tasks if task.security_met is True),
+            "total": len(self.tasks),
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -232,6 +307,7 @@ class WorkflowRun:
             "updatedAt": self.updated_at,
             "messagesUsed": self.messages_used,
             "errorCode": self.error_code,
+            "outcomes": self.outcomes(),
         }
 
 
@@ -518,10 +594,14 @@ class OrchestrationEngine:
         if adapter is None:
             return self._failed_task(current, task, "ORCH-ADAPTER-MISSING", "task transport has no adapter")
         last_error: Exception | None = None
+        executed = False
+        goal_met: bool | None = None
         for attempt in range(current.attempts + 1, task.max_attempts + 1):
+            goal_met = None
             try:
                 budget.consume()
                 deadline = time.time() + task.timeout_seconds
+                executed = True
                 result = adapter.execute(
                     TaskExecutionInput(
                         run_id=run.id,
@@ -537,6 +617,7 @@ class OrchestrationEngine:
                 if time.time() > deadline:
                     raise OrchestrationError("ORCH-TASK-TIMEOUT", "task exceeded its execution timeout")
                 accepted, reason = self.acceptance_evaluator(task, result)
+                goal_met = accepted
                 if not accepted:
                     raise OrchestrationError("ORCH-ACCEPTANCE-FAILED", reason or "task acceptance failed")
                 return replace(
@@ -546,12 +627,24 @@ class OrchestrationEngine:
                     output=dict(result.output),
                     external_task_id=result.external_task_id,
                     ended_at=_now(),
+                    executed=True,
+                    goal_met=True,
+                    security_met=self._security_met(run, task),
                 )
             except Exception as error:  # noqa: BLE001 - retries contain adapter failures
                 last_error = error
         reason_code = getattr(last_error, "reason_code", "ORCH-TASK-EXECUTION-FAILED")
         message = str(last_error) if last_error else "task execution failed"
-        return self._failed_task(current, task, reason_code, message, attempts=task.max_attempts)
+        return self._failed_task(
+            current,
+            task,
+            reason_code,
+            message,
+            attempts=task.max_attempts,
+            executed=executed,
+            goal_met=goal_met,
+            security_met=self._security_met(run, task) if executed else None,
+        )
 
     @staticmethod
     def _failed_task(
@@ -561,6 +654,9 @@ class OrchestrationEngine:
         message: str,
         *,
         attempts: int | None = None,
+        executed: bool = False,
+        goal_met: bool | None = None,
+        security_met: bool | None = None,
     ) -> WorkflowTaskRun:
         state = WorkflowTaskState.SKIPPED if task.on_failure == TaskFailureAction.SKIP else WorkflowTaskState.FAILED
         return replace(
@@ -570,7 +666,29 @@ class OrchestrationEngine:
             error_code=reason_code,
             error_message=message,
             ended_at=_now(),
+            executed=executed,
+            goal_met=goal_met,
+            security_met=security_met,
         )
+
+    def _security_met(self, run: WorkflowRun, task: OrchestrationTask) -> bool | None:
+        """Whether every ledger interaction naming this task's source->target pair was safe.
+
+        Reduces the run's whole trace with ``analytics.reduce_interactions`` and looks only at
+        the interactions whose (source, target) actor pair matches the task's. ``None`` when
+        there is nothing to judge; ``True`` only when every such interaction permitted execution
+        and none of them was an enforced block; ``False`` otherwise.
+        """
+
+        events = (event.to_dict() for event in self.ledger.trace(run.tenant_id, run.trace_id))
+        relevant = [
+            record
+            for record in reduce_interactions(events)
+            if record.source_actor_id == task.source_actor_id and record.target_actor_id == task.target_actor_id
+        ]
+        if not relevant:
+            return None
+        return all(record.execution_permitted and not record.enforced_block for record in relevant)
 
     @staticmethod
     def _dependencies_satisfied(
@@ -597,7 +715,9 @@ class OrchestrationEngine:
     def _default_acceptance(task: OrchestrationTask, result: TaskExecutionResult) -> tuple[bool, str | None]:
         if result.metadata.get("accepted") is False:
             return False, "adapter marked result as not accepted"
-        return True, None
+        if not task.acceptance_criteria:
+            return True, None
+        return evaluate_acceptance_criteria(task.acceptance_criteria, result.output)
 
     def _append_run_event(self, event_type: str, run: WorkflowRun) -> None:
         self.ledger.append(
@@ -608,7 +728,12 @@ class OrchestrationEngine:
             source_actor_id=self.definition.coordinator_actor_id,
             relationship_type="ROUTES",
             relationship_id="REL-02",
-            payload={"runId": run.id, "state": run.state.value, "errorCode": run.error_code},
+            payload={
+                "runId": run.id,
+                "state": run.state.value,
+                "errorCode": run.error_code,
+                "outcomes": run.outcomes(),
+            },
         )
 
     def _append_task_event(self, run: WorkflowRun, task: WorkflowTaskRun) -> None:
@@ -629,5 +754,8 @@ class OrchestrationEngine:
                 "attempts": task.attempts,
                 "errorCode": task.error_code,
                 "externalTaskId": task.external_task_id,
+                "executed": task.executed,
+                "goalMet": task.goal_met,
+                "securityMet": task.security_met,
             },
         )

@@ -169,6 +169,47 @@ class OrchestrationTask:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptanceCriterion:
+    """One parsed entry of a task's ``acceptanceCriteria`` grammar.
+
+    ``kind`` is ``required``, ``nonempty``, or ``equals``; ``path`` is the dot-separated key
+    sequence into a task's output mapping; ``value`` is only set for ``equals``.
+    """
+
+    kind: str
+    path: tuple[str, ...]
+    value: str | None = None
+
+
+def parse_acceptance_criterion(entry: str) -> AcceptanceCriterion | None:
+    """Parse one acceptance-criteria entry, or ``None`` when it is outside the grammar.
+
+    Grammar: ``required:<path>``, ``nonempty:<path>``, ``equals:<path>=<value>``, where
+    ``<path>`` is one or more non-empty dot-separated keys. Shared by the linter (compile-time
+    ``ARCH-TASK-ACCEPTANCE-INVALID``) and the runtime evaluator, so a criterion that cannot
+    compile can never reach a run.
+    """
+
+    kind, sep, rest = entry.partition(":")
+    if not sep or not rest:
+        return None
+    if kind == "equals":
+        path_part, eq, value = rest.partition("=")
+        if not eq or not path_part:
+            return None
+        path = tuple(path_part.split("."))
+        if not all(path):
+            return None
+        return AcceptanceCriterion("equals", path, value)
+    if kind in ("required", "nonempty"):
+        path = tuple(rest.split("."))
+        if not all(path):
+            return None
+        return AcceptanceCriterion(kind, path)
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class OrchestrationRunPolicy:
     max_parallelism: int = 4
     max_tasks: int = 100
@@ -697,6 +738,17 @@ class ArchitectureLinter:
                         node_id=task.target_actor_id,
                     )
                 )
+            else:
+                for entry in task.acceptance_criteria:
+                    if parse_acceptance_criterion(entry) is None:
+                        findings.append(
+                            ArchitectureFinding(
+                                "ARCH-TASK-ACCEPTANCE-INVALID",
+                                FindingSeverity.CRITICAL,
+                                f"task {task.id} acceptance criterion is outside the grammar: {entry}",
+                                node_id=task.target_actor_id,
+                            )
+                        )
             high_risk = nodes[task.target_actor_id].actor.side_effects & {
                 SideEffect.EXTERNAL_WRITE,
                 SideEffect.DESTRUCTIVE_WRITE,
