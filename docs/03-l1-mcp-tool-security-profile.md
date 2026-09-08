@@ -178,7 +178,7 @@ The MCP Host owns the user's intent and the model context, while the MCP Client 
 
 **Required observations.** Record D7 source ID, owner, tenant, classification; D2 purpose; the full set of final destinations; byte/record count; redaction; approver; and the downstream transaction/receipt.
 
-**Controls.** Apply a source-to-destination LinkPolicy with new destinations blocked by default. Display the full D3 immediately before actual execution, and route sensitive data, bulk transfers, and external writes through separate approval and the Egress Guard.
+**Controls.** Apply a source-to-destination LinkPolicy with new destinations blocked by default. Derive the destinations from the arguments rather than trusting the caller's declaration -- `INTERLOCK-INTENT-ARGUMENT-MISMATCH` blocks when a recipient named by a schema-marked property (the BCC above) is missing from the declared D3 set. Display the full D3 immediately before actual execution, and route sensitive data, bulk transfers, and external writes through separate approval and the Egress Guard.
 
 ## 7. Actor and Link Representation
 

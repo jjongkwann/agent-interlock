@@ -101,11 +101,11 @@ flowchart LR
 
 | Component | Responsibility | MVP Implementation |
 |---|---|---|
-| Sensor/SDK | Observes internal steps within the Agent framework **and enforces**: `wrap()` runs `SDK_PROFILE`'s 18 checks (`sdk.py:152`) and raises `GatewayError` under `ENFORCE` (`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
+| Sensor/SDK | Observes internal steps within the Agent framework **and enforces**: `wrap()` runs `SDK_PROFILE`'s 19 checks (`sdk.py:152`) and raises `GatewayError` under `ENFORCE` (`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
 | Security Gateway | Relays/blocks requests per relationship | HTTP/gRPC middleware, Tool/RAG adapter |
 | Event Normalizer | Converts provider-specific logs into the common schema | Stateless service |
 | Policy Decision Point | Evaluates policy, authorization, and risk score | Policy engine + deterministic rules |
-| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway **and in the SDK** — three points run the shared check table today: MCP gateway (20 checks), SDK (18), A2A broker (17). They are not equivalent; see §4.2 |
+| Policy Enforcement Point | Executes block/hold/sanitize/revoke | Embedded in each Gateway **and in the SDK** — three points run the shared check table today: MCP gateway (21 checks), SDK (19), A2A broker (17). They are not equivalent; see §4.2 |
 | Event Bus | Asynchronous delivery and reprocessing | MVP writes directly to the DB or uses a lightweight queue; Kafka-compatible at scale |
 | Event Store | Data for search, statistics, and correlation | PostgreSQL partitioning |
 | Evidence Store | Encrypted raw content, files, and large payloads | S3-compatible Object Storage |
@@ -116,18 +116,18 @@ flowchart LR
 
 ### 4.2 The Three Enforcement Points Share a Mechanism, Not a Scope
 
-Policy judgment is declared once, in `policy.py`'s `CHECKS` table (28 checks). An enforcement point is a `Profile`: which check ids it runs, and what reason code it emits for each. That is the whole of what was unified — **the mechanism, not the coverage.**
+Policy judgment is declared once, in `policy.py`'s `CHECKS` table (29 checks). An enforcement point is a `Profile`: which check ids it runs, and what reason code it emits for each. That is the whole of what was unified — **the mechanism, not the coverage.**
 
 | Point | Profile | Checks | Emitted namespace |
 |---|---|---|---|
-| MCP gateway | `GATEWAY_PROFILE` | 20 | `INTERLOCK-*`, `L1-*` |
-| SDK (`wrap()`) | `SDK_PROFILE` | 18 | `INTERLOCK-*`, `L1-*` |
+| MCP gateway | `GATEWAY_PROFILE` | 21 | `INTERLOCK-*`, `L1-*` |
+| SDK (`wrap()`) | `SDK_PROFILE` | 19 | `INTERLOCK-*`, `L1-*` |
 | A2A broker | `A2A_PROFILE` (split into `A2A_LINK_PROFILE` 12 + `A2A_BOUNDARY_PROFILE` 5) | 17 | `A2A-*` |
 
 The three do **not** check the same things, and no statistic should be read as if they did:
 
 - The SDK omits the two M2 definition checks — it never holds a `ToolRevision`. Those are ABSENT at the SDK, not "passed".
-- The broker shares only **9** of its 17 checks with the gateway; the other 8 are its own (identity binding, message-part schema, payload presence, and the five boundary checks). Eleven gateway controls have no counterpart on the broker at all — it has **no** egress-destination, export-volume, side-effect, taint, approval or schema control.
+- The broker shares only **9** of its 17 checks with the gateway; the other 8 are its own (identity binding, message-part schema, payload presence, and the five boundary checks). Twelve gateway controls have no counterpart on the broker at all — it has **no** egress-destination, export-volume, side-effect, taint, approval or schema control.
 - Each point renames what it emits. The same control appears as `L1-M5-TOKEN-AUDIENCE-MISMATCH` at the gateway and `A2A-AUDIENCE-MISMATCH` at the broker. Aggregates keyed on reason code are therefore **not** comparable across points; aggregates keyed on the canonical check id are. Any join between the two must go through `Profile.reason_codes`, never a string match.
 
 Two comparisons genuinely differ rather than merely being renamed, and the difference is a parameter rather than a second check. Both points run the same predicate against `intent.expected_audience` and `intent.expected_resource`; the broker is what *fills those fields*, from `target.identity` and `a2a://{target.id}` respectively (`a2a.py:650-651`), where the MCP gateway takes them from the caller's declared intent.

@@ -232,6 +232,7 @@ class ProfileMembershipTests(unittest.TestCase):
                 "INTERLOCK-DATA-CLASS-DENIED",
                 "L1-M8-CREDENTIAL-DETECTED",
                 "L1-M9-NEW-DESTINATION",
+                "INTERLOCK-INTENT-ARGUMENT-MISMATCH",
                 "L1-M9-VOLUME-EXCEEDED",
                 "L1-M9-VOLUME-BYTES-EXCEEDED",
                 "L1-UNDECLARED-SIDE-EFFECT",

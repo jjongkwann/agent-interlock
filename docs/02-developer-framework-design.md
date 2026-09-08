@@ -166,7 +166,7 @@ Even without an SDK, a Proxy can observe communication, but semantics such as pl
 
 ### 4.2 `wrap()` Enforces, and Can Now Approve
 
-`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 18 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses. The call does not happen. Eighteen of the gateway's twenty checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
+`wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 19 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses. The call does not happen. Nineteen of the gateway's twenty-one checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
 
 **A wrapped Tool can perform an external write once it holds a matching approval.** `external_write_requires_approval` defaults `True`, so `INTERLOCK-APPROVAL-REQUIRED` fires on every `EXTERNAL_WRITE` intent unless `approval_valid` is set. The gateway and the SDK now share one approval store (`approvals.ApprovalStore`): `Interlock.grant_approval(...)` grants an approval the same way `MCPToolGateway.grant_approval` does, and `_invoke` looks it up and passes the result into `CheckContext.approval_valid` on every call. An approval binds to the exact arguments hash, canonical destination set, tenant, and expiry it was granted for — nothing else validates against it.
 

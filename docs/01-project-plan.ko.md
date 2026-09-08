@@ -101,11 +101,11 @@ flowchart LR
 
 | 컴포넌트 | 책임 | MVP 구현 |
 |---|---|---|
-| Sensor/SDK | Agent 프레임워크 내부 단계 관측 **및 집행**: `wrap()`이 `SDK_PROFILE`의 check 18개를 실행하고(`sdk.py:152`), `ENFORCE`에서는 `GatewayError`를 raise한다(`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
+| Sensor/SDK | Agent 프레임워크 내부 단계 관측 **및 집행**: `wrap()`이 `SDK_PROFILE`의 check 19개를 실행하고(`sdk.py:152`), `ENFORCE`에서는 `GatewayError`를 raise한다(`sdk.py:199`) | Python/TypeScript SDK, OpenTelemetry hook |
 | Security Gateway | 관계별 요청 중계·차단 | HTTP/gRPC middleware, Tool/RAG adapter |
 | Event Normalizer | 공급자별 로그를 공통 스키마로 변환 | Stateless service |
 | Policy Decision Point | 정책·권한·위험 점수 판정 | 정책 엔진 + 결정론적 규칙 |
-| Policy Enforcement Point | 차단·보류·정제·회수 실행 | 각 Gateway **및 SDK**에 내장 — 현재 공유 check 표를 실행하는 집행점은 셋이다: MCP gateway(check 20개), SDK(18개), A2A broker(17개). 셋은 동등하지 않다. §4.2 참고 |
+| Policy Enforcement Point | 차단·보류·정제·회수 실행 | 각 Gateway **및 SDK**에 내장 — 현재 공유 check 표를 실행하는 집행점은 셋이다: MCP gateway(check 21개), SDK(19개), A2A broker(17개). 셋은 동등하지 않다. §4.2 참고 |
 | Event Bus | 비동기 전송·재처리 | MVP는 DB 직접 기록 또는 경량 queue, 확장 시 Kafka 호환 |
 | Event Store | 검색·통계·상관분석 데이터 | PostgreSQL 파티셔닝 |
 | Evidence Store | 암호화 원문·파일·대용량 payload | S3 호환 Object Storage |
@@ -116,18 +116,18 @@ flowchart LR
 
 ### 4.2 세 집행점은 메커니즘을 공유할 뿐, 범위를 공유하지 않는다
 
-정책 판정은 `policy.py`의 `CHECKS` 표(check 28개)에 한 번만 선언된다. 집행점은 `Profile`이다. 즉 어떤 check id를 실행하고 각각에 대해 어떤 reason code를 방출하는지의 조합이다. 통합된 것은 이게 전부다 — **커버리지가 아니라 메커니즘이다.**
+정책 판정은 `policy.py`의 `CHECKS` 표(check 29개)에 한 번만 선언된다. 집행점은 `Profile`이다. 즉 어떤 check id를 실행하고 각각에 대해 어떤 reason code를 방출하는지의 조합이다. 통합된 것은 이게 전부다 — **커버리지가 아니라 메커니즘이다.**
 
 | 집행점 | Profile | check 수 | 방출 namespace |
 |---|---|---|---|
-| MCP gateway | `GATEWAY_PROFILE` | 20 | `INTERLOCK-*`, `L1-*` |
-| SDK (`wrap()`) | `SDK_PROFILE` | 18 | `INTERLOCK-*`, `L1-*` |
+| MCP gateway | `GATEWAY_PROFILE` | 21 | `INTERLOCK-*`, `L1-*` |
+| SDK (`wrap()`) | `SDK_PROFILE` | 19 | `INTERLOCK-*`, `L1-*` |
 | A2A broker | `A2A_PROFILE`(`A2A_LINK_PROFILE` 12개 + `A2A_BOUNDARY_PROFILE` 5개로 분리) | 17 | `A2A-*` |
 
 셋은 같은 것을 검사하지 **않으며**, 어떤 통계도 셋이 같다는 전제로 읽어서는 안 된다.
 
 - SDK는 M2 definition check 2개를 실행하지 않는다. SDK는 `ToolRevision`을 보유하지 않기 때문이다. 이 둘은 SDK에서 "통과"가 아니라 ABSENT다.
-- broker는 check 17개 중 gateway와 공유하는 것이 **9개**뿐이고, 나머지 8개는 자체 통제다(identity binding, message-part schema, payload 존재, boundary check 5개). gateway 통제 11개는 broker에 대응물이 아예 없다 — egress 목적지·export 용량·side effect·taint·approval·schema 통제가 **하나도** 없다.
+- broker는 check 17개 중 gateway와 공유하는 것이 **9개**뿐이고, 나머지 8개는 자체 통제다(identity binding, message-part schema, payload 존재, boundary check 5개). gateway 통제 12개는 broker에 대응물이 아예 없다 — egress 목적지·export 용량·side effect·taint·approval·schema 통제가 **하나도** 없다.
 - 각 집행점은 방출하는 이름을 각자 바꾼다. 같은 통제가 gateway에서는 `L1-M5-TOKEN-AUDIENCE-MISMATCH`, broker에서는 `A2A-AUDIENCE-MISMATCH`로 나타난다. 따라서 reason code를 키로 한 집계는 집행점 간에 비교 **불가**하고, canonical check id를 키로 한 집계는 비교 가능하다. 둘 사이의 join은 반드시 `Profile.reason_codes`를 거쳐야 하며 문자열 매칭으로 해서는 안 된다.
 
 이름만 바뀐 게 아니라 실제로 다른 비교가 둘 있는데, 그 차이는 별도의 check가 아니라 매개변수다. 두 집행점 모두 `intent.expected_audience`·`intent.expected_resource`를 상대로 같은 술어를 실행한다. 다만 broker는 그 필드를 각각 `target.identity`와 `a2a://{target.id}`로 *채우는* 쪽이고(`a2a.py:650-651`), MCP gateway는 호출자가 선언한 intent에서 그대로 가져온다.

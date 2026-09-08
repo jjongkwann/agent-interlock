@@ -897,7 +897,7 @@ under-reported:
    carries the armed set **explicitly**, keyed by a digest over the whole body, so
    the armed set no longer has to be derivable from fields already on the event.
    The constraint that remains is that it must not vary *per invocation*, and a
-   test varies exactly the per-invocation fields across all 28 checks and fails if
+   test varies exactly the per-invocation fields across all 29 checks and fails if
    any armed verdict moves. That test is the whole safety margin for the wider
    signature.
 3. ~~**Split the two multi-control check ids.**~~ **Done — split, not accepted.**
@@ -906,7 +906,9 @@ under-reported:
    wire is unchanged: both new keys were already renamed (or are now) onto the code
    their point has always emitted, and each split id sits immediately after its
    sibling in every profile, so reason-code order does not move either. The check
-   table is 28 checks; 26 controls became 28 because two were always two.
+   table is 28 checks; 26 controls became 28 because two were always two. The adoption layer
+   added `INTERLOCK-INTENT-ARGUMENT-MISMATCH` to the gateway and SDK profiles, so the
+   table is 29 checks today: gateway 21, SDK 19, A2A broker 17.
 4. ~~**Pick one coverage convention for the three side-effect checks.**~~ **Done.**
    The side effect a check governs *is* its subject, so a different one is
    INAPPLICABLE for all three. `_destructive_write` and `_approval` moved to

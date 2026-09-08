@@ -129,7 +129,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - definition drift, metadata instruction, cross-server reference 격리
 - 호출 인수 schema, 데이터 등급, secret, 목적지, token binding, 선언 부작용 정책
 - hash·목적지에 결합된 승인과 hash-bound connector 실행 — **gateway 전용**: 승인 API는 `MCPToolGateway.grant_approval` 하나뿐이므로, `wrap()`으로 감싼 Tool은 기본 `LinkPolicy`에서 `EXTERNAL_WRITE`를 수행할 수 없다(`external_write_requires_approval`의 기본값이 `True`이고 SDK는 `approval_valid`를 설정하지 않는다). fail-closed이긴 하지만 SDK에서는 승인 경로에 도달할 수 없다. [docs/02 §4.2](docs/02-developer-framework-design.ko.md) 참고
-- 집행점 셋 전부의 뒤에 있는 단일 `Check` 표(check 28개)와 각 집행점이 선택하는 `Profile`: MCP gateway 20, SDK 18, A2A broker 17. **공유되는 것은 메커니즘이지 커버리지가 아니다** — broker는 gateway와 check 9개만 공유하며 egress·용량·taint 통제가 없다
+- 집행점 셋 전부의 뒤에 있는 단일 `Check` 표(check 29개)와 각 집행점이 선택하는 `Profile`: MCP gateway 21, SDK 19, A2A broker 17. **공유되는 것은 메커니즘이지 커버리지가 아니다** — broker는 gateway와 check 9개만 공유하며 egress·용량·taint 통제가 없다
 - `OBSERVE`, `SHADOW`, `ENFORCE` 모드
 - Tool result secret 정제, `UNTRUSTED_TOOL_RESULT` taint, schema 격리
 

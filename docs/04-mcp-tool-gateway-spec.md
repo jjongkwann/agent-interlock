@@ -306,7 +306,7 @@ Events are grouped by the same `interaction_id`, and internal Server transaction
 
 ### 9.1 Emitted by the gateway's policy engine
 
-These are the complete set `GATEWAY_PROFILE` can put on the wire — 20 checks producing 19 codes (`policy.py`); the check count grew, the wire code count did not. "Default verdict" is what the check returns under a default `LinkPolicy`; where an operator-configurable `LinkPolicy` action field governs it, that field is named in its Python spelling, because most of them cannot be set from a manifest at all (see §6).
+These are the complete set `GATEWAY_PROFILE` can put on the wire — 21 checks producing 20 codes (`policy.py`); the check count grew, the wire code count did not. "Default verdict" is what the check returns under a default `LinkPolicy`; where an operator-configurable `LinkPolicy` action field governs it, that field is named in its Python spelling, because most of them cannot be set from a manifest at all (see §6).
 
 | Code | Condition | Default Verdict |
 |---|---|---|
@@ -319,6 +319,7 @@ These are the complete set `GATEWAY_PROFILE` can put on the wire — 20 checks p
 | `L1-M9-SENSITIVE-EGRESS` | Same check as above, emitted instead when the *denied* class is `D7` | `BLOCK` |
 | `L1-M8-CREDENTIAL-DETECTED` | D5 fingerprint detected in the arguments | `secret_action` (`BLOCK`) |
 | `L1-M9-NEW-DESTINATION` | Destination unparseable, outside the target's `allowedDomains`, or absent when required | `new_destination_action` (`HOLD`) |
+| `INTERLOCK-INTENT-ARGUMENT-MISMATCH` | The declared intent does not cover what the arguments say: a destination named by a property the input schema marks (`format: email`/`uri`/`hostname`, or `x-interlock-destination`) is outside `intent.destinations`, or the side effect the tool's MCP annotations assert outranks `estimatedSideEffect` | `BLOCK`, unconditional |
 | `L1-M9-VOLUME-EXCEEDED` | Estimated records exceed the cap (armed solely by `max_export_records`) | `volume_action` (`BLOCK`) |
 | `L1-M9-VOLUME-BYTES-EXCEEDED` | Estimated bytes exceed the cap (armed solely by `max_export_bytes`); renamed onto the `L1-M9-VOLUME-EXCEEDED` wire code | `volume_action` (`BLOCK`) |
 | `L1-UNDECLARED-SIDE-EFFECT` | Side effect exceeds the ActorSpec's declared `sideEffects` | `undeclared_side_effect_action` (`BLOCK`) |

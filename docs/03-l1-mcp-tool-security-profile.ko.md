@@ -178,7 +178,7 @@ MCP Host는 사용자의 의도와 모델 컨텍스트를 소유하고, MCP Clie
 
 **필수 관측.** D7 source ID·owner·tenant·classification, D2 purpose, 최종 목적지 전체, byte/record count, redaction, 승인자, downstream transaction/receipt를 기록한다.
 
-**통제.** source-to-destination LinkPolicy와 새 목적지 기본 차단을 적용한다. D3 전체를 실제 실행 직전에 보여주고, 민감 데이터·대량 전송·외부 쓰기는 별도 승인과 Egress Guard를 거친다.
+**통제.** source-to-destination LinkPolicy와 새 목적지 기본 차단을 적용한다. 목적지는 호출자의 선언을 믿지 말고 인수에서 파생한다. schema가 목적지로 표시한 property가 가리키는 수신자(위 BCC)가 선언된 D3 집합에 없으면 `INTERLOCK-INTENT-ARGUMENT-MISMATCH`가 차단한다. D3 전체를 실제 실행 직전에 보여주고, 민감 데이터·대량 전송·외부 쓰기는 별도 승인과 Egress Guard를 거친다.
 
 ## 7. Actor와 Link 표현
 

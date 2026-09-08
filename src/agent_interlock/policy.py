@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from .canonical import canonical_digest
+from .intent import derive_intent, side_effect_rank
 from .models import (
     _DECISION_RANK,
     ActorSpec,
@@ -251,6 +252,50 @@ def _new_destination(policy: LinkPolicy, context: CheckContext) -> Findings | No
     findings = [finding] * (len(destinations) - len(canonical))
     findings.extend(finding for item in canonical if destination_domain(item) not in allowed)
     if require_explicit and not canonical:
+        findings.append(finding)
+    return tuple(findings)
+
+
+def _annotations(context: CheckContext) -> Mapping[str, Any]:
+    """The MCP annotations the intent derivation reads. The SDK resolves no revision, so there are
+    none there; shared with `armed` so the two cannot disagree about whether any exist."""
+    if context.revision is None:
+        return {}
+    return context.revision.definition.annotations
+
+
+def _intent_argument_mismatch(policy: LinkPolicy, context: CheckContext) -> Findings | None:
+    """The declared intent has to cover what the arguments actually say.
+
+    Every other M9 control reads `context.intent`, which is whatever the caller wrote. That is
+    sound when the caller is the integrator; on the adoption path the caller is an agent framework
+    relaying a model's tool call, so the declaration is the one input an attacker-influenced model
+    chooses. This check compares it against a derivation from evidence the caller did not author --
+    the tool's input schema and its MCP annotations -- and reports each way the declaration falls
+    short. Under-declaring is the whole attack: an intent naming no destination and NONE walks past
+    the destination, volume, approval and side-effect controls with nothing for them to judge.
+
+    One finding per violation, all under one key, so an argument naming three undeclared recipients
+    is not indistinguishable from one naming a single recipient.
+    """
+    derived = derive_intent(context.arguments, _effective_schema(context), _annotations(context))
+    if not derived.derivable:
+        # Nothing marks a destination and no annotation asserts a side effect: no evidence to
+        # compare the declaration against, which is INAPPLICABLE (see _definition_state). Returning
+        # () here would report a control that examined nothing as one that examined and cleared.
+        return None
+    finding = ("INTERLOCK-INTENT-ARGUMENT-MISMATCH", ControlDecision.BLOCK)
+    declared = {destination_domain(item) for item in _canonical_destinations(context.intent.destinations)}
+    findings: list[tuple[str, ControlDecision]] = []
+    for destination in derived.destinations:
+        try:
+            canonical = canonical_destination(destination)
+        except ValueError:
+            findings.append(finding)  # an argument that names no parseable destination is uncovered
+            continue
+        if destination_domain(canonical) not in declared:
+            findings.append(finding)
+    if side_effect_rank(derived.side_effect) > side_effect_rank(context.intent.estimated_side_effect):
         findings.append(finding)
     return tuple(findings)
 
@@ -580,6 +625,16 @@ CHECKS: dict[str, Check] = _build_check_table(
             run=_new_destination,
         ),
         Check(
+            id="INTERLOCK-INTENT-ARGUMENT-MISMATCH",
+            scope=CheckScope.PAYLOAD,
+            # Link-constant, like every other `armed`: a schema to read destination marks off, or
+            # annotations to read a side effect from. A tool that ships neither offers this control
+            # no evidence on any call over the link, which is ABSENT, not per-invocation
+            # INAPPLICABLE -- the same distinction INTERLOCK-INPUT-SCHEMA-INVALID draws.
+            armed=lambda policy, context: bool(_effective_schema(context)) or bool(_annotations(context)),
+            run=_intent_argument_mismatch,
+        ),
+        Check(
             id="L1-M9-VOLUME-EXCEEDED",
             scope=CheckScope.PAYLOAD,
             armed=lambda policy, context: bool(policy.max_export_records),
@@ -820,6 +875,10 @@ GATEWAY_PROFILE = Profile(
         "INTERLOCK-DATA-CLASS-DENIED",
         "L1-M8-CREDENTIAL-DETECTED",
         "L1-M9-NEW-DESTINATION",
+        # Sits with the destination control it backstops: L1-M9-NEW-DESTINATION judges the
+        # destinations the caller declared, and this one judges whether that declaration covers the
+        # arguments. Neither is any use without the other on a caller-supplied intent.
+        "INTERLOCK-INTENT-ARGUMENT-MISMATCH",
         "L1-M9-VOLUME-EXCEEDED",
         "L1-M9-VOLUME-BYTES-EXCEEDED",
         "L1-UNDECLARED-SIDE-EFFECT",

@@ -306,7 +306,7 @@ payload:
 
 ### 9.1 Gateway 정책 엔진이 방출하는 코드
 
-`GATEWAY_PROFILE`이 실제로 내보낼 수 있는 코드의 전체 집합이다 — check 20개가 코드 19개를 만든다(`policy.py`); check 수는 늘었지만 wire 코드 수는 그대로다. “기본 판정”은 기본 `LinkPolicy`에서 해당 check가 반환하는 값이다. 운영자가 설정할 수 있는 `LinkPolicy` action 필드가 판정을 좌우하는 경우에는 그 필드를 Python 표기로 적었다. 대부분은 애초에 manifest로 설정할 수 없기 때문이다(§6 참고).
+`GATEWAY_PROFILE`이 실제로 내보낼 수 있는 코드의 전체 집합이다 — check 21개가 코드 20개를 만든다(`policy.py`); check 수는 늘었지만 wire 코드 수는 그대로다. “기본 판정”은 기본 `LinkPolicy`에서 해당 check가 반환하는 값이다. 운영자가 설정할 수 있는 `LinkPolicy` action 필드가 판정을 좌우하는 경우에는 그 필드를 Python 표기로 적었다. 대부분은 애초에 manifest로 설정할 수 없기 때문이다(§6 참고).
 
 | Code | 조건 | 기본 판정 |
 |---|---|---|
@@ -319,6 +319,7 @@ payload:
 | `L1-M9-SENSITIVE-EGRESS` | 위와 같은 check. *거부된* 등급이 `D7`일 때 대신 방출 | `BLOCK` |
 | `L1-M8-CREDENTIAL-DETECTED` | 인수에서 D5 fingerprint 탐지 | `secret_action` (`BLOCK`) |
 | `L1-M9-NEW-DESTINATION` | 목적지를 파싱할 수 없거나, target의 `allowedDomains` 밖이거나, 필수인데 없음 | `new_destination_action` (`HOLD`) |
+| `INTERLOCK-INTENT-ARGUMENT-MISMATCH` | 선언된 intent가 인수의 내용을 포괄하지 못함: input schema가 목적지로 표시한 property(`format: email`/`uri`/`hostname` 또는 `x-interlock-destination`)가 가리키는 목적지가 `intent.destinations` 밖이거나, tool의 MCP annotation이 주장하는 부작용이 `estimatedSideEffect`보다 강함 | `BLOCK`, 무조건 |
 | `L1-M9-VOLUME-EXCEEDED` | 예상 레코드 수가 상한 초과 (`max_export_records`로만 활성화) | `volume_action` (`BLOCK`) |
 | `L1-M9-VOLUME-BYTES-EXCEEDED` | 예상 바이트가 상한 초과 (`max_export_bytes`로만 활성화); `L1-M9-VOLUME-EXCEEDED` wire 코드로 rename됨 | `volume_action` (`BLOCK`) |
 | `L1-UNDECLARED-SIDE-EFFECT` | 부작용이 ActorSpec 선언 `sideEffects`를 초과 | `undeclared_side_effect_action` (`BLOCK`) |
