@@ -10,6 +10,8 @@
 
 Agent Interlock is an **Agentic AI Security Framework** that declaratively defines the Actors of an AI agent system, wraps each Actor's surface with an SDK/Proxy, and observes, adjudicates, and blocks the communication and data movement between them. It applies the safety-engineering notion of an interlock — a mechanism that makes operation physically impossible unless declared conditions hold — to agent-to-agent interaction: only declared paths are permitted to connect, promotion to ENFORCE requires two signed approvals, and every verdict lands in an append-only Ledger.
 
+The adoption layer is how this reaches a real agent: guard your own tools with the Anthropic Tool Runner adapter, generate a runnable project module from an Architecture manifest, and run `interlock verify` against your own project — not just the framework's fixtures — before you ship.
+
 ## What it blocks
 
 The full MCP/Tool threat set M1–M9 is enforced at the data-flow level. Per-threat specifications live in [docs/03 §6](docs/03-l1-mcp-tool-security-profile.md); reproduction scenarios and the 34 tracked test IDs live in [docs/05](docs/05-l1-security-validation-plan.md) and `tests/test_l1_matrix.py`.
@@ -36,6 +38,9 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 # Customer-support agent: the Claude Tool Runner with both tools guarded
 PYTHONPATH=src python3 -m examples.support_agent.run "Where is order 1001? Email the customer."
+
+# Refund agent: a second project, its own manifest, same adapter — all three tools guarded
+PYTHONPATH=src python3 -m examples.refund_agent.run "Refund order 2001 and let the customer know."
 
 # Secure email tool-call example
 PYTHONPATH=src python3 examples/secure_email.py
@@ -88,7 +93,9 @@ The support-agent example calls the Claude API and takes its credentials from th
 | Interlock A2A Broker | Handle Agent Cards/Tasks with REL-06 and Trust Boundary pre-enforcement |
 | Interlock Ledger | Store requests, data flows, verdicts, actions, outcomes |
 | Interlock Graph | Visualize static relationships, runtime calls, attack paths |
-| Interlock Console | Operate policies, incidents, control status |
+| Interlock Studio | Editor, projects (new/open/save, manifest import), statistics, deploy, runs |
+| Interlock Adapter | Anthropic Tool Runner adapter: guard your own tools with `guard_tools`/`bind_architecture` |
+| Interlock Verify | `interlock verify` runs the L1 corpus against your own project's guarded tools |
 
 ## Core concepts
 
@@ -121,6 +128,8 @@ Design docs are English-first; each has a Korean original alongside it (`*.ko.md
 - [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.md): PostgreSQL RLS, append-only Ledger adapter, event/trace API
 - [`docs/13-a2a-orchestration-platform.md`](docs/13-a2a-orchestration-platform.md): Execution contract from Trust Boundary through A2A Broker, Task workflows, orchestration
 - [`docs/14-fake-platform-e2e-scenario.md`](docs/14-fake-platform-e2e-scenario.md): Full design→promotion→A2A→approval→MCP→evidence/drift scenario on fake customer data
+- [`docs/16-adding-interlock-to-an-agent.md`](docs/16-adding-interlock-to-an-agent.md): The ten-minute path from an existing tool-using agent to a guarded one
+- [`docs/specs/2026-09-08-adoption-layer.md`](docs/specs/2026-09-08-adoption-layer.md): Adoption-layer design and decisions
 
 ## Implementation strategy
 
@@ -190,11 +199,25 @@ The repository includes a Python 3.11 reference core following the docs' origina
 - M7 agent-config read guard, two-person-approved deploy, runtime drift guard
 - CLI compiling Studio manifests into reviewable SHADOW deployment bundles
 
+**Adoption layer**
+
+- Anthropic Tool Runner adapter (`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`), with an `approve=` hook reaching the shared approval store
+- Intent derived from arguments and MCP tool annotations, judged against the declaration (`INTERLOCK-INTENT-ARGUMENT-MISMATCH`)
+- `interlock verify`: nine L1 scenarios run against a project's own guarded tools, not a framework fixture
+- Project-module contract (`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`) emitted by `interlock architecture skeleton`
+- Acceptance-criteria grammar and three recorded outcomes per task (`executed`/`goalMet`/`securityMet`)
+- One deployment mode: the deployment record's mode, not the authored manifest, governs a run
+- SDK sharing the gateway's post-execution handling and approval store
+- Unsupported JSON Schema keywords rejected at definition time
+- Studio projects: new/open/save, editable id/version, manifest import
+
 Key paths:
 
 | Path | Contents |
 |---|---|
 | `src/agent_interlock/` | SDK, registry, policy, gateway, Ledger |
+| `src/agent_interlock/adapters/` | Anthropic Tool Runner adapter (`guard_tools`, `bind_architecture`) |
+| `src/agent_interlock/verify.py` | `interlock verify`: L1 corpus run against a project's own guarded tools |
 | `schemas/` | Actor and Event Envelope JSON Schemas |
 | `schemas/architecture.schema.json` | Architecture contract shared by the canvas and compiler |
 | `schemas/ledger-api.openapi.yaml` | Event ingest / trace query OpenAPI contract |
@@ -212,7 +235,9 @@ Key paths:
 | `tests/test_receipts.py` | Fake external transaction, receipt 0/1, reconciliation tests |
 | `tests/test_ledger_http.py` | Real-socket tenant/scope/idempotency/pagination tests |
 | `tests/test_postgres_ledger.py` | DB role binding and optional PostgreSQL 16 live tests |
-| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, real HTTP socket, orchestration tests |
+| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, real HTTP socket, orchestration, acceptance-outcome tests |
+| `tests/test_anthropic_adapter.py` | Anthropic Tool Runner adapter: guarded sync/async calls, blocking, approval hook tests |
+| `tests/test_verify.py` | `interlock verify` per-scenario pass/fail, NOT-APPLICABLE, canary, exit-code tests |
 | `tests/test_platform_e2e.py` | Full fake-data compile, two-person promotion, real localhost A2A, approval, MCP, runtime/statistics/drift tests |
 | `tests/fixtures/platform_e2e/` | Deterministic fake customer/knowledge/receipt fixtures with `.invalid` addresses |
 | `examples/secure_email.py` | Minimal runnable example |
@@ -220,8 +245,11 @@ Key paths:
 | `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift example |
 | `examples/mcp_transport_vertical_slice.py` | Runnable example binding an architecture manifest to MCP call enforcement |
 | `examples/a2a_orchestration_vertical_slice.py` | Full Boundary→A2A→workflow→Ledger runnable example |
+| `examples/support_agent/` | Runnable Anthropic Tool Runner project with recorded-replay tests |
 | `studio/` | Actor topology, Task workflow, Trust Boundary editing and manifest export UI |
 
 The current implementation covers the policy core of the [04 MCP Tool Gateway spec](docs/04-mcp-tool-gateway-spec.md); the JSON-RPC and resumable Streamable HTTP carriers plus publisher admission of [09 MCP Transport Enforcement](docs/09-mcp-transport-enforcement.md); discovery, PKCE, introspection/JWKS, and loopback consent from [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.md); signed attestation, Bubblewrap, Seatbelt, and per-destination egress reference boundaries from [11 stdio Sandbox & Receipts](docs/11-mcp-stdio-sandbox-receipts.md); per-tenant storage/query and signed audit reference from [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.md); and the directional Trust Boundary, A2A Broker, and Task workflow engine of [13 A2A Orchestration](docs/13-a2a-orchestration-platform.md).
 
-Production-integration additions: a persistent PostgreSQL DefinitionRegistry and distributed Session/OAuth/Config stores (RLS, migrations 0002/0003), macOS Seatbelt and Linux bwrap+seccomp sandboxes (live-enforced in tests), a real-socket egress backend with DNS/IP pinning, Ed25519 publisher and Studio approval signatures, Langfuse/LangSmith trace adapters, an append-only WORM audit store, and PostgreSQL live CI on GitHub Actions. The product closed loop includes tenant+interaction full-lifecycle security statistics (Python/Studio Unicode golden parity), `GET /v1/statistics`, manifest→SDK skeleton and security-test generation, a public-key-verified two-person promotion/rollback Control Plane, and Studio statistics/deploy views with read-only Live Attach. What remains is external-integration work (Sigstore/Rekor, KMS/HSM, IdP/Secret Store, a real egress sidecar and S3 Object-Lock, OTLP gRPC/Collector/Incident services, PostgreSQL HA, distributed rate limiting, TLS, remote Git-host PR review/deploy, DPoP/mTLS, JWKS rotation, operational consent/refresh tokens). Detailed contract tracing and classification follow [06 Implementation Status](docs/06-implementation-status.md).
+Production-integration additions: a persistent PostgreSQL DefinitionRegistry and distributed Session/OAuth/Config stores (RLS, migrations 0002/0003), macOS Seatbelt and Linux bwrap+seccomp sandboxes (live-enforced in tests), a real-socket egress backend with DNS/IP pinning, Ed25519 publisher and Studio approval signatures, Langfuse/LangSmith trace adapters, an append-only WORM audit store, and PostgreSQL live CI on GitHub Actions. The product closed loop includes tenant+interaction full-lifecycle security statistics (Python/Studio Unicode golden parity), `GET /v1/statistics`, manifest→SDK skeleton and security-test generation, a public-key-verified two-person promotion/rollback Control Plane, and Studio statistics/deploy views with read-only Live Attach.
+
+What remains is not shipped, and is not external-integration work: a LangGraph adapter, a Claude Agent SDK adapter, a sidecar proxy, server-side MCP connector interception (the API's `mcp_servers` executes tools on Anthropic's side and cannot be intercepted, so it stays out of scope), an LLM-judge acceptance evaluator (the grammar is structural only), `BYPASSED` semantics (the open question in [Control Coverage Statistics](docs/specs/2026-07-27-control-coverage-statistics.md)), PyPI upload, and a manifest parser that still drops `maxExportRecords`/`maxExportBytes`/`secretAction` and side-effect actions (`architecture._parse_edge`). Beyond that, what remains is genuine external-integration work (Sigstore/Rekor, KMS/HSM, IdP/Secret Store, a real egress sidecar and S3 Object-Lock, OTLP gRPC/Collector/Incident services, PostgreSQL HA, distributed rate limiting, TLS, remote Git-host PR review/deploy, DPoP/mTLS, JWKS rotation, operational consent/refresh tokens). Detailed contract tracing and classification follow [06 Implementation Status](docs/06-implementation-status.md).

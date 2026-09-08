@@ -1,8 +1,8 @@
 ---
 title: Agent Interlock Developer Framework and Graph Design
-date: 2026-07-15
-version: 1.0
-status: planning
+date: 2026-09-08
+version: 1.1
+status: active
 ---
 
 # Agent Interlock Developer Framework and Graph Design v1
@@ -39,47 +39,64 @@ flowchart LR
     LEDGER --> GRAPH["Interlock Graph"]
 ```
 
-The core tasks developers perform are three: `define`, `wrap`, and `connect`.
+The shipped path to this experience is not a `defineActor` surface — it is the project-module contract that `interlock architecture skeleton` generates and the Anthropic Tool Runner adapter consumes. `interlock architecture skeleton <manifest> --out-dir .` writes a Python module exposing `MANIFEST`, `TENANT_ID`, `SOURCE_ACTOR_ID`, `APPROVER`, one `ToolDefinition`/`ToolBinding` pair per TOOL node, and a `build(bindings=BINDINGS, *, ledger=None)` that returns `(gateway, tools)`; a hand-written module follows the same contract:
 
-```typescript
-const supportAgent = interlock.defineActor({
-  id: "agent.support",
-  type: "AGENT",
-  owner: "customer-platform",
-  tenantMode: "REQUIRED",
-  capabilities: ["CUSTOMER_LOOKUP", "SUPPORT_REPLY"],
-  dataAccess: ["D2", "D3", "D7"],
-  maxDelegationDepth: 2,
-});
+```python
+import json
+from pathlib import Path
+from agent_interlock import (
+    ArchitectureGraph, MCPToolGateway, ToolBinding, ToolDefinition, bind_architecture, guard_tools,
+)
 
-const emailTool = interlock.defineActor({
-  id: "tool.send-email",
-  type: "TOOL",
-  inputSchema: SendEmailSchema,
-  outputSchema: SendEmailResultSchema,
-  sideEffects: ["EXTERNAL_WRITE"],
-  capabilities: ["EMAIL_SEND"],
-});
+MANIFEST = Path(__file__).with_name("architecture.json")
+TENANT_ID = "tenant-dev"
+SOURCE_ACTOR_ID = "agent.support"
 
-export const secureSendEmail = emailTool.wrap(sendEmail);
+send_email_definition = ToolDefinition(
+    server_id="tool.send-email", tool_name="send_email", title="Send email",
+    description="Send a support reply to the customer.",
+    input_schema={"type": "object", "required": ["to", "body"], "additionalProperties": False,
+                  "properties": {"to": {"type": "string", "format": "email"},
+                                 "body": {"type": "string", "maxLength": 2000}}},
+    output_schema={"type": "object", "required": ["status"],
+                   "properties": {"status": {"type": "string"}}},
+)
 
-supportAgent.connect(emailTool, {
-  relationship: "INVOKES",
-  allowedPurposes: ["SUPPORT_REPLY", "REFUND_NOTICE"],
-  allowedDataClasses: ["D2", "D3"],
-  deniedDataClasses: ["D5", "D8"],
-  requireExplicitDestination: true,
-  newDestinationAction: "HOLD",
-  externalWriteRequiresApproval: true,
-  failureMode: "FAIL_CLOSED"
-});
+def send_email(arguments):
+    ...  # your implementation
+    return {"status": "sent"}
+
+BINDINGS = (ToolBinding(send_email_definition, send_email, "tool.send-email", "SUPPORT_REPLY"),)
+
+def build(bindings=BINDINGS, *, ledger=None):
+    gateway = MCPToolGateway(ledger=ledger)
+    graph = ArchitectureGraph.from_dict(json.loads(MANIFEST.read_text()))
+    bind_architecture(gateway, graph,
+                      tool_bindings={b.definition.tool_name: b.actor_id for b in bindings},
+                      approver="platform-review")
+    tools = guard_tools(gateway, tenant_id=TENANT_ID, source_actor_id=SOURCE_ACTOR_ID,
+                        bindings=bindings, approver="platform-review")
+    return gateway, tools
 ```
 
-Two notes on reading this example.
+`guard_tools` admits each definition, approves and activates it, and refuses to hand back a tool whose definition was quarantined — a poisoned description, a cross-server reference, an unsupported schema keyword — so the model never sees it. Each returned `GuardedTool`/`GuardedAsyncTool` derives intent from the arguments the model actually chose on every call, asks the gateway for a verdict, runs the real function only when permitted, and returns the sanitized result; a refusal reaches the model as an `is_error` tool result carrying the reason codes, never a raised exception. An edge with `externalWriteRequiresApproval: true` holds the first call until `guard_tools(..., approve=...)`'s callback — or a `gateway.grant_approval` made ahead of time — grants an approval bound to those exact arguments.
 
-**Data classes are the `D1`–`D9` codes**, not symbolic names. `allowedDataClasses` and `deniedDataClasses` are compared as sets against `InvocationIntent.data_classes`, and the comparison is a literal set operation — a symbolic value such as `CUSTOMER_PII` is simply a class the target Actor does not hold. Substituting the symbolic vocabulary into the shipped `examples/secure_multi_agent_architecture.json` turns a clean lint into **four CRITICAL `ARCH-DATA-CLASS-EXCEEDS-ACTOR` findings**, and `interlock architecture compile` then refuses the graph. See [03 L1 MCP Tool Security Profile](03-l1-mcp-tool-security-profile.md) for the code definitions.
+The tools then run inside the SDK's own agentic loop, unmodified:
 
-**This is the intended TypeScript surface, which does not exist yet.** The shipped SDK is Python (`src/agent_interlock/sdk.py`); `defineActor` appears nowhere in the repository. The field names above are the real `LinkPolicy` fields in their JSON spelling (`architecture.py` `_policy_value`) so the example stays checkable against the schema, but `destinationPolicy`, `approvalRequiredWhen` and `maxCallsPerTrace` — shown in earlier revisions — are not `LinkPolicy` fields and never were.
+```python
+import anthropic
+gateway, tools = build()
+client = anthropic.Anthropic()
+runner = client.beta.messages.tool_runner(
+    model="claude-opus-5", max_tokens=16000, tools=list(tools),
+    messages=[{"role": "user", "content": "Where is order 1001? Email the customer."}],
+)
+final = runner.until_done()
+```
+
+**Adoption path**: write a manifest → generate or hand-write the `ToolDefinition`/`ToolBinding` pairs → wire `bind_architecture` and `guard_tools` inside `build()` → hand the returned tools to the Tool Runner loop → run `interlock verify path/to/project.py` in CI to prove the manifest's controls are actually armed on your tools, not just on the framework's own fixtures. See [16 Adding Agent Interlock to an Agent](16-adding-interlock-to-an-agent.md) for the full ten-minute walkthrough.
+
+One note on reading the example above: **data classes are the `D1`–`D9` codes**, not symbolic names. `allowedDataClasses` and `deniedDataClasses` are compared as sets against `InvocationIntent.data_classes`, and the comparison is a literal set operation — a symbolic value such as `CUSTOMER_PII` is simply a class the target Actor does not hold. Substituting the symbolic vocabulary into the shipped `examples/secure_multi_agent_architecture.json` turns a clean lint into **four CRITICAL `ARCH-DATA-CLASS-EXCEEDS-ACTOR` findings**, and `interlock architecture compile` then refuses the graph. See [03 L1 MCP Tool Security Profile](03-l1-mcp-tool-security-profile.md) for the code definitions.
 
 ## 3. ActorSpec
 
@@ -155,12 +172,12 @@ Receive input
 
 ### 4.1 Supported Forms
 
-| Form | Target | Characteristics |
-|---|---|---|
-| In-process SDK | Directly developed Agents/Tools | Richest observation of internal steps |
-| Framework Adapter | Agent runtimes such as LangGraph | Low adoption cost |
-| Sidecar Proxy | Services that are hard to modify | Observation and blocking at the network boundary |
-| Gateway | MCP, A2A, RAG, Egress | Centralized policy and enforcement |
+| Form | Target | Characteristics | Status |
+|---|---|---|---|
+| In-process SDK | Directly developed Agents/Tools | Richest observation of internal steps | Shipped (`sdk.py` `wrap()`) |
+| Framework Adapter | Agent runtimes such as LangGraph | Low adoption cost | Shipped for the Anthropic Python SDK Tool Runner only (`adapters/anthropic_tools.py`); LangGraph and the Claude Agent SDK are not built |
+| Sidecar Proxy | Services that are hard to modify | Observation and blocking at the network boundary | Not built |
+| Gateway | MCP, A2A, RAG, Egress | Centralized policy and enforcement | Shipped (`gateway.py`, `a2a.py`) |
 
 Even without an SDK, a Proxy can observe communication, but semantics such as plan steps, memory provenance, and sub-agent trees can only be captured accurately with an SDK.
 

@@ -10,6 +10,8 @@
 
 Agent Interlock는 AI Agent 시스템의 Actor를 선언적으로 정의하고, 각 Actor의 외부를 SDK·Proxy로 감싸며, Actor 간 통신과 데이터 이동을 관측·판정·차단하는 **Agentic AI Security Framework**다. 안전공학의 interlock — 선언된 조건이 충족되지 않으면 동작 자체가 불가능한 장치 — 를 Agent 간 상호작용에 적용한다: 선언된 경로만 연동을 허가하고, ENFORCE 승격에는 서명된 2인 승인을 요구하며, 모든 판정을 append-only Ledger에 남긴다.
 
+도입 계층(adoption layer)은 이것이 실제 Agent에 닿는 경로다: Anthropic Tool Runner adapter로 자신의 Tool을 guard하고, Architecture manifest에서 실행 가능한 프로젝트 모듈을 생성하고, 배포하기 전에 프레임워크의 fixture가 아니라 자신의 프로젝트에 대고 `interlock verify`를 실행한다.
+
 ## 무엇을 막는가
 
 MCP·Tool 위협 M1–M9 전체를 데이터 흐름 단위로 집행한다. 각 위협의 상세 명세는 [docs/03 §6](docs/03-l1-mcp-tool-security-profile.ko.md), 재현 시나리오와 34개 추적 ID는 [docs/05](docs/05-l1-security-validation-plan.ko.md)·`tests/test_l1_matrix.py`에 있다.
@@ -36,6 +38,9 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 # 고객 지원 Agent: 두 Tool을 모두 guard한 Claude Tool Runner 실행
 PYTHONPATH=src python3 -m examples.support_agent.run "Where is order 1001? Email the customer."
+
+# 환불 Agent: 별도 manifest를 쓰는 두 번째 프로젝트, 동일한 adapter — 세 Tool을 모두 guard
+PYTHONPATH=src python3 -m examples.refund_agent.run "Refund order 2001 and let the customer know."
 
 # 안전한 email Tool 호출 예제
 PYTHONPATH=src python3 examples/secure_email.py
@@ -81,13 +86,15 @@ python3 -m pip install -e '.[anthropic]'
 
 | 구성요소 | 역할 |
 |---|---|
-| Interlock SDK | ActorSpec 선언, 기존 코드 wrap, trace·event 생성 — **및 집행**: `wrap()`이 gateway의 check 20개 중 18개를 in-process로 실행하고 `ENFORCE`에서는 `GatewayError`를 raise한다 |
+| Interlock SDK | ActorSpec 선언, 기존 코드 wrap, trace·event 생성 — **및 집행**: `wrap()`이 gateway의 check 21개 중 19개를 in-process로 실행하고 `ENFORCE`에서는 `GatewayError`를 raise한다 |
 | Interlock Runtime | Actor 간 통신 가로채기와 정책 집행 |
 | Interlock Orchestrator | 검증된 Task DAG와 A2A·MCP·Human transport 실행 |
 | Interlock A2A Broker | Agent Card·Task 처리와 REL-06·Trust Boundary 사전 집행 |
 | Interlock Ledger | 요청·데이터 흐름·판정·조치·결과 저장 |
 | Interlock Graph | 정적 관계·런타임 호출·공격 경로 시각화 |
-| Interlock Console | 정책·Incident·통제 상태 운영 |
+| Interlock Studio | 편집기, 프로젝트(신규/열기/저장, manifest import), 통계, 배포, run |
+| Interlock Adapter | Anthropic Tool Runner adapter: `guard_tools`/`bind_architecture`로 자신의 Tool을 guard |
+| Interlock Verify | `interlock verify`가 자신의 프로젝트의 guarded tool에 L1 corpus를 실행 |
 
 ## 핵심 개념
 
@@ -118,6 +125,8 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - [`docs/12-postgresql-ledger-api.md`](docs/12-postgresql-ledger-api.ko.md): PostgreSQL RLS·append-only Ledger adapter와 event/trace API
 - [`docs/13-a2a-orchestration-platform.md`](docs/13-a2a-orchestration-platform.ko.md): Trust Boundary에서 A2A Broker·Task workflow·오케스트레이션까지의 실행 계약
 - [`docs/14-fake-platform-e2e-scenario.md`](docs/14-fake-platform-e2e-scenario.ko.md): 가짜 고객 데이터로 설계→승격→A2A→승인→MCP→증거·drift를 검증하는 전체 시나리오
+- [`docs/16-adding-interlock-to-an-agent.md`](docs/16-adding-interlock-to-an-agent.ko.md): 기존 tool-사용 Agent를 guard된 Agent로 바꾸는 10분 경로
+- [`docs/specs/2026-09-08-adoption-layer.md`](docs/specs/2026-09-08-adoption-layer.md): 도입 계층 설계와 결정 사항
 
 ## 기본 구현 전략
 
@@ -187,11 +196,25 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - M7 Agent config read·2인 승인 deploy·runtime drift guard
 - Studio manifest를 검토 가능한 SHADOW 배포 번들로 compile하는 CLI
 
+**도입 계층(Adoption layer)**
+
+- Anthropic Tool Runner adapter(`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`), 공유 승인 저장소에 도달하는 `approve=` hook
+- 인수와 MCP tool annotation에서 도출한 intent를 선언과 비교 판정(`INTERLOCK-INTENT-ARGUMENT-MISMATCH`)
+- `interlock verify`: 프레임워크 fixture가 아니라 프로젝트 자신의 guarded tool에 L1 시나리오 9개 실행
+- `interlock architecture skeleton`이 내는 프로젝트 모듈 계약(`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`)
+- acceptance-criteria 문법과 task별 결과 3종(`executed`/`goalMet`/`securityMet`)
+- 배포 모드 단일화: 저작된 manifest가 아니라 배포 기록의 mode가 실행을 지배
+- SDK가 gateway의 실행 후 처리와 승인 저장소를 공유
+- 지원하지 않는 JSON Schema keyword를 정의 시점에 거부
+- Studio 프로젝트: 신규/열기/저장, 편집 가능한 id/version, manifest import
+
 주요 경로는 다음과 같다.
 
 | 경로 | 내용 |
 |---|---|
 | `src/agent_interlock/` | SDK, Registry, 정책, Gateway, Ledger |
+| `src/agent_interlock/adapters/` | Anthropic Tool Runner adapter(`guard_tools`, `bind_architecture`) |
+| `src/agent_interlock/verify.py` | `interlock verify`: 프로젝트 자신의 guarded tool에 L1 corpus 실행 |
 | `schemas/` | Actor와 Event Envelope JSON Schema |
 | `schemas/architecture.schema.json` | Canvas와 compiler가 공유하는 Architecture 계약 |
 | `schemas/ledger-api.openapi.yaml` | Event ingest·trace query OpenAPI 계약 |
@@ -209,7 +232,9 @@ InterlockGraph  설계·실행·공격 경로 그래프
 | `tests/test_receipts.py` | fake external transaction·receipt 0/1·reconciliation 시험 |
 | `tests/test_ledger_http.py` | 실제 socket 기반 tenant·scope·idempotency·pagination 시험 |
 | `tests/test_postgres_ledger.py` | DB role binding과 선택적 PostgreSQL 16 live 시험 |
-| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, 실제 HTTP socket, orchestration 시험 |
+| `tests/test_a2a.py` | Trust Boundary, A2A 1.0/0.3 wire, 실제 HTTP socket, orchestration, acceptance 결과 시험 |
+| `tests/test_anthropic_adapter.py` | Anthropic Tool Runner adapter: guarded 동기/비동기 호출, 차단, 승인 hook 시험 |
+| `tests/test_verify.py` | `interlock verify` 시나리오별 pass/fail, NOT-APPLICABLE, canary, exit code 시험 |
 | `tests/test_platform_e2e.py` | fake data로 compile·2인 승격·실제 localhost A2A·승인·MCP·Runtime/Statistics/Drift 전체 시험 |
 | `tests/fixtures/platform_e2e/` | `.invalid` 주소와 결정적 fake 고객·지식·receipt fixture |
 | `examples/secure_email.py` | 최소 실행 예제 |
@@ -217,8 +242,11 @@ InterlockGraph  설계·실행·공격 경로 그래프
 | `examples/runtime_drift_otlp.json` | OpenTelemetry GenAI/MCP runtime drift 예제 |
 | `examples/mcp_transport_vertical_slice.py` | Architecture manifest를 MCP 호출 집행으로 연결하는 실행 예제 |
 | `examples/a2a_orchestration_vertical_slice.py` | Boundary→A2A→workflow→Ledger 전체 실행 예제 |
+| `examples/support_agent/` | 녹화-재생 시험을 갖춘 실행 가능한 Anthropic Tool Runner 프로젝트 |
 | `studio/` | Actor topology·Task workflow·Trust Boundary 편집 및 manifest export UI |
 
 현재 구현은 [04 MCP Tool Gateway 명세](docs/04-mcp-tool-gateway-spec.ko.md)의 정책 코어, [09 MCP Transport 집행](docs/09-mcp-transport-enforcement.ko.md)의 JSON-RPC·resumable Streamable HTTP carrier와 publisher admission, [10 OAuth Identity Guard](docs/10-mcp-oauth-identity-guard.ko.md)의 discovery·PKCE·introspection/JWKS·loopback consent, [11 stdio Sandbox·Receipt](docs/11-mcp-stdio-sandbox-receipts.ko.md)의 서명 attestation·Bubblewrap·Seatbelt·목적지 egress reference 경계, [12 PostgreSQL Ledger API](docs/12-postgresql-ledger-api.ko.md)의 tenant별 저장·조회와 signed audit reference, [13 A2A Orchestration](docs/13-a2a-orchestration-platform.ko.md)의 방향성 Trust Boundary·A2A Broker·Task workflow engine을 포함한다.
 
-프로덕션 통합으로 추가된 것: persistent PostgreSQL DefinitionRegistry와 분산 Session/OAuth/Config store(RLS·migration 0002/0003), macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행 시험), 실 소켓 egress backend의 DNS·IP pinning, Ed25519 publisher·Studio 승인 서명, Langfuse/LangSmith trace 어댑터, append-only WORM audit store, PostgreSQL live CI와 GitHub Actions. 제품 폐쇄 루프에는 tenant+interaction 전체 lifecycle 기반 보안 통계(Python·Studio Unicode golden 파리티), `GET /v1/statistics`, manifest→SDK skeleton·보안테스트, 공개키 검증 기반 2인 승격·rollback Control Plane, Studio 통계·배포 뷰와 read-only Live Attach가 포함된다. 남은 것은 외부 연동 작업(Sigstore/Rekor·KMS/HSM·IdP·Secret Store, 실 egress sidecar와 S3 Object-Lock, OTLP gRPC·Collector·Incident 서비스, PostgreSQL HA·분산 rate limit·TLS, 원격 Git host PR 리뷰·배포, DPoP/mTLS·JWKS rotation·운영 consent/refresh-token)이다. 자세한 계약 추적과 분류는 [06 구현 상태](docs/06-implementation-status.ko.md)를 따른다.
+프로덕션 통합으로 추가된 것: persistent PostgreSQL DefinitionRegistry와 분산 Session/OAuth/Config store(RLS·migration 0002/0003), macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행 시험), 실 소켓 egress backend의 DNS·IP pinning, Ed25519 publisher·Studio 승인 서명, Langfuse/LangSmith trace 어댑터, append-only WORM audit store, PostgreSQL live CI와 GitHub Actions. 제품 폐쇄 루프에는 tenant+interaction 전체 lifecycle 기반 보안 통계(Python·Studio Unicode golden 파리티), `GET /v1/statistics`, manifest→SDK skeleton·보안테스트, 공개키 검증 기반 2인 승격·rollback Control Plane, Studio 통계·배포 뷰와 read-only Live Attach가 포함된다.
+
+아직 배포되지 않은 것은 외부 연동 작업이 아니다: LangGraph adapter, Claude Agent SDK adapter, sidecar proxy, server-side MCP connector interception(API의 `mcp_servers`는 Anthropic 쪽에서 tool을 실행해 가로챌 수 없으므로 범위 밖), LLM-judge acceptance evaluator(문법은 구조적 평가만 함), [Control Coverage Statistics](docs/specs/2026-07-27-control-coverage-statistics.md)의 열린 질문으로 남아 있는 `BYPASSED` 의미론, PyPI 업로드, 그리고 여전히 `maxExportRecords`/`maxExportBytes`/`secretAction`과 부작용 action을 누락하는 manifest 파서(`architecture._parse_edge`). 이를 넘어서면 진짜 외부 연동 작업(Sigstore/Rekor·KMS/HSM·IdP·Secret Store, 실 egress sidecar와 S3 Object-Lock, OTLP gRPC·Collector·Incident 서비스, PostgreSQL HA·분산 rate limit·TLS, 원격 Git host PR 리뷰·배포, DPoP/mTLS·JWKS rotation·운영 consent/refresh-token)이 남는다. 자세한 계약 추적과 분류는 [06 구현 상태](docs/06-implementation-status.ko.md)를 따른다.

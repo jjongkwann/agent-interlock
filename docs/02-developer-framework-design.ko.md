@@ -1,8 +1,8 @@
 ---
 title: Agent Interlock 개발자 프레임워크 및 그래프 설계
-date: 2026-07-15
-version: 1.0
-status: planning
+date: 2026-09-08
+version: 1.1
+status: active
 ---
 
 # Agent Interlock 개발자 프레임워크 및 그래프 설계 v1
@@ -39,47 +39,64 @@ flowchart LR
     LEDGER --> GRAPH["Interlock Graph"]
 ```
 
-개발자가 수행할 핵심 작업은 `define`, `wrap`, `connect` 세 가지다.
+배포된 경험은 `defineActor` 표면이 아니라, `interlock architecture skeleton`이 생성하고 Anthropic Tool Runner adapter가 소비하는 프로젝트 모듈 계약이다. `interlock architecture skeleton <manifest> --out-dir .`은 `MANIFEST`, `TENANT_ID`, `SOURCE_ACTOR_ID`, `APPROVER`, TOOL 노드마다 하나씩의 `ToolDefinition`/`ToolBinding` 쌍, 그리고 `(gateway, tools)`를 반환하는 `build(bindings=BINDINGS, *, ledger=None)`을 노출하는 Python 모듈을 작성한다. 손으로 쓴 모듈도 같은 계약을 따른다.
 
-```typescript
-const supportAgent = interlock.defineActor({
-  id: "agent.support",
-  type: "AGENT",
-  owner: "customer-platform",
-  tenantMode: "REQUIRED",
-  capabilities: ["CUSTOMER_LOOKUP", "SUPPORT_REPLY"],
-  dataAccess: ["D2", "D3", "D7"],
-  maxDelegationDepth: 2,
-});
+```python
+import json
+from pathlib import Path
+from agent_interlock import (
+    ArchitectureGraph, MCPToolGateway, ToolBinding, ToolDefinition, bind_architecture, guard_tools,
+)
 
-const emailTool = interlock.defineActor({
-  id: "tool.send-email",
-  type: "TOOL",
-  inputSchema: SendEmailSchema,
-  outputSchema: SendEmailResultSchema,
-  sideEffects: ["EXTERNAL_WRITE"],
-  capabilities: ["EMAIL_SEND"],
-});
+MANIFEST = Path(__file__).with_name("architecture.json")
+TENANT_ID = "tenant-dev"
+SOURCE_ACTOR_ID = "agent.support"
 
-export const secureSendEmail = emailTool.wrap(sendEmail);
+send_email_definition = ToolDefinition(
+    server_id="tool.send-email", tool_name="send_email", title="Send email",
+    description="Send a support reply to the customer.",
+    input_schema={"type": "object", "required": ["to", "body"], "additionalProperties": False,
+                  "properties": {"to": {"type": "string", "format": "email"},
+                                 "body": {"type": "string", "maxLength": 2000}}},
+    output_schema={"type": "object", "required": ["status"],
+                   "properties": {"status": {"type": "string"}}},
+)
 
-supportAgent.connect(emailTool, {
-  relationship: "INVOKES",
-  allowedPurposes: ["SUPPORT_REPLY", "REFUND_NOTICE"],
-  allowedDataClasses: ["D2", "D3"],
-  deniedDataClasses: ["D5", "D8"],
-  requireExplicitDestination: true,
-  newDestinationAction: "HOLD",
-  externalWriteRequiresApproval: true,
-  failureMode: "FAIL_CLOSED"
-});
+def send_email(arguments):
+    ...  # 실제 구현
+    return {"status": "sent"}
+
+BINDINGS = (ToolBinding(send_email_definition, send_email, "tool.send-email", "SUPPORT_REPLY"),)
+
+def build(bindings=BINDINGS, *, ledger=None):
+    gateway = MCPToolGateway(ledger=ledger)
+    graph = ArchitectureGraph.from_dict(json.loads(MANIFEST.read_text()))
+    bind_architecture(gateway, graph,
+                      tool_bindings={b.definition.tool_name: b.actor_id for b in bindings},
+                      approver="platform-review")
+    tools = guard_tools(gateway, tenant_id=TENANT_ID, source_actor_id=SOURCE_ACTOR_ID,
+                        bindings=bindings, approver="platform-review")
+    return gateway, tools
 ```
 
-이 예시를 읽을 때 유의할 점이 둘 있다.
+`guard_tools`는 각 definition을 admit하고 승인·활성화한 뒤, 격리된 definition — 숨은 지시, cross-server 참조, 지원하지 않는 schema keyword — 에 대한 tool은 돌려주지 않는다. 그래서 모델은 그런 tool을 보지 못한다. 반환되는 각 `GuardedTool`/`GuardedAsyncTool`은 매 호출마다 모델이 실제로 선택한 인자에서 intent를 도출하고, gateway에 판정을 묻고, 허용된 경우에만 실제 함수를 실행하고, sanitize된 결과를 반환한다. 거부는 raise되는 예외가 아니라 reason code를 담은 `is_error` tool 결과로 모델에 도달한다. `externalWriteRequiresApproval: true`인 edge는 `guard_tools(..., approve=...)`의 콜백 — 또는 미리 만들어 둔 `gateway.grant_approval` — 이 정확히 그 인자에 바인딩된 승인을 내줄 때까지 첫 호출을 hold한다.
 
-**데이터 등급은 `D1`–`D9` 코드**이지 상징적인 이름이 아니다. `allowedDataClasses`와 `deniedDataClasses`는 `InvocationIntent.data_classes`와 집합으로 비교되며, 이 비교는 문자 그대로의 집합 연산이다 — `CUSTOMER_PII` 같은 상징적인 값은 대상 Actor가 보유하지 않은 등급일 뿐이다. 배포된 `examples/secure_multi_agent_architecture.json`에 상징적 어휘를 대입하면 깨끗하던 lint가 **CRITICAL `ARCH-DATA-CLASS-EXCEEDS-ACTOR` 4건**으로 바뀌고, 이어서 `interlock architecture compile`이 그래프를 거부한다. 코드 정의는 [03 L1 보안 프로파일](03-l1-mcp-tool-security-profile.ko.md)을 참고한다.
+그런 다음 tool은 SDK 자체의 agentic loop 안에서 수정 없이 실행된다.
 
-**이것은 의도한 TypeScript 표면이며, 아직 존재하지 않는다.** 배포된 SDK는 Python(`src/agent_interlock/sdk.py`)이고 `defineActor`는 저장소 어디에도 없다. 위 필드 이름은 예시를 schema에 대조해 검증할 수 있도록 실제 `LinkPolicy` 필드의 JSON 표기(`architecture.py`의 `_policy_value`)를 쓴 것이지만, 이전 판본에 있던 `destinationPolicy`, `approvalRequiredWhen`, `maxCallsPerTrace`는 `LinkPolicy` 필드가 아니며 한 번도 아니었다.
+```python
+import anthropic
+gateway, tools = build()
+client = anthropic.Anthropic()
+runner = client.beta.messages.tool_runner(
+    model="claude-opus-5", max_tokens=16000, tools=list(tools),
+    messages=[{"role": "user", "content": "Where is order 1001? Email the customer."}],
+)
+final = runner.until_done()
+```
+
+**도입 경로**: manifest 작성 → `ToolDefinition`/`ToolBinding` 쌍 생성 또는 직접 작성 → `build()` 안에서 `bind_architecture`와 `guard_tools` 연결 → 반환된 tool을 Tool Runner loop에 전달 → CI에서 `interlock verify path/to/project.py`를 실행해 manifest의 통제가 프레임워크 자체 fixture가 아니라 실제로 자신의 tool에 armed되어 있음을 증명한다. 전체 10분 안내는 [16 기존 Agent에 Agent Interlock 추가하기](16-adding-interlock-to-an-agent.ko.md)를 참고한다.
+
+위 예시를 읽을 때 유의할 점 하나: **데이터 등급은 `D1`–`D9` 코드**이지 상징적인 이름이 아니다. `allowedDataClasses`와 `deniedDataClasses`는 `InvocationIntent.data_classes`와 집합으로 비교되며, 이 비교는 문자 그대로의 집합 연산이다 — `CUSTOMER_PII` 같은 상징적인 값은 대상 Actor가 보유하지 않은 등급일 뿐이다. 배포된 `examples/secure_multi_agent_architecture.json`에 상징적 어휘를 대입하면 깨끗하던 lint가 **CRITICAL `ARCH-DATA-CLASS-EXCEEDS-ACTOR` 4건**으로 바뀌고, 이어서 `interlock architecture compile`이 그래프를 거부한다. 코드 정의는 [03 L1 보안 프로파일](03-l1-mcp-tool-security-profile.ko.md)을 참고한다.
 
 ## 3. ActorSpec
 
@@ -155,12 +172,12 @@ ActorGuard는 기존 비즈니스 로직의 앞뒤에서 다음 처리를 수행
 
 ### 4.1 지원 형태
 
-| 형태 | 대상 | 특징 |
-|---|---|---|
-| In-process SDK | 직접 개발하는 Agent·Tool | 가장 풍부한 내부 단계 관측 |
-| Framework Adapter | LangGraph 등 Agent runtime | 낮은 도입 비용 |
-| Sidecar Proxy | 수정하기 어려운 서비스 | 네트워크 경계 관측·차단 |
-| Gateway | MCP, A2A, RAG, Egress | 중앙 정책과 강제력 |
+| 형태 | 대상 | 특징 | 상태 |
+|---|---|---|---|
+| In-process SDK | 직접 개발하는 Agent·Tool | 가장 풍부한 내부 단계 관측 | 배포됨 (`sdk.py` `wrap()`) |
+| Framework Adapter | LangGraph 등 Agent runtime | 낮은 도입 비용 | Anthropic Python SDK Tool Runner에 한해 배포됨(`adapters/anthropic_tools.py`); LangGraph와 Claude Agent SDK는 미구현 |
+| Sidecar Proxy | 수정하기 어려운 서비스 | 네트워크 경계 관측·차단 | 미구현 |
+| Gateway | MCP, A2A, RAG, Egress | 중앙 정책과 강제력 | 배포됨 (`gateway.py`, `a2a.py`) |
 
 SDK가 없어도 Proxy로 통신은 관측할 수 있지만, plan step·memory provenance·sub-agent tree 같은 의미는 SDK가 있어야 정확히 수집할 수 있다.
 

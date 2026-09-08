@@ -30,6 +30,7 @@ This document is the entry point for the project's documentation. It fixes each 
 | Implement Trust Boundary-based A2A orchestration | [13 A2A Orchestration Platform](13-a2a-orchestration-platform.md) | [07 Security Architecture Studio](07-security-architecture-studio-design.md) |
 | Safely validate the full platform end-to-end | [14 Fake Data Platform E2E](14-fake-platform-e2e-scenario.md) | [13 A2A Orchestration Platform](13-a2a-orchestration-platform.md) |
 | Review manual Chrome E2E screen evidence | [15 Manual Browser E2E Evidence](15-manual-browser-e2e-evidence.md) | [14 Fake Data Platform E2E](14-fake-platform-e2e-scenario.md) |
+| Add Interlock to an existing agent | [16 Adding Agent Interlock to an Agent](16-adding-interlock-to-an-agent.md) | [02 Developer Framework §2](02-developer-framework-design.md#2-developer-experience), [05 Validation Plan §11](05-l1-security-validation-plan.md#11-per-project-verification-interlock-verify) |
 
 ## 2. Responsibility by Document
 
@@ -50,6 +51,8 @@ This document is the entry point for the project's documentation. It fixes each 
 | `13-a2a-orchestration-platform.md` | Directional Trust Boundary, A2A 1.0 core, Task workflow, and the runtime orchestration contract | Production deployment of external IdP, distributed queue/store, and streaming/push |
 | `14-fake-platform-e2e-scenario.md` | Procedures and pass criteria for reproducing design, promotion, A2A, Run Control, approval, MCP, evidence, and Chrome E2E using test-only fixtures | Real customer data, external email delivery, and production adapter/queue/store configuration |
 | `15-manual-browser-e2e-evidence.md` | 1600×900 manual E2E screen evidence and execution results with the Chrome browser frame removed | Pass/fail determination for automated regression tests or assurance of production telemetry integrity |
+| `16-adding-interlock-to-an-agent.md` | The ten-minute path from an existing tool-using agent to one whose calls are judged, recorded, and verified via the Anthropic Tool Runner adapter | Framework internals; see `02`/`04` for those |
+| `specs/` | In-progress design and specifications, updated in the same PR as the code — currently [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md) and [Adoption Layer](specs/2026-09-08-adoption-layer.md) | Anything already promoted into `00`–`16` |
 
 ## 3. Tracking IDs
 

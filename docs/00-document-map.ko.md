@@ -30,6 +30,7 @@ status: active
 | Trust Boundary 기반 A2A·오케스트레이션 구현 | [13 A2A 오케스트레이션 플랫폼](13-a2a-orchestration-platform.ko.md) | [07 Security Architecture Studio](07-security-architecture-studio-design.ko.md) |
 | 전체 플랫폼을 안전하게 E2E 검증 | [14 가짜 데이터 플랫폼 E2E](14-fake-platform-e2e-scenario.ko.md) | [13 A2A 오케스트레이션 플랫폼](13-a2a-orchestration-platform.ko.md) |
 | 수동 Chrome E2E 화면 증거 확인 | [15 수동 브라우저 E2E 증거](15-manual-browser-e2e-evidence.ko.md) | [14 가짜 데이터 플랫폼 E2E](14-fake-platform-e2e-scenario.ko.md) |
+| 기존 Agent에 Interlock 추가 | [16 기존 Agent에 Agent Interlock 추가하기](16-adding-interlock-to-an-agent.ko.md) | [02 개발자 프레임워크 §2](02-developer-framework-design.ko.md#2-개발자-경험), [05 검증 계획 §11](05-l1-security-validation-plan.ko.md#11-프로젝트별-검증-interlock-verify) |
 
 ## 2. 문서별 책임
 
@@ -50,6 +51,8 @@ status: active
 | `13-a2a-orchestration-platform.md` | 방향성 Trust Boundary, A2A 1.0 core, Task workflow와 runtime orchestration 계약 | 외부 IdP·분산 queue/store·streaming/push 운영 배포 |
 | `14-fake-platform-e2e-scenario.md` | test-only fixture로 설계·승격·A2A·Run Control·승인·MCP·증거·Chrome E2E를 재현하는 절차와 합격 기준 | 실제 고객 데이터·외부 메일 전송·운영 adapter/queue/store 구성 |
 | `15-manual-browser-e2e-evidence.md` | Chrome 브라우저 프레임을 제거한 1600×900 수동 E2E 화면 증거와 실행 결과 | 자동 회귀 시험의 합격 판정이나 운영 telemetry 무결성 보증 |
+| `16-adding-interlock-to-an-agent.md` | 기존 tool-사용 agent를 Anthropic Tool Runner adapter로 모든 호출이 판정·기록·검증되는 agent로 바꾸는 10분 경로 | 프레임워크 내부 구현 — `02`/`04` 참고 |
+| `specs/` | 코드와 같은 PR에서 갱신되는 진행 중 설계·명세 — 현재 [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md)와 [Adoption Layer](specs/2026-09-08-adoption-layer.md) | 이미 `00`–`16`에 반영된 내용 |
 
 ## 3. 추적 ID
 

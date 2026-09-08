@@ -1,7 +1,7 @@
 ---
 title: Agent Interlock 구현 상태
-date: 2026-07-21
-version: 0.10.0
+date: 2026-09-08
+version: 0.11.0
 status: active
 ---
 
@@ -112,6 +112,14 @@ status: active
 | API CORS (Studio read-only Live Attach) | `ledger_http.py`·`control_plane.py` | 인증 전 origin 거부, preflight OPTIONS, 허용 origin echo, loopback http 개발 origin 허용 시험 |
 | Studio 통계·배포 뷰 | `studio/app/panels.tsx` (`StatsPanel`·`DeployPanel`), `page.tsx` stats/deploy 뷰 | 오프라인 ledger import 집계 + Live `/v1/statistics` fetch, control plane 승격 패널(서명 키는 브라우저 밖), build·lint·계약 시험 |
 | fake-data 플랫폼 전체 E2E | `tests/test_platform_e2e.py`, `tests/fixtures/platform_e2e/` | 전체 manifest digest→git propose→Ed25519 2인 ENFORCE→실제 localhost A2A→approval pause/resume→fake MCP 1회→Ledger Runtime/Statistics/Drift + D5 차단·미선언 bypass 시험 |
+| 배포 모드 단일화: 실행을 지배하는 것은 저작된 manifest가 아니라 배포 기록의 mode | `studio_deploy.py` `deployed_architecture`, `run_control.py` `RUN-MODE-MISMATCH` | `tests/test_run_control.py`(시험 5개: bundle에 저작된 mode와 무관하게 run edge가 집행됨) |
+| SDK가 gateway의 실행 후 처리와 승인 저장소를 공유 | `results.py` `inspect_tool_result`, `approvals.py` `ApprovalStore`, `sdk.py` `Interlock.grant_approval` | `tests/test_sdk_results.py`(시험 8개: 공유되는 secret 정제/schema 위반 quarantine, 정확한 인자·목적지에 바인딩된 승인이 SDK에서 도달 가능) |
+| 지원하지 않는 JSON Schema keyword를 정의 시점에 거부 | `security.py` `unsupported_schema_keywords`, `L1-M1-SCHEMA-KEYWORD-UNSUPPORTED` | `tests/test_core.py`(경로 한정 keyword 보고, `ActorSpec`/`ToolDefinition`/architecture linter 거부) |
+| 인수와 MCP tool annotation에서 도출한 intent를 선언과 비교 판정 | `intent.py` `derive_intent`, `policy.py` `INTERLOCK-INTENT-ARGUMENT-MISMATCH`(gateway·SDK profile) | `tests/test_intent.py`(시험 17개: `format`/`x-interlock-destination`에서 목적지 도출, `readOnlyHint`/`destructiveHint`에서 부작용 도출, 아무것도 도출할 수 없을 때 커버리지 채널을 통한 INAPPLICABLE) |
+| Anthropic Tool Runner adapter | `adapters/anthropic_tools.py` `ToolBinding`·`GuardedTool`·`GuardedAsyncTool`·`guard_tools`·`bind_architecture`, 승인 hook `approve=` | `tests/test_anthropic_adapter.py`(시험 14개: 동기/비동기 guarded 호출, raise가 아니라 `is_error` tool 결과로 차단, 승인 hook, 격리된 definition이 모델에 도달하지 않음) |
+| skeleton 생성기가 내는 프로젝트 모듈 계약 | `scaffold.py` `generate_skeleton`(`MANIFEST`·`TENANT_ID`·`SOURCE_ACTOR_ID`·`APPROVER`·`BINDINGS`·`build()`) | `tests/test_scaffold.py`(시험 4개), `tests/test_example_support_agent.py`(시험 5개: 같은 계약으로 `examples/support_agent/`를 녹화-재생 실행, 실제 API 키 불필요) |
+| `interlock verify`: 프로젝트 자신의 guarded tool에 L1 corpus를 실행 | `verify.py`, `verify_corpus.py`(시나리오 9개: M1 오염된 설명, M2 definition drift, M3 cross-server 참조, M8 결과 내 credential, M9 미선언 목적지, M9 volume, 미선언 부작용, goal hijack, memory poisoning) | `tests/test_verify.py`(시험 16개: 시나리오별 pass/fail, 프로젝트에 시나리오 대상이 없을 때 `NOT-APPLICABLE` 보고, corpus canary 검사, exit code) |
+| Acceptance criteria 문법(`required:`/`nonempty:`/`equals:`)과 task별 결과 3종 | `orchestration.py` `OrchestrationTask.executed`/`goal_met`/`security_met`, `architecture.py` `ARCH-TASK-ACCEPTANCE-MISSING` | `tests/test_a2a.py`(문법 밖 criterion이 `goal_met=False`로 task를 실패시킴, boundary가 모든 시도를 막았을 때 `security_met`이 false) |
 
 ## 현재 자동화된 L1 범위
 
@@ -119,7 +127,7 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.ko.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-현재 전체 회귀는 CI 경로(`PYTHONPATH=src:tests python3 -m unittest discover -s tests`)에서 **`Ran 614 tests, OK (skipped=12)`**이며, 여기에 Studio 10개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)가 더해진다. 통제 커버리지 작업으로 `test_control_coverage.py`가 추가됐다. 통합 판정 엔진 작업으로 시험 파일 6개 — `test_policy_characterization.py`, `test_a2a_characterization.py`, `test_check_table.py`, `test_sdk_profile.py`, `test_decision_ranking.py`, `test_execution_permit.py` — 가 추가됐고 `test_core.py`, `test_architecture.py`, `test_l1_matrix.py`, `test_scaffold.py`가 확장됐다. 이전에 게시한 454라는 숫자는 이 모든 작업보다 앞선 값이고, 수집 방식이 다른 `pytest` 경로에서 측정한 것이다. optional extra 없이 체크아웃하면 `pytest`에서는 적게 수집되므로, 인용할 숫자는 `unittest` 쪽이다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+현재 전체 회귀는 CI 경로(`PYTHONPATH=src:tests python3 -m unittest discover -s tests`)에서 **`Ran 715 tests, OK (skipped=12)`**이며, 여기에 Studio 14개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)가 더해진다. 통제 커버리지 작업으로 `test_control_coverage.py`가 추가됐다. 통합 판정 엔진 작업으로 시험 파일 6개 — `test_policy_characterization.py`, `test_a2a_characterization.py`, `test_check_table.py`, `test_sdk_profile.py`, `test_decision_ranking.py`, `test_execution_permit.py` — 가 추가됐고 `test_core.py`, `test_architecture.py`, `test_l1_matrix.py`, `test_scaffold.py`가 확장됐다. 도입 계층(adoption layer) 작업으로 `test_intent.py`, `test_anthropic_adapter.py`, `test_verify.py`, `test_sdk_results.py`, `test_example_support_agent.py`가 추가됐고 `test_core.py`, `test_run_control.py`, `test_a2a.py`, `test_scaffold.py`가 확장됐다. 이전에 게시한 454라는 숫자는 이 모든 작업보다 앞선 값이고, 수집 방식이 다른 `pytest` 경로에서 측정한 것이다. optional extra 없이 체크아웃하면 `pytest`에서는 적게 수집되므로, 인용할 숫자는 `unittest` 쪽이다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
@@ -142,7 +150,11 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 **2026-07-20 Trust Boundary→A2A→오케스트레이션 vertical slice도 완료됐다.** Studio의 Actor topology와 Task workflow가 한 manifest에 저장되고 compiler가 cross-zone boundary와 task transport를 함께 검증한다. A2A 1.0 JSON-RPC core는 REL-06과 boundary를 handler 실행 전에 집행하며 workflow engine은 dependency·retry·timeout·approval·budget을 적용한다. 운영 한계는 in-memory task/run store, 단일 프로세스 scheduler, 비스트리밍 A2A core다.
 
-남은 것은 외부 서비스·플랫폼 연동뿐이다(아래).
+**2026-09-08 도입 계층은 대체로 완료됐다. 아직 배포되지 않은 부분은 아래에 따로 적으며, "외부 연동"에 뭉뚱그리지 않는다.**
+
+**도입 계층 — 완료:** 배포 모드 단일화(저작된 manifest가 아니라 배포 기록의 mode가 실행을 지배), gateway의 결과 검사와 승인 저장소를 SDK가 공유해 `wrap()`에서도 `approval_valid`에 도달 가능, 지원하지 않는 JSON Schema keyword를 정의 시점에 거부, 인수와 MCP annotation에서 도출한 intent를 선언과 비교 판정(`INTERLOCK-INTENT-ARGUMENT-MISMATCH`), Anthropic Python SDK Tool Runner adapter(`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`, `approve=` hook), acceptance-criteria 문법과 task별 결과 3종(`executed`/`goalMet`/`securityMet`), 프로젝트 자신의 guarded tool에 L1 시나리오 9개를 실행하는 `interlock verify`, `interlock architecture skeleton`이 내는 프로젝트 모듈 계약(`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`), 녹화-재생 시험을 갖춘 실행 가능한 `examples/support_agent/`, Studio 프로젝트(신규/열기/저장, 편집 가능한 id/version, manifest import), `anthropic` extra를 갖춘 `0.2.0` 패키징.
+
+**도입 계층 — 미완료:** LangGraph adapter, Claude Agent SDK adapter, sidecar proxy, server-side MCP connector interception(API의 `mcp_servers`는 Anthropic 쪽에서 tool을 실행해 가로챌 수 없으므로 범위 밖), LLM-judge acceptance evaluator(문법은 구조적 평가만 함), [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md)의 열린 질문으로 남아 있는 `BYPASSED` 의미론, PyPI 업로드, `architecture._parse_edge`가 여전히 누락하는 manifest 필드 `maxExportRecords`/`maxExportBytes`/`secretAction`과 부작용 action. `externalWriteRequiresApproval`는 `EXTERNAL_WRITE`에만 `INTERLOCK-APPROVAL-REQUIRED`를 걸므로, `PAYMENT`·`DESTRUCTIVE_WRITE`·`PERMISSION_CHANGE`로 태그된 도구는 이 플래그가 켜져 있어도 보류되지 않습니다(`examples/refund_agent`를 만들며 발견, 그래서 환불 도구를 `EXTERNAL_WRITE`로 태그함).
 
 **외부 연동 작업 (외부 서비스·플랫폼 필요):**
 

@@ -3,7 +3,7 @@ title: Agentic AI 보안 이벤트 DB 및 탐지·방지 플랫폼 기획
 tags: [ai-agent, security, telemetry, detection, prevention, postgresql, architecture]
 date: 2026-07-15
 version: 1.1
-status: planning
+status: active
 source: agentic-위협매트릭스-통합-최종-v3-2026-07.md
 ---
 
