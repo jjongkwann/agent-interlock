@@ -87,6 +87,8 @@ Tool 호출 timeout은 차단 성공을 의미하지 않는다. 요청이 downst
 
 여러 Tool을 한 번에 bind할 때 모든 항목을 먼저 검증한다. digest mismatch나 edge 누락이 있으면 activation 전에 전체 요청을 거부한다. `REL-07 Tool → External`이 선언된 경우 External node의 domain allowlist를 Tool 호출의 유효 destination 경계에 합성한다.
 
+4번과 5번 단계 -- actor 등록, `REL-07` domain 합성, revision 승인과 활성화, 각 `REL-05` 쌍에 컴파일된 link policy 설치 -- 는 adapter가 아니라 module 수준 함수 `bind_gateway_actors()`에 있다. Anthropic Tool Runner adapter(`adapters/anthropic_tools.bind_architecture`)도 같은 함수로 compiled architecture를 bind하므로 두 집행 경로가 graph를 서로 다르게 등록할 수 없다. transport adapter에 남는 것은 그것만 아는 사실이다. Tool이 `tools/list`에서 관측됐다는 것, 그리고 관측 digest가 Architecture pin과 일치한다는 것. Tool Runner 경로는 graph 등록 후에 정의를 관측하므로 revision을 넘기지 않고 actor pin을 직접 채운다. 관측과 어긋나는 pin은 그대로 두고 호출 시점에 `L1-M2-DEFINITION-DRIFT`로 판정하며, transport adapter는 아예 bind를 거부한다.
+
 ## 4. 호출 시 보안 순서
 
 `tools/call`마다 `tools/list`를 전체 재조회한다. 마지막 목록만 믿지 않기 때문에 승인 뒤 definition 변경 또는 삭제가 실제 dispatch 전에 발견된다.

@@ -28,6 +28,13 @@ from .a2a_http import (
     StaticBearerA2AAuthenticator,
     create_a2a_http_server,
 )
+from .adapters.anthropic_tools import (
+    GuardedAsyncTool,
+    GuardedTool,
+    ToolBinding,
+    bind_architecture,
+    guard_tools,
+)
 from .analytics import InteractionRecord, reduce_interactions, summarize_security_statistics
 from .approvals import Approval, ApprovalStore
 from .architecture import (
@@ -342,6 +349,11 @@ __all__ = [
     "WorkflowTaskState",
     "create_a2a_http_server",
     "dynamic_target_matches",
+    "GuardedAsyncTool",
+    "GuardedTool",
+    "ToolBinding",
+    "bind_architecture",
+    "guard_tools",
     "ActionResult",
     "Actor",
     "ActorSpec",

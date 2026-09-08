@@ -96,6 +96,16 @@ class MCPToolGateway:
         if tool_id:
             self._tool_actors[tool_id] = actor
 
+    def actor(self, actor_id: str) -> ActorSpec | None:
+        """The registered actor, or None. Read by an adapter that has to check what a caller
+        already wired -- pinning a Tool actor's digest, or refusing to guard a tool whose actor
+        was never registered -- rather than reaching into the gateway's private map."""
+        return self._actors.get(actor_id)
+
+    def link_policy(self, source_actor_id: str, target_actor_id: str) -> LinkPolicy | None:
+        """The policy installed on one pair by ``connect``, or None when the pair is unwired."""
+        return self._policies.get((source_actor_id, target_actor_id))
+
     def connect(self, source_actor_id: str, target_actor_id: str, policy: LinkPolicy) -> None:
         if source_actor_id not in self._actors or target_actor_id not in self._actors:
             raise KeyError("both actors must be registered before connect")

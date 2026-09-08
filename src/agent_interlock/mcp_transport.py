@@ -13,6 +13,7 @@ from .architecture import CompiledArchitecture
 from .canonical import canonical_digest
 from .gateway import GatewayError, InvocationBlocked, MCPToolGateway
 from .models import (
+    ActorSpec,
     ActorType,
     CredentialClaims,
     DataSource,
@@ -150,6 +151,75 @@ class MCPInvocationContext:
             expected_audience=self.expected_audience,
             expected_resource=self.expected_resource,
         )
+
+
+def _effective_tool_actor(compiled: CompiledArchitecture, actor_id: str) -> ActorSpec:
+    """The Tool actor widened by every domain a REL-07 egress edge grants it."""
+    target = compiled.actors[actor_id]
+    domains = set(target.allowed_domains)
+    for edge in compiled.graph.edges:
+        if edge.relationship_id == "REL-07" and edge.source == actor_id:
+            domains.update(compiled.actors[edge.target].allowed_domains)
+    return replace(target, allowed_domains=frozenset(domains))
+
+
+def bind_gateway_actors(
+    gateway: MCPToolGateway,
+    compiled: CompiledArchitecture,
+    *,
+    tool_revisions: Mapping[str, ToolRevision | None],
+    approver: str,
+) -> tuple[ToolRevision, ...]:
+    """Register the REL-05 neighbourhood of the named Tool actors into ``gateway``.
+
+    The one place a compiled architecture becomes gateway state: for each Tool actor it registers
+    the actor (widened by its REL-07 egress domains), registers every REL-05 source pointing at it,
+    and installs the compiled link policy on each of those pairs. Shared by the MCP transport
+    adapter and the Anthropic Tool Runner adapter so the two cannot register a graph differently.
+
+    Keys of ``tool_revisions`` are Tool actor ids. A value is the observed revision the actor is
+    pinned to -- approved and activated here, and bound to the actor as its ``tool_id`` -- or
+    ``None`` when the caller has not observed the definition yet and pins it afterwards. The
+    transport adapter observes first and so always passes a revision; the Tool Runner adapter
+    registers the graph before it has seen a single tool definition.
+
+    Validation is a separate pass over every entry before anything is registered, so a bad binding
+    leaves the gateway untouched rather than half-bound. Digest agreement between the actor's pin
+    and the revision is *not* checked here: the two adapters answer a mismatch differently (the
+    transport refuses to bind, the Tool Runner adapter lets M2 drift judge it at call time).
+    """
+    if not approver:
+        raise MCPArchitectureBindingError("approver is required")
+    prepared: list[tuple[str, ToolRevision | None, tuple[Any, ...]]] = []
+    for actor_id, revision in tool_revisions.items():
+        try:
+            target = compiled.actors[actor_id]
+        except KeyError as error:
+            raise MCPArchitectureBindingError(f"unknown Tool actor {actor_id!r}") from error
+        if target.type != ActorType.TOOL:
+            raise MCPArchitectureBindingError(f"actor {actor_id!r} is not a TOOL")
+        matching_edges = tuple(
+            edge for edge in compiled.graph.edges if edge.relationship_id == "REL-05" and edge.target == actor_id
+        )
+        if not matching_edges:
+            raise MCPArchitectureBindingError(f"Tool actor {actor_id!r} has no REL-05 edge")
+        prepared.append((actor_id, revision, matching_edges))
+
+    activated: list[ToolRevision] = []
+    for actor_id, revision, matching_edges in prepared:
+        if revision is not None:
+            if revision.state == DefinitionState.DISCOVERED:
+                revision = gateway.registry.approve(revision.revision_id, approver)
+            if revision.state == DefinitionState.APPROVED:
+                revision = gateway.registry.activate(revision.revision_id)
+            activated.append(revision)
+        effective_target = _effective_tool_actor(compiled, actor_id)
+        gateway.register_actor(effective_target, tool_id=revision.tool_id if revision is not None else None)
+        for edge in matching_edges:
+            source = compiled.actors[edge.source]
+            gateway.register_actor(source)
+            gateway.connect(source.id, effective_target.id, compiled.links[edge.id])
+    return tuple(activated)
 
 
 class MCPTransportAdapter:
@@ -320,20 +390,12 @@ class MCPTransportAdapter:
     ) -> tuple[ToolRevision, ...]:
         """Bind reviewed Architecture REL-05 links to exact observed Tool digests."""
 
-        if not approver:
-            raise MCPArchitectureBindingError("approver is required")
-        prepared: list[tuple[str, str, ToolRevision, tuple[Any, ...]]] = []
+        revisions: dict[str, ToolRevision | None] = {}
         for tool_name, actor_id in tool_bindings.items():
             if tool_name not in self._observed_by_name:
                 raise MCPArchitectureBindingError(f"Tool {tool_name!r} has not been observed")
-            try:
-                target = compiled.actors[actor_id]
-            except KeyError as error:
-                raise MCPArchitectureBindingError(f"unknown Tool actor {actor_id!r}") from error
-            if target.type != ActorType.TOOL:
-                raise MCPArchitectureBindingError(f"actor {actor_id!r} is not a TOOL")
             revision = self.gateway.registry.get(self._observed_by_name[tool_name])
-            if target.definition_digest != revision.canonical_digest:
+            if actor_id in compiled.actors and compiled.actors[actor_id].definition_digest != revision.canonical_digest:
                 raise MCPArchitectureBindingError(
                     f"definition digest mismatch for {tool_name!r}: architecture pin does not match observation"
                 )
@@ -343,29 +405,12 @@ class MCPTransportAdapter:
                 DefinitionState.ACTIVE,
             }:
                 raise MCPArchitectureBindingError(f"Tool {tool_name!r} cannot activate from {revision.state.value}")
-            matching_edges = tuple(
-                edge for edge in compiled.graph.edges if edge.relationship_id == "REL-05" and edge.target == actor_id
-            )
-            if not matching_edges:
-                raise MCPArchitectureBindingError(f"Tool actor {actor_id!r} has no REL-05 edge")
-            prepared.append((tool_name, actor_id, revision, matching_edges))
+            revisions[actor_id] = revision
 
-        activated: list[ToolRevision] = []
-        for tool_name, actor_id, revision, matching_edges in prepared:
-            if revision.state == DefinitionState.DISCOVERED:
-                revision = self.gateway.registry.approve(revision.revision_id, approver)
-            if revision.state == DefinitionState.APPROVED:
-                revision = self.gateway.registry.activate(revision.revision_id)
-
-            effective_target = self._effective_tool_actor(compiled, actor_id)
-            self.gateway.register_actor(effective_target, tool_id=revision.tool_id)
-            for edge in matching_edges:
-                source = compiled.actors[edge.source]
-                self.gateway.register_actor(source)
-                self.gateway.connect(source.id, effective_target.id, compiled.links[edge.id])
+        activated = bind_gateway_actors(self.gateway, compiled, tool_revisions=revisions, approver=approver)
+        for tool_name, actor_id in tool_bindings.items():
             self._tool_actor_by_name[tool_name] = actor_id
-            activated.append(revision)
-        return tuple(activated)
+        return activated
 
     def _handle_tools_list(self, request: Mapping[str, Any]) -> dict[str, Any]:
         params = _params(request)
@@ -615,14 +660,6 @@ class MCPTransportAdapter:
             publisher=self.profile.publisher,
             artifact_digest=self.profile.artifact_digest,
         )
-
-    def _effective_tool_actor(self, compiled: CompiledArchitecture, actor_id: str):
-        target = compiled.actors[actor_id]
-        domains = set(target.allowed_domains)
-        for edge in compiled.graph.edges:
-            if edge.relationship_id == "REL-07" and edge.source == actor_id:
-                domains.update(compiled.actors[edge.target].allowed_domains)
-        return replace(target, allowed_domains=frozenset(domains))
 
     def _approved_meta(self, params: Mapping[str, Any]) -> dict[str, Any]:
         raw_meta = params.get("_meta")

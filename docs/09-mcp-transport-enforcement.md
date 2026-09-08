@@ -87,6 +87,8 @@ A Tool call timeout does not mean the block succeeded. The request may have reac
 
 When binding multiple Tools at once, every item is validated first. If a digest mismatch or a missing edge is found, the entire request is rejected before activation. If a `REL-07 Tool → External` is declared, the External node's domain allowlist is composed into the effective destination boundary of the Tool call.
 
+Steps 4 and 5 -- registering the actors, composing the `REL-07` domains, approving and activating the revision, and installing the compiled link policy on each `REL-05` pair -- live in the module-level `bind_gateway_actors()`, not in the adapter. The Anthropic Tool Runner adapter (`adapters/anthropic_tools.bind_architecture`) binds a compiled architecture through the same function, so the two enforcement paths cannot register a graph differently. What stays in the transport adapter is what only it knows: that the Tool was observed in `tools/list`, and that the observed digest matches the Architecture pin. The Tool Runner path observes definitions after the graph is registered, so it passes no revision and pins the actor itself; a pin that disagrees with the observation is left alone there and judged as `L1-M2-DEFINITION-DRIFT` at call time, whereas the transport adapter refuses to bind at all.
+
 ## 4. Security Order at Call Time
 
 `tools/list` is fully re-fetched on every `tools/call`. Because the last cached list alone is not trusted, definition changes or deletions made after approval are caught before the actual dispatch.
