@@ -65,6 +65,13 @@ def sanitize_secrets(value: Any) -> tuple[Any, bool]:
             output_list.append(clean)
             detected = detected or item_detected
         return output_list, detected
+    if isinstance(value, tuple):
+        output_items = []
+        for item in value:
+            clean, item_detected = sanitize_secrets(item)
+            output_items.append(clean)
+            detected = detected or item_detected
+        return tuple(output_items), detected
     return value, False
 
 
@@ -100,6 +107,9 @@ def unsupported_schema_keywords(schema: Mapping[str, Any]) -> tuple[str, ...]:
         items = node.get("items")
         if items is not None:
             walk(items, f"{path}.items")
+        additional_properties = node.get("additionalProperties")
+        if isinstance(additional_properties, Mapping):
+            walk(additional_properties, f"{path}.additionalProperties")
 
     walk(schema, "$")
     return tuple(sorted(found))
@@ -128,11 +138,16 @@ def validate_schema(value: Any, schema: Mapping[str, Any], path: str = "$") -> t
         required = schema.get("required", [])
         errors.extend(f"{path}.{name}: required" for name in required if name not in value)
         properties = schema.get("properties", {})
-        if schema.get("additionalProperties") is False:
+        additional_properties = schema.get("additionalProperties")
+        if additional_properties is False:
             errors.extend(f"{path}.{name}: additional property" for name in value if name not in properties)
         for name, sub_schema in properties.items():
             if name in value:
                 errors.extend(validate_schema(value[name], sub_schema, f"{path}.{name}"))
+        if isinstance(additional_properties, Mapping):
+            for name in value:
+                if name not in properties:
+                    errors.extend(validate_schema(value[name], additional_properties, f"{path}.{name}"))
     if expected == "array" and isinstance(value, list) and "items" in schema:
         for index, item in enumerate(value):
             errors.extend(validate_schema(item, schema["items"], f"{path}[{index}]"))

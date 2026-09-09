@@ -24,7 +24,12 @@ from agent_interlock import (
     canonical_json,
 )
 from agent_interlock.gateway import GatewayError
-from agent_interlock.security import canonical_destination, unsupported_schema_keywords, validate_authorization_url
+from agent_interlock.security import (
+    canonical_destination,
+    sanitize_secrets,
+    unsupported_schema_keywords,
+    validate_authorization_url,
+)
 
 INPUT_SCHEMA = {
     "type": "object",
@@ -442,6 +447,13 @@ class SecurityHelperTests(unittest.TestCase):
         self.assertFalse(validate_authorization_url("https://127.0.0.1/callback", allowed_hosts=allowed)[0])
         self.assertTrue(validate_authorization_url("https://auth.example/oauth", allowed_hosts=allowed)[0])
 
+    def test_sanitize_secrets_redacts_a_tuple_element_and_preserves_the_tuple_type(self):
+        cleaned, detected = sanitize_secrets(("normal", "api_key=sk_live_1234567890abcdefghijkl"))
+        self.assertTrue(detected)
+        self.assertIsInstance(cleaned, tuple)
+        self.assertEqual(cleaned[0], "normal")
+        self.assertNotIn("sk_live_1234567890abcdefghijkl", cleaned[1])
+
 
 class SchemaKeywordTests(unittest.TestCase):
     def test_unsupported_schema_keywords_reports_path_qualified_names(self):
@@ -457,6 +469,13 @@ class SchemaKeywordTests(unittest.TestCase):
             unsupported_schema_keywords(schema),
             ("$.properties.attachments.items: $ref", "$.properties.to: minimum", "$: oneOf"),
         )
+
+    def test_unsupported_schema_keywords_walks_into_a_schema_valued_additional_properties(self):
+        schema = {
+            "type": "object",
+            "additionalProperties": {"type": "string", "minimum": 0},
+        }
+        self.assertEqual(unsupported_schema_keywords(schema), ("$.additionalProperties: minimum",))
 
     def test_supported_keywords_plus_documentation_keys_pass(self):
         schema = {

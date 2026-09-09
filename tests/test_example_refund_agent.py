@@ -157,9 +157,10 @@ class ReplayTests(unittest.TestCase):
         ]
 
     def test_the_recorded_turn_issues_one_refund_and_one_notification(self):
-        gateway, reply = run.main(PROMPT, client=self.client())
+        gateway, reply, warning = run.main(PROMPT, client=self.client())
 
         self.assertIn("dana@customer.example", reply)
+        self.assertIsNone(warning)
         self.assertEqual(len(tools.REFUNDS), 1)
         self.assertEqual(tools.REFUNDS[0]["amount"], 42.5)
         self.assertEqual(len(tools.OUTBOX), 1)
@@ -184,7 +185,7 @@ class ReplayTests(unittest.TestCase):
     def test_a_refund_above_the_cap_is_refused_and_no_refund_is_issued(self):
         self.issue_refund_input()["amount"] = 250.0
 
-        gateway, _ = run.main(PROMPT, client=self.client())
+        gateway, reply, warning = run.main(PROMPT, client=self.client())
 
         self.assertEqual(tools.REFUNDS, [])
         errors = [block for block in self.tool_results() if block.get("is_error")]
@@ -194,6 +195,8 @@ class ReplayTests(unittest.TestCase):
         issue = [record for record in records if record.target_actor_id == "tool.issue-refund"]
         self.assertEqual(len(issue), 1)
         self.assertTrue(issue[0].enforced_block)
+        self.assertIsNotNone(warning)
+        self.assertIn("blocked", warning)
 
 
 if __name__ == "__main__":

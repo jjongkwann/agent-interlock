@@ -11,6 +11,7 @@ from agent_interlock import (
     ArchitectureCompiler,
     ArchitectureGraph,
     ArchitectureLinter,
+    ControlDecision,
     EnforcementPoint,
     FindingSeverity,
     InMemoryLedger,
@@ -54,6 +55,14 @@ class ArchitectureModelTests(unittest.TestCase):
         runtime = compiled.build_interlock()
         self.assertEqual(len(runtime.design_graph()["nodes"]), 7)
         self.assertEqual(len(runtime.design_graph()["edges"]), 6)
+
+    def test_edge_policy_parses_volume_and_action_fields(self):
+        value = manifest()
+        value["spec"]["edges"][0]["policy"]["maxExportRecords"] = 100
+        value["spec"]["edges"][0]["policy"]["volumeAction"] = "BLOCK"
+        edge = ArchitectureGraph.from_dict(value).edges[0]
+        self.assertEqual(edge.policy.max_export_records, 100)
+        self.assertEqual(edge.policy.volume_action, ControlDecision.BLOCK)
 
     def test_graph_rejects_unknown_node_reference(self):
         value = manifest()

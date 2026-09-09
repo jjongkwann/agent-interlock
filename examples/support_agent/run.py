@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent_interlock import MCPToolGateway
+from agent_interlock.analytics import reduce_interactions
 from agent_interlock.models import PolicyDecisionRecord
 
 from .build import Approver, build
@@ -26,6 +27,24 @@ from .build import Approver, build
 MODEL = "claude-opus-5"
 MAX_TOKENS = 16000
 APPROVED_DOMAIN = "customer.example"
+_FAILURE_WORDS = ("blocked", "denied", "refused", "could not", "unable", "error", "not allowed", "failed")
+
+
+def check_consistency(gateway: MCPToolGateway, reply: str) -> str | None:
+    """Flag a reply that reads as success when the ledger shows a blocked tool call.
+
+    A heuristic, not a proof: the model may have legitimately rephrased a refusal without using
+    any of these words. It exists to surface the gap between the ledger's account and what the
+    user was told, not to grade the model's prose.
+    """
+    records = reduce_interactions(event.to_dict() for event in gateway.ledger.all())
+    blocked = sum(1 for record in records if record.enforced_block)
+    if blocked == 0 or any(word in reply.lower() for word in _FAILURE_WORDS):
+        return None
+    return (
+        f"⚠ The model's answer may not reflect the execution evidence: {blocked} tool call(s) "
+        "were blocked but the reply does not mention it."
+    )
 
 
 def approve_support_reply(arguments: Mapping[str, Any], decision: PolicyDecisionRecord) -> str | None:
@@ -45,7 +64,7 @@ def approve_support_reply(arguments: Mapping[str, Any], decision: PolicyDecision
 
 def main(
     prompt: str, client: object | None = None, *, approve: Approver | None = approve_support_reply
-) -> tuple[MCPToolGateway, str]:
+) -> tuple[MCPToolGateway, str, str | None]:
     """Run one prompt to completion and print the reply and the evidence trail."""
     import anthropic
 
@@ -62,7 +81,10 @@ def main(
     reply = "\n".join(block.text for block in final.content if block.type == "text")
     print(reply)
     print("ledger:", " ".join(event.event_type for event in gateway.ledger.all()))
-    return gateway, reply
+    warning = check_consistency(gateway, reply)
+    if warning is not None:
+        print(warning)
+    return gateway, reply, warning
 
 
 if __name__ == "__main__":

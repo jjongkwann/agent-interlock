@@ -133,9 +133,10 @@ class ReplayTests(unittest.TestCase):
         ]
 
     def test_the_recorded_turn_runs_both_tools_and_leaves_two_lifecycles(self):
-        gateway, reply = run.main(PROMPT, client=self.client())
+        gateway, reply, warning = run.main(PROMPT, client=self.client())
 
         self.assertIn("dana@customer.example", reply)
+        self.assertIsNone(warning)
         self.assertEqual(len(tools.OUTBOX), 1)
         self.assertEqual(tools.OUTBOX[0]["to"], "dana@customer.example")
         records = reduce_interactions([event.to_dict() for event in gateway.ledger.all()])
@@ -155,7 +156,7 @@ class ReplayTests(unittest.TestCase):
         self.assertFalse(any(block.get("is_error") for block in self.tool_results()))
 
     def test_a_refused_approval_holds_the_send_and_tells_the_model_why(self):
-        gateway, _ = run.main(PROMPT, client=self.client(), approve=lambda arguments, decision: None)
+        gateway, reply, warning = run.main(PROMPT, client=self.client(), approve=lambda arguments, decision: None)
 
         self.assertEqual(tools.OUTBOX, [])
         errors = [block for block in self.tool_results() if block.get("is_error")]
@@ -165,11 +166,13 @@ class ReplayTests(unittest.TestCase):
         email = [record for record in records if record.target_actor_id == "tool.send-email"]
         self.assertEqual(len(email), 1)
         self.assertTrue(email[0].enforced_block)
+        self.assertIsNotNone(warning)
+        self.assertIn("blocked", warning)
 
     def test_a_recipient_outside_the_allowlist_comes_back_to_the_model_as_an_error(self):
         self.send_email_input()["to"] = "a@evil.example"
 
-        gateway, _ = run.main(PROMPT, client=self.client())
+        gateway, reply, warning = run.main(PROMPT, client=self.client())
 
         self.assertEqual(tools.OUTBOX, [])
         errors = [block for block in self.tool_results() if block.get("is_error")]
@@ -178,6 +181,8 @@ class ReplayTests(unittest.TestCase):
         records = reduce_interactions([event.to_dict() for event in gateway.ledger.all()])
         email = next(record for record in records if record.target_actor_id == "tool.send-email")
         self.assertTrue(email.enforced_block)
+        self.assertIsNotNone(warning)
+        self.assertIn("blocked", warning)
 
 
 if __name__ == "__main__":

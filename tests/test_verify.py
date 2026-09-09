@@ -23,6 +23,7 @@ from agent_interlock.__main__ import main
 from agent_interlock.verify import (
     NOT_APPLICABLE,
     SCENARIOS,
+    VerificationReport,
     VerifyError,
     canary_leaks,
     load_project,
@@ -46,6 +47,9 @@ class VerifyFixtureProjectTests(unittest.TestCase):
         self.assertTrue(report.passed, json.dumps(report.to_dict(), indent=2))
         self.assertEqual([result.id for result in report.results], [item.id for item in SCENARIOS])
         self.assertEqual([result.observed for result in report.results if result.observed == NOT_APPLICABLE], [])
+        self.assertEqual(report.verified, len(SCENARIOS))
+        self.assertEqual(report.not_applicable, 0)
+        self.assertEqual(report.failed, 0)
 
     def test_each_scenario_reaches_the_control_it_names(self):
         report = run_verification(str(FIXTURE))
@@ -125,6 +129,23 @@ class WeakenedProjectTests(unittest.TestCase):
         self.assertEqual(result.observed, NOT_APPLICABLE)
         self.assertIn("max_export_records", result.evidence["reason"])
 
+    def test_a_project_with_no_volume_cap_is_counted_not_applicable_not_verified(self):
+        module = load_project(str(FIXTURE))
+        module.MAX_EXPORT_RECORDS = 0
+        results = tuple(run_scenario(module, item) for item in SCENARIOS)
+
+        report = VerificationReport(str(FIXTURE), str(module.MANIFEST), results)
+        self.assertTrue(report.passed)
+        self.assertEqual(report.not_applicable, 1)
+        self.assertEqual(report.failed, 0)
+        self.assertEqual(report.verified, len(SCENARIOS) - 1)
+
+        strict_report = VerificationReport(str(FIXTURE), str(module.MANIFEST), results, strict=True)
+        self.assertFalse(strict_report.passed)
+        self.assertEqual(strict_report.not_applicable, 0)
+        self.assertEqual(strict_report.failed, 1)
+        self.assertEqual(strict_report.verified, len(SCENARIOS) - 1)
+
 
 def _unmarked(binding):
     schema = deepcopy(dict(binding.definition.input_schema))
@@ -175,8 +196,12 @@ class VerifyCLITests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         report = json.loads(stream.getvalue())
-        self.assertEqual(set(report), {"project", "manifest", "passed", "results"})
+        expected_keys = {"project", "manifest", "passed", "verified", "notApplicable", "failed", "results"}
+        self.assertEqual(set(report), expected_keys)
         self.assertTrue(report["passed"])
+        self.assertEqual(report["verified"], len(SCENARIOS))
+        self.assertEqual(report["notApplicable"], 0)
+        self.assertEqual(report["failed"], 0)
         self.assertEqual(len(report["results"]), len(SCENARIOS))
         self.assertEqual(set(report["results"][0]), {"id", "expected", "observed", "passed", "evidence"})
 
@@ -226,6 +251,31 @@ class VerifyCLITests(unittest.TestCase):
                 code = main(["verify", str(project_path)])
 
         self.assertEqual(code, 1)
+
+    def test_strict_turns_a_not_applicable_scenario_into_a_failing_exit_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = Path(directory) / "no_cap_project.py"
+            project_path.write_text(
+                f"from agent_interlock.verify import load_project\n"
+                f"_source = load_project({str(FIXTURE)!r})\n"
+                "MANIFEST = _source.MANIFEST\n"
+                "TENANT_ID = _source.TENANT_ID\n"
+                "SOURCE_ACTOR_ID = _source.SOURCE_ACTOR_ID\n"
+                "BINDINGS = _source.BINDINGS\n"
+                "def build(bindings=BINDINGS, *, ledger=None):\n"
+                "    _source.MAX_EXPORT_RECORDS = 0\n"
+                "    return _source.build(bindings, ledger=ledger)\n",
+                encoding="utf-8",
+            )
+            with contextlib.redirect_stdout(io.StringIO()) as lax_stream:
+                lax_code = main(["verify", str(project_path)])
+            with contextlib.redirect_stdout(io.StringIO()) as strict_stream:
+                strict_code = main(["verify", str(project_path), "--strict"])
+
+        self.assertEqual(lax_code, 0)
+        self.assertEqual(json.loads(lax_stream.getvalue())["notApplicable"], 1)
+        self.assertEqual(strict_code, 1)
+        self.assertEqual(json.loads(strict_stream.getvalue())["failed"], 1)
 
 
 class TestExecutedEventTests(unittest.TestCase):

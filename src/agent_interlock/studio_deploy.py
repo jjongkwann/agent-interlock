@@ -94,6 +94,7 @@ def deployed_architecture(bundle_body: Mapping[str, Any], mode: str) -> Architec
     return replace(
         graph,
         edges=tuple(replace(edge, policy=replace(edge.policy, mode=applied_mode)) for edge in graph.edges),
+        boundaries=tuple(replace(boundary, mode=applied_mode) for boundary in graph.boundaries),
     )
 
 

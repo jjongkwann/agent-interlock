@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { buildManifestPayload, parseManifestPayload } from "../app/manifest.ts";
+import { buildManifestPayload, emptyOrchestration, parseManifestPayload } from "../app/manifest.ts";
 
 // A representative Studio graph: two zones, a directional boundary, a dynamic delegation edge
 // (which round-trips through targetSelector.sameTenant), a static tool edge with two controls of
@@ -19,14 +19,14 @@ function sampleSnapshot() {
     nodes: [
       { id: "agent.coordinator", label: "Coordinator", type: "AGENT", owner: "Platform", identity: "spiffe://demo/coordinator", capabilities: ["DELEGATE"], dataAccess: ["D2", "D3"], tenantMode: "REQUIRED", maxDelegationDepth: 2, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 40, y: 60 },
       { id: "agent.worker", label: "Worker", type: "SUBAGENT", owner: "Platform", identity: "spiffe://demo/worker", capabilities: ["RESEARCH"], dataAccess: ["D2"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 440, y: 60 },
-      { id: "tool.lookup", label: "Lookup tool", type: "TOOL", owner: "Platform", identity: "spiffe://demo/lookup", capabilities: ["LOOKUP"], dataAccess: ["D2"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", definitionDigest: "sha256:" + "b".repeat(64), x: 40, y: 200 },
+      { id: "tool.lookup", label: "Lookup tool", type: "TOOL", owner: "Platform", identity: "spiffe://demo/lookup", capabilities: ["LOOKUP"], dataAccess: ["D2"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", definitionDigest: "sha256:" + "b".repeat(64), sideEffects: ["READ"], inputSchema: { type: "object", properties: { query: { type: "string" } } }, outputSchema: { type: "object", properties: { result: { type: "string" } } }, annotations: { readOnlyHint: true }, x: 40, y: 200 },
     ],
     edges: [
-      { id: "edge.coordinator-worker", source: "agent.coordinator", target: "agent.worker", relationshipId: "REL-06", relationship: "DELEGATES", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3"], approvalRequired: false, dynamic: true, sameTenant: true, maxDepth: 1, boundaryId: "boundary.control-worker", controls: [
+      { id: "edge.coordinator-worker", source: "agent.coordinator", target: "agent.worker", relationshipId: "REL-06", relationship: "DELEGATES", mode: "ENFORCE", failureMode: "FAIL_CLOSED", allowedData: ["D2", "D3"], allowedPurposes: ["RESEARCH_DELEGATION"], approvalRequired: false, dynamic: true, sameTenant: true, maxDepth: 1, boundaryId: "boundary.control-worker", controls: [
         { id: "delegation-binding", objective: "PREVENT", timing: "PRE_EXECUTION", point: "A2A_BROKER", assurance: "ENFORCED" },
         { id: "delegation-audit", objective: "EVIDENCE", timing: "POST_EXECUTION", point: "AUDIT_SINK", assurance: "OBSERVED" },
       ] },
-      { id: "edge.coordinator-lookup", source: "agent.coordinator", target: "tool.lookup", relationshipId: "REL-05", relationship: "INVOKES", mode: "SHADOW", failureMode: "FAIL_CLOSED", allowedData: ["D2"], approvalRequired: true, dynamic: false, sameTenant: true, maxDepth: 0, controls: [
+      { id: "edge.coordinator-lookup", source: "agent.coordinator", target: "tool.lookup", relationshipId: "REL-05", relationship: "INVOKES", mode: "SHADOW", failureMode: "FAIL_CLOSED", allowedData: ["D2"], allowedPurposes: [], approvalRequired: true, dynamic: false, sameTenant: true, maxDepth: 0, maxExportRecords: 100, maxExportBytes: 1048576, volumeAction: "HOLD", secretAction: "BLOCK", destructiveWriteAction: "QUARANTINE", undeclaredSideEffectAction: "BLOCK", controls: [
         { id: "mcp-call-guard", objective: "PREVENT", timing: "PRE_EXECUTION", point: "MCP_GATEWAY", assurance: "DECLARED" },
       ] },
     ],
@@ -62,9 +62,45 @@ test("opening an exported manifest and re-exporting it reproduces the same paylo
   const delegationEdge = parsed.snapshot.edges.find((edge) => edge.id === "edge.coordinator-worker");
   assert.equal(delegationEdge.sameTenant, true);
   assert.equal(delegationEdge.maxDepth, 1);
+  assert.deepEqual(delegationEdge.allowedPurposes, ["RESEARCH_DELEGATION"]);
+
+  const lookupTool = parsed.snapshot.nodes.find((node) => node.id === "tool.lookup");
+  assert.deepEqual(lookupTool.sideEffects, ["READ"]);
+  assert.deepEqual(lookupTool.inputSchema, { type: "object", properties: { query: { type: "string" } } });
+  assert.deepEqual(lookupTool.outputSchema, { type: "object", properties: { result: { type: "string" } } });
+  assert.deepEqual(lookupTool.annotations, { readOnlyHint: true });
+
+  const lookupEdge = parsed.snapshot.edges.find((edge) => edge.id === "edge.coordinator-lookup");
+  assert.equal(lookupEdge.maxExportRecords, 100);
+  assert.equal(lookupEdge.maxExportBytes, 1048576);
+  assert.equal(lookupEdge.volumeAction, "HOLD");
+  assert.equal(lookupEdge.secretAction, "BLOCK");
+  assert.equal(lookupEdge.destructiveWriteAction, "QUARANTINE");
+  assert.equal(lookupEdge.undeclaredSideEffectAction, "BLOCK");
 
   const reExported = buildManifestPayload(parsed.snapshot, parsed.project);
   assert.deepEqual(reExported, exported);
+});
+
+test("omits the orchestration key when there are no tasks and no coordinator", () => {
+  const snapshot = sampleSnapshot();
+  snapshot.orchestration = { ...emptyOrchestration };
+  const exported = buildManifestPayload(snapshot, sampleProject);
+  assert.equal("orchestration" in exported.spec, false);
+
+  const parsed = parseManifestPayload(exported);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.snapshot.orchestration.tasks, []);
+  assert.equal(parsed.snapshot.orchestration.coordinatorActorId, "");
+});
+
+test("preserves a node's declared sideEffects instead of the type-based heuristic", () => {
+  const snapshot = sampleSnapshot();
+  const tool = snapshot.nodes.find((node) => node.id === "tool.lookup");
+  tool.sideEffects = ["DESTRUCTIVE_WRITE"];
+  const exported = buildManifestPayload(snapshot, sampleProject);
+  const exportedTool = exported.spec.nodes.find((node) => node.id === "tool.lookup");
+  assert.deepEqual(exportedTool.sideEffects, ["DESTRUCTIVE_WRITE"]);
 });
 
 test("parses the compiler's reference manifest and preserves its positions and delegation depth", async () => {

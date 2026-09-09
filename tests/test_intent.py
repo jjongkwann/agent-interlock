@@ -98,6 +98,18 @@ class DerivationTests(unittest.TestCase):
             ("a@customer.example", "attacker@evil.example"),
         )
 
+    def test_a_property_reached_only_through_a_schema_valued_additional_properties_is_found(self):
+        """`additionalProperties` can itself be a schema, not just the boolean gate `properties`
+        does not cover. A property that only matches through it names a destination the same way
+        one under `properties` does."""
+        schema = {
+            "type": "object",
+            "additionalProperties": {"type": "string", "format": "email"},
+        }
+        derived = derive_intent({"cc": "a@customer.example"}, schema, {})
+        self.assertEqual(derived.destinations, ("a@customer.example",))
+        self.assertTrue(derived.derivable)
+
     def test_the_extension_keyword_marks_a_property_format_cannot_describe(self):
         """`format` has no spelling for a channel id or a queue name, so a schema can mark one
         explicitly. security._IGNORED_SCHEMA_KEYWORDS allows the keyword through definition-time

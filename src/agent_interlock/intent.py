@@ -115,6 +115,15 @@ def _walk(schema: Any, value: Any, found: list[str], marks: list[bool]) -> None:
                 _walk(items, entry, found, marks)
         else:
             _walk(items, _MISSING, found, marks)
+    additional_properties = schema.get("additionalProperties")
+    if isinstance(additional_properties, Mapping):
+        names = properties if isinstance(properties, Mapping) else {}
+        if isinstance(value, Mapping):
+            for name, child in value.items():
+                if name not in names:
+                    _walk(additional_properties, child, found, marks)
+        else:
+            _walk(additional_properties, _MISSING, found, marks)
 
 
 def _derive_side_effect(annotations: Mapping[str, Any]) -> SideEffect | None:

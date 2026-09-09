@@ -23,6 +23,10 @@ export type ArchitectureNode = {
   definitionDigest?: string;
   dataAccess: string[];
   allowedDomains?: string[];
+  sideEffects?: string[];
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
   x: number;
   y: number;
 };
@@ -101,11 +105,18 @@ export type ArchitectureEdge = {
   mode: Mode;
   failureMode: "FAIL_CLOSED" | "DEGRADE_READ_ONLY" | "FAIL_OPEN";
   allowedData: string[];
+  allowedPurposes: string[];
   approvalRequired: boolean;
   dynamic: boolean;
   sameTenant: boolean;
   maxDepth: number;
   boundaryId?: string;
+  maxExportRecords?: number;
+  maxExportBytes?: number;
+  volumeAction?: string;
+  secretAction?: string;
+  destructiveWriteAction?: string;
+  undeclaredSideEffectAction?: string;
   controls: Control[];
 };
 
@@ -151,7 +162,9 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
     identity: node.identity,
     capabilities: node.capabilities,
     dataAccess: node.dataAccess ?? [],
-    sideEffects: node.type === "TOOL" ? ["EXTERNAL_WRITE"] : node.type === "RAG" || node.type === "MEMORY" ? ["READ"] : [],
+    sideEffects: node.sideEffects ?? (node.type === "TOOL" ? ["EXTERNAL_WRITE"] : node.type === "RAG" || node.type === "MEMORY" ? ["READ"] : []),
+    ...(node.inputSchema ? { inputSchema: node.inputSchema } : {}),
+    ...(node.outputSchema ? { outputSchema: node.outputSchema } : {}),
     tenantMode: node.tenantMode,
     failureMode: "FAIL_CLOSED",
     allowedDomains: node.allowedDomains ?? [],
@@ -159,6 +172,7 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
     trustZone: node.trustZone,
     trustZoneId: node.trustZoneId,
     ...(node.definitionDigest ? { definitionDigest: node.definitionDigest } : {}),
+    ...(node.annotations ? { annotations: node.annotations } : {}),
     position: { x: node.x, y: node.y },
   }));
   const manifestEdges = edges.map((edge) => {
@@ -176,6 +190,7 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
         id: `${edge.id}-policy`,
         version: "1.0.0",
         mode: edge.mode,
+        allowedPurposes: edge.allowedPurposes,
         allowedDataClasses: edge.allowedData,
         deniedDataClasses: ["D5", "D8"].filter((item) => !edge.allowedData.includes(item)),
         requireActiveDefinition: true,
@@ -190,6 +205,12 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
         externalWriteRequiresApproval: edge.approvalRequired,
         failureMode: edge.failureMode,
         decisionTtlSeconds: 30,
+        ...(edge.maxExportRecords !== undefined ? { maxExportRecords: edge.maxExportRecords } : {}),
+        ...(edge.maxExportBytes !== undefined ? { maxExportBytes: edge.maxExportBytes } : {}),
+        ...(edge.volumeAction !== undefined ? { volumeAction: edge.volumeAction } : {}),
+        ...(edge.secretAction !== undefined ? { secretAction: edge.secretAction } : {}),
+        ...(edge.destructiveWriteAction !== undefined ? { destructiveWriteAction: edge.destructiveWriteAction } : {}),
+        ...(edge.undeclaredSideEffectAction !== undefined ? { undeclaredSideEffectAction: edge.undeclaredSideEffectAction } : {}),
       },
       controls: edge.controls.map((control) => ({ id: control.id, objective: control.objective, timing: control.timing, enforcementPoint: control.point, assurance: control.assurance })),
     };
@@ -202,7 +223,8 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
     runPolicy: { maxParallelism: orchestration.maxParallelism, maxTasks: orchestration.maxTasks, maxDurationSeconds: orchestration.maxDurationSeconds, maxMessages: orchestration.maxMessages, failFast: orchestration.failFast },
     tasks: orchestration.tasks.map((task) => ({ id: task.id, label: task.label, sourceActorId: task.sourceActorId, targetActorId: task.targetActorId, transport: task.transport, purpose: task.purpose, dependsOn: task.dependsOn, dataClasses: task.dataClasses, acceptanceCriteria: task.acceptanceCriteria, maxAttempts: task.maxAttempts, timeoutSeconds: task.timeoutSeconds, approvalRequired: task.approvalRequired, onFailure: task.onFailure, position: { x: task.x, y: task.y } })),
   };
-  return { apiVersion: "interlock.dev/v1alpha1", kind: "Architecture", metadata: { id: project.id, version: project.version }, spec: { trustZones: manifestZones, trustBoundaries: manifestBoundaries, nodes: manifestNodes, edges: manifestEdges, orchestration: manifestOrchestration } };
+  const hasOrchestration = orchestration.tasks.length > 0 || Boolean(orchestration.coordinatorActorId);
+  return { apiVersion: "interlock.dev/v1alpha1", kind: "Architecture", metadata: { id: project.id, version: project.version }, spec: { trustZones: manifestZones, trustBoundaries: manifestBoundaries, nodes: manifestNodes, edges: manifestEdges, ...(hasOrchestration ? { orchestration: manifestOrchestration } : {}) } };
 }
 
 // --- Import: Architecture manifest -> Studio state --------------------------------------------
@@ -286,6 +308,10 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
         trustZoneId,
         ...(text(node.definitionDigest) ? { definitionDigest: text(node.definitionDigest) } : {}),
         allowedDomains: stringArray(node.allowedDomains),
+        ...(Array.isArray(node.sideEffects) ? { sideEffects: stringArray(node.sideEffects) } : {}),
+        ...(isRecord(node.inputSchema) ? { inputSchema: node.inputSchema } : {}),
+        ...(isRecord(node.outputSchema) ? { outputSchema: node.outputSchema } : {}),
+        ...(isRecord(node.annotations) ? { annotations: node.annotations } : {}),
         x: placed.x,
         y: placed.y,
       };
@@ -305,11 +331,18 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
         mode: (text(policy.mode) as Mode) ?? "SHADOW",
         failureMode: (text(policy.failureMode) as ArchitectureEdge["failureMode"]) ?? "FAIL_CLOSED",
         allowedData: stringArray(policy.allowedDataClasses),
+        allowedPurposes: stringArray(policy.allowedPurposes),
         approvalRequired: policy.externalWriteRequiresApproval === true,
         dynamic,
         sameTenant: dynamic && targetSelector ? targetSelector.sameTenant !== false : true,
         maxDepth: numberOr(policy.maxDelegationDepth, 0),
         ...(text(edge.boundaryId) ? { boundaryId: text(edge.boundaryId) } : {}),
+        ...(typeof policy.maxExportRecords === "number" ? { maxExportRecords: policy.maxExportRecords } : {}),
+        ...(typeof policy.maxExportBytes === "number" ? { maxExportBytes: policy.maxExportBytes } : {}),
+        ...(text(policy.volumeAction) ? { volumeAction: text(policy.volumeAction) } : {}),
+        ...(text(policy.secretAction) ? { secretAction: text(policy.secretAction) } : {}),
+        ...(text(policy.destructiveWriteAction) ? { destructiveWriteAction: text(policy.destructiveWriteAction) } : {}),
+        ...(text(policy.undeclaredSideEffectAction) ? { undeclaredSideEffectAction: text(policy.undeclaredSideEffectAction) } : {}),
         controls: arrayOf(edge.controls).map((rawControl) => {
           const control = isRecord(rawControl) ? rawControl : {};
           return {

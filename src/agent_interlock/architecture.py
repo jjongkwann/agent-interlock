@@ -1335,7 +1335,13 @@ def _parse_edge(value: Any, node_types: Mapping[str, ActorType]) -> Architecture
         require_resource=bool(policy_value.get("requireResource", True)),
         require_actor_binding=bool(policy_value.get("requireActorBinding", True)),
         max_delegation_depth=int(policy_value.get("maxDelegationDepth", 1)),
+        max_export_records=int(policy_value.get("maxExportRecords", 0)),
+        max_export_bytes=int(policy_value.get("maxExportBytes", 0)),
+        volume_action=ControlDecision(str(policy_value.get("volumeAction", "BLOCK"))),
         external_write_requires_approval=bool(policy_value.get("externalWriteRequiresApproval", True)),
+        destructive_write_action=ControlDecision(str(policy_value.get("destructiveWriteAction", "BLOCK"))),
+        undeclared_side_effect_action=ControlDecision(str(policy_value.get("undeclaredSideEffectAction", "BLOCK"))),
+        secret_action=ControlDecision(str(policy_value.get("secretAction", "BLOCK"))),
         failure_mode=FailureMode(str(policy_value.get("failureMode", "FAIL_CLOSED"))),
         decision_ttl_seconds=int(policy_value.get("decisionTtlSeconds", 30)),
     )

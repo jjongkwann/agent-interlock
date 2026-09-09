@@ -198,18 +198,53 @@ class VerificationReport:
     project: str
     manifest: str
     results: tuple[ScenarioResult, ...]
+    strict: bool = False
+
+    def _counts(self) -> tuple[int, int, int]:
+        """(verified, not_applicable, failed), mutually exclusive and summing to len(results).
+
+        NOT-APPLICABLE means the scenario's precondition was absent from this project, not that it
+        was exercised and passed -- counting it as ``verified`` would tell the reader a control was
+        proven that was never armed. Under ``strict`` it counts as ``failed`` instead, for a
+        project that claims full coverage and needs every scenario to have actually run.
+        """
+        verified = not_applicable = failed = 0
+        for result in self.results:
+            if not result.passed:
+                failed += 1
+            elif result.observed == NOT_APPLICABLE:
+                failed += 1 if self.strict else 0
+                not_applicable += 0 if self.strict else 1
+            else:
+                verified += 1
+        return verified, not_applicable, failed
+
+    @property
+    def verified(self) -> int:
+        return self._counts()[0]
+
+    @property
+    def not_applicable(self) -> int:
+        return self._counts()[1]
+
+    @property
+    def failed(self) -> int:
+        return self._counts()[2]
 
     @property
     def passed(self) -> bool:
         """A property rather than a stored field: a report whose flag disagreed with its own rows
         would be the one thing a verification tool must never produce."""
-        return all(result.passed for result in self.results)
+        return self.failed == 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "project": self.project,
             "manifest": self.manifest,
             "passed": self.passed,
+            "verified": self.verified,
+            "notApplicable": self.not_applicable,
+            "failed": self.failed,
             "results": [result.to_dict() for result in self.results],
         }
 
@@ -890,13 +925,13 @@ def run_scenario(module: ModuleType, scenario: Scenario) -> ScenarioResult:
     return ScenarioResult(scenario.id, scenario.expected, observed, passed, evidence)
 
 
-def run_verification(target: str, *, out: str | Path | None = None) -> VerificationReport:
+def run_verification(target: str, *, out: str | Path | None = None, strict: bool = False) -> VerificationReport:
     """Load the project at ``target`` and run every scenario against it."""
     module = load_project(target)
     results = tuple(run_scenario(module, scenario) for scenario in SCENARIOS)
     # ``target`` as the caller wrote it, not the module's ``__name__``: a project loaded from a
     # path runs under a synthetic name that would tell the reader nothing.
-    report = VerificationReport(target, str(module.MANIFEST), results)
+    report = VerificationReport(target, str(module.MANIFEST), results, strict=strict)
     if out is not None:
         Path(out).write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report

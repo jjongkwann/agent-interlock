@@ -109,6 +109,15 @@ Every step is in `gateway.ledger`: `INTERACTION_REQUESTED`, `DATA_FLOW_OBSERVED`
 `INTERACTION_COMPLETED`, `SECURITY_OUTCOME_SET`. `summarize_security_statistics` turns a ledger
 into the statistics the Studio shows.
 
+A refused tool call does not stop the model from telling the user the action succeeded -- the
+`is_error` result only tells the model what happened, not what it says next. `examples/*/run.py`
+guards against reporting the gap silently: after the reply comes back, `check_consistency` reduces
+the ledger with `reduce_interactions` and, if any interaction was `enforced_block` while the reply
+carries no word suggesting refusal ("blocked", "denied", "could not", and the like), prints a
+warning that the answer may not reflect the execution evidence. It is a heuristic on the reply's
+wording, not a proof, so it only warns -- but it turns a silent mismatch between the ledger and
+the user-facing text into something visible.
+
 ## 4. Verifying the project
 
 ```bash
@@ -119,8 +128,12 @@ interlock verify path/to/project.py --out report.json
 caller in place of the model: a poisoned description, a drifted definition, a cross-server
 reference, a credential in a result, an undeclared destination, an undeclared side effect, a goal
 hijack carried by a tool result, and memory poisoning through a read tool. The report lists each
-scenario with the expected and observed outcome; exit code 1 means at least one scenario did not
-hold. Run it in CI next to your own tests.
+scenario with the expected and observed outcome, plus `verified`, `notApplicable`, and `failed`
+counts at the top level: NOT-APPLICABLE means the scenario found no subject to test in this
+project (no read-only tool, no destination-marked property, no volume cap) and is not the same
+claim as a control that ran and held. Exit code 1 means `failed` is non-zero; pass `--strict` to
+also fail on any NOT-APPLICABLE scenario, for a project that claims every scenario was actually
+exercised. Run it in CI next to your own tests.
 
 ## 5. What stays yours
 

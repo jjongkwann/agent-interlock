@@ -349,8 +349,12 @@ def _tainted_external_write(policy: LinkPolicy, context: CheckContext) -> Findin
 
 
 def _approval(policy: LinkPolicy, context: CheckContext) -> Findings | None:
-    if context.intent.estimated_side_effect != SideEffect.EXTERNAL_WRITE:
-        return None  # one convention, see _destructive_write
+    # Unlike _destructive_write and _tainted_external_write, this control's subject is not one
+    # side effect but the externally-visible tier of them: EXTERNAL_WRITE and everything that ranks
+    # at or above it (DESTRUCTIVE_WRITE, PAYMENT, PERMISSION_CHANGE) are all writes an approver can
+    # hold, so a tool declaring PAYMENT is not exempt just because it is not literally EXTERNAL_WRITE.
+    if side_effect_rank(context.intent.estimated_side_effect) < side_effect_rank(SideEffect.EXTERNAL_WRITE):
+        return None
     if not context.approval_valid:
         return (("INTERLOCK-APPROVAL-REQUIRED", ControlDecision.HOLD),)
     return ()

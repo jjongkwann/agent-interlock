@@ -195,11 +195,13 @@ def _verify_main(args) -> int:  # noqa: ANN001
 
     The three codes are what a CI job reads: 1 is "your project has a gap", 2 is "I never got to
     look", and collapsing them would make a broken entrypoint indistinguishable from a clean run.
+    ``--strict`` folds NOT-APPLICABLE into the failed count, for a project that claims every
+    scenario was actually exercised rather than merely not contradicted.
     """
     from .verify import VerifyError, run_verification
 
     try:
-        report = run_verification(args.project, out=args.out)
+        report = run_verification(args.project, out=args.out, strict=args.strict)
     except VerifyError as error:
         print(
             json.dumps({"error": {"code": "INTERLOCK-VERIFY-PROJECT-INVALID", "message": str(error)}}, indent=2),
@@ -207,6 +209,11 @@ def _verify_main(args) -> int:  # noqa: ANN001
         )
         return 2
     print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    print(
+        f"{len(report.results)} scenarios: {report.verified} verified, "
+        f"{report.not_applicable} not applicable, {report.failed} failed",
+        file=sys.stderr,
+    )
     return 0 if report.passed else 1
 
 
@@ -263,6 +270,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     verify.add_argument("project", help="dotted module name, or a path to the project's .py module")
     verify.add_argument("--out", help="also write the report JSON to this file")
+    verify.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat a NOT-APPLICABLE scenario as a failure instead of an unproven pass",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "studio":

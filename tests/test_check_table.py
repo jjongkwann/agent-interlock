@@ -16,7 +16,7 @@ from test_policy_characterization import clean_case
 import agent_interlock
 from agent_interlock import policy as policy_module
 from agent_interlock.architecture import ArchitectureBoundary, EnforcementPoint
-from agent_interlock.models import ActorType, ControlDecision, CredentialClaims
+from agent_interlock.models import ActorType, ControlDecision, CredentialClaims, SideEffect
 from agent_interlock.policy import (
     A2A_PROFILE,
     CHECKS,
@@ -412,6 +412,37 @@ class CheckTableTests(unittest.TestCase):
         self.assertEqual(outcome.reasons, ["A2A-ACTOR-TYPE-DENIED"])
         self.assertEqual(outcome.decisions, [ControlDecision.BLOCK])
         self.assertIn("INTERLOCK-ACTOR-TYPE-DENIED", outcome.ran)
+
+    def test_approval_required_covers_every_externally_visible_write_not_just_external_write(self):
+        """PAYMENT and PERMISSION_CHANGE are externally visible and rank above EXTERNAL_WRITE, so a
+        tool declaring either must still be held for approval -- not exempted for failing a literal
+        equality against EXTERNAL_WRITE."""
+        policy, context = clean_case()
+        held_effects = (
+            SideEffect.EXTERNAL_WRITE,
+            SideEffect.DESTRUCTIVE_WRITE,
+            SideEffect.PAYMENT,
+            SideEffect.PERMISSION_CHANGE,
+        )
+        for effect in held_effects:
+            with self.subTest(effect=effect):
+                held = replace(
+                    context,
+                    approval_valid=False,
+                    intent=replace(context.intent, estimated_side_effect=effect),
+                )
+                outcome = run_checks(policy, held, GATEWAY_PROFILE)
+                self.assertIn("INTERLOCK-APPROVAL-REQUIRED", outcome.reasons)
+
+        for effect in (SideEffect.READ, SideEffect.INTERNAL_WRITE):
+            with self.subTest(effect=effect):
+                clean = replace(
+                    context,
+                    approval_valid=False,
+                    intent=replace(context.intent, estimated_side_effect=effect),
+                )
+                outcome = run_checks(policy, clean, GATEWAY_PROFILE)
+                self.assertNotIn("INTERLOCK-APPROVAL-REQUIRED", outcome.ran)
 
     def test_a_check_absent_from_the_profile_does_not_run(self):
         policy, context = clean_case()

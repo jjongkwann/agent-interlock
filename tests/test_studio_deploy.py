@@ -6,6 +6,7 @@ compile --shadow bundle from the example manifest.
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import shutil
@@ -226,6 +227,17 @@ class DeployedArchitectureTests(unittest.TestCase):
         graph = deployed_architecture(body, "SHADOW")
         self.assertTrue(graph.edges)
         self.assertTrue(all(edge.policy.mode == PolicyMode.SHADOW for edge in graph.edges))
+
+    def test_applies_enforce_to_boundaries_whose_body_mode_is_shadow(self):
+        bundle = compile_bundle()
+        architecture = copy.deepcopy(bundle.body["architecture"])
+        for boundary in architecture["spec"]["trustBoundaries"]:
+            boundary["mode"] = "SHADOW"
+        self.assertTrue(architecture["spec"]["trustBoundaries"])
+
+        graph = deployed_architecture({**bundle.body, "architecture": architecture}, "ENFORCE")
+        self.assertTrue(graph.boundaries)
+        self.assertTrue(all(boundary.mode == PolicyMode.ENFORCE for boundary in graph.boundaries))
 
     def test_missing_architecture_is_rejected(self):
         with self.assertRaises(StudioDeploymentError) as raised:
