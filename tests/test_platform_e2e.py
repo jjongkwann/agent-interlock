@@ -37,6 +37,7 @@ from agent_interlock import (
     Environment,
     GitBundleStore,
     InMemoryLedger,
+    InvocationIntent,
     MCPInvocationContext,
     MCPServerProfile,
     MCPToolGateway,
@@ -60,7 +61,6 @@ from agent_interlock import (
     summarize_security_statistics,
 )
 from agent_interlock.__main__ import main
-from agent_interlock.security import canonical_destination
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "examples" / "secure_multi_agent_architecture.json"
@@ -211,11 +211,13 @@ class FakeMCPWorkflowAdapter:
             "subject": "Simulated support reply",
             "body": self.fake_data["research"]["answer"],
         }
-        destination = canonical_destination(arguments["to"])
         approval = self.gateway.grant_approval(
             tenant_id=value.tenant_id,
             arguments=arguments,
-            canonical_destinations=(destination,),
+            source_actor_id=value.task.source_actor_id,
+            revision_id=self.gateway.registry.active_for("fake/support-mail:send_email").revision_id,
+            intent=InvocationIntent(purpose=value.task.purpose, data_classes=value.task.data_classes,
+                                    destinations=(arguments["to"],), estimated_side_effect=SideEffect.EXTERNAL_WRITE),
             approver="fake-human-reviewer",
         )
         response = self.transport.handle_client_message(
@@ -325,6 +327,7 @@ class FakePlatformE2ETests(unittest.TestCase):
                     bundle,
                     from_digest=None,
                     to_mode="ENFORCE",
+                    target_id=store.target_id, tenant_id=store.tenant_id,
                     approver_id="fake-security-reviewer",
                     key_id="fake-key-a",
                     key=key_a,
@@ -333,6 +336,7 @@ class FakePlatformE2ETests(unittest.TestCase):
                     bundle,
                     from_digest=None,
                     to_mode="ENFORCE",
+                    target_id=store.target_id, tenant_id=store.tenant_id,
                     approver_id="fake-platform-reviewer",
                     key_id="fake-key-b",
                     key=key_b,

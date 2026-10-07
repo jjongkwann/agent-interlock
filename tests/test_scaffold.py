@@ -1,6 +1,8 @@
 """The generated project must import, wire its manifest's tools, and pass its own security tests."""
 
+import contextlib
 import importlib
+import io
 import json
 import sys
 import tempfile
@@ -8,8 +10,9 @@ import unittest
 from pathlib import Path
 
 from agent_interlock.__main__ import main
-from agent_interlock.architecture import ArchitectureGraph
-from agent_interlock.scaffold import generate_security_tests, generate_skeleton, python_identifier
+from agent_interlock.architecture import ArchitectureGraph, DynamicTargetSelector
+from agent_interlock.models import ActorType
+from agent_interlock.scaffold import edge_coverage, generate_security_tests, generate_skeleton, python_identifier
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 MANIFEST = EXAMPLES / "secure_multi_agent_architecture.json"
@@ -108,13 +111,52 @@ class SkeletonGenerationTests(unittest.TestCase):
             edge["policy"].pop("deniedDataClasses", None)
         self._assert_passed(self._generate_and_run(value))
 
+    def test_coverage_distinguishes_first_source_dynamic_and_manual_edges(self):
+        from dataclasses import replace
+
+        graph = ArchitectureGraph.from_dict(json.loads(SUPPORT_AGENT.read_text(encoding="utf-8")))
+        first = replace(next(edge for edge in graph.edges if edge.relationship_id == "REL-05"), controls=())
+        graph = replace(graph, edges=(
+            first,
+            replace(first, id="other-source", source="user.customer"),
+            replace(first, id="dynamic", dynamic=True,
+                    target_selector=DynamicTargetSelector(frozenset({ActorType.TOOL}))),
+            replace(first, id="duplicate-target"),
+        ))
+        coverage = edge_coverage(graph)
+        self.assertEqual([item["bindingStatus"] for item in coverage], ["WIRED", "MANUAL", "MANUAL", "MANUAL"])
+        self.assertEqual(coverage[0]["profile"], "MCP_GATEWAY")
+        self.assertIn("Different invocation source", coverage[1]["reason"])
+        self.assertIn("Dynamic selector", coverage[2]["reason"])
+        self.assertIn("already has", coverage[3]["reason"])
+
+    def test_cli_input_errors_are_structured_without_tracebacks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            for contents in (None, "{", "[]", '{"apiVersion":"invalid"}'):
+                if contents is not None:
+                    path.write_text(contents)
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(main(["architecture", "lint", str(path)]), 2)
+                error = json.loads(stderr.getvalue())["error"]
+                self.assertEqual(error["code"], "INTERLOCK-CLI-INPUT-INVALID")
+                self.assertTrue(error["remediation"])
+
     def test_cli_skeleton_writes_both_files(self):
         base = python_identifier(json.loads(MANIFEST.read_text(encoding="utf-8"))["metadata"]["id"])
         with tempfile.TemporaryDirectory() as tmp:
-            code = main(["architecture", "skeleton", str(MANIFEST), "--out-dir", tmp])
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = main(["architecture", "skeleton", str(MANIFEST), "--out-dir", tmp])
             self.assertEqual(code, 0)
+            coverage = json.loads((Path(tmp) / f"{base}_edge_coverage.json").read_text())
+            self.assertEqual(json.loads(stdout.getvalue())["edgeCoverage"], coverage)
+            self.assertEqual(len(coverage), len(json.loads(MANIFEST.read_text())["spec"]["edges"]))
             names = sorted(item.name for item in Path(tmp).iterdir())
-            self.assertEqual(names, sorted([f"{base}_skeleton.py", f"test_{base}_security.py"]))
+            self.assertEqual(names, sorted([
+                f"{base}_skeleton.py", f"test_{base}_security.py", f"{base}_edge_coverage.json",
+            ]))
             written = (Path(tmp) / f"{base}_skeleton.py").read_text(encoding="utf-8")
             self.assertIn(f"MANIFEST = Path({str(MANIFEST)!r})", written)
 

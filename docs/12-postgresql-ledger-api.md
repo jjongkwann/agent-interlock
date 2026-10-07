@@ -138,6 +138,21 @@ Automated tests include the following.
 - the OTLP/HTTP JSON receiver's authentication · tenant/scope · missing-context handling
 - `SignedAuditSink`'s pre-verification of integrity, and rejection of detached seal · tamper · record swap
 
+## Packaged migrations and operating responsibilities
+
+The wheel includes the canonical `src/agent_interlock/migrations/postgresql/NNNN_*.sql` files. The repository's `migrations/postgresql` is a symlink to those files; previously applied SQL bytes and checksums are unchanged. A source checkout is not required:
+
+```python
+import os
+from agent_interlock import PostgreSQLMigrationRunner
+
+PostgreSQLMigrationRunner.from_dsn(None, os.environ["INTERLOCK_MIGRATION_DSN"]).apply()
+```
+
+The release operator runs migrations once with a migration-owner connection before starting application workers. Use a separate tenant-scoped credential for application traffic. Never edit an applied migration; add the next four-digit version.
+
+The database operator must schedule `PartitionMaintenance.ensure_partitions(today=..., months_ahead=1)` before each month starts. Retention is explicit: verify the longest tenant retention and a restorable backup before calling `drop_partitions_older_than(cutoff_month=...)`. These helpers do not schedule themselves. The database operator owns backups, retention schedules and restore drills; restore into an isolated database and verify ledger integrity before switching traffic.
+
 ## 6. Current Boundaries
 
 - The migration runner is provided as `postgres_ops.py` `PostgreSQLMigrationRunner`. It idempotently applies the 4-digit `NNNN_*.sql` files under `migrations/postgresql` in order, records them with a checksum in `public.interlock_schema_migrations`, and rejects if a file changes after being applied (checksum drift). Automated partition/retention is provided by `PartitionMaintenance` (ensures monthly partitions, and DETACHes + ingest-key prunes month partitions older than the cutoff before dropping them). Execution assumes an RLS-bypassing migration owner/superuser connection.

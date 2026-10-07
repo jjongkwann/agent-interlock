@@ -1,7 +1,15 @@
 "use client";
 
+import { useLanguage } from "./language";
+import { message, type Message } from "./i18n";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { summarizeSecurityStatistics } from "./analytics.mjs";
+import { compileDraftRequest } from "./deployment.mjs";
+import { signApproval } from "./signing.mjs";
+import { InputFields, Readiness } from "./builder";
+import {HostReadiness} from "./host-readiness";
+import {CandidateComparison} from "./comparison";
+import { reduceInteractions, summarizeSecurityStatistics } from "./analytics.mjs";
 import type { Counters, SecurityStatistics, SecurityStatisticsPartition } from "./analytics";
 
 const COUNTER_LABELS: Array<{ key: keyof Counters; label: string; tone?: "danger" | "warn" | "ok" }> = [
@@ -14,66 +22,67 @@ const COUNTER_LABELS: Array<{ key: keyof Counters; label: string; tone?: "danger
   { key: "partialOrBypassCount", label: "Partial / bypass", tone: "danger" },
 ];
 
-function PartitionView({ partition }: { partition: SecurityStatisticsPartition }) {
+function PartitionView({ partition, onFilter }: { partition: SecurityStatisticsPartition; onFilter: (field: string, value: string) => void }) {
+  const { t } = useLanguage();
   return (
     <section className="stats-partition">
-      <div className="panel-heading"><span>DATA SOURCE</span><strong>{partition.dataSource}</strong></div>
+      <div className="panel-heading"><span>{t("DATA SOURCE")}</span><strong>{partition.dataSource}</strong></div>
       <div className="stat-grid">
         {COUNTER_LABELS.map(({ key, label, tone }) => (
           <div className={`stat-tile ${tone && partition.counters[key] > 0 ? tone : ""}`} key={key}>
             <strong>{partition.counters[key]}</strong>
-            <span>{label}</span>
+            <span>{t(label)}</span>
           </div>
         ))}
       </div>
       <div className="stats-columns">
         <div>
-          <h4>Outcomes</h4>
+          <h4>{t("Outcomes")}</h4>
           <table className="stats-table"><tbody>
             {Object.entries(partition.outcomes).map(([outcome, count]) => (
-              <tr key={outcome}><td>{outcome}</td><td>{count}</td></tr>
+              <tr key={outcome}><td><button className="table-link" onClick={() => onFilter("outcome", outcome)}>{t(outcome)}</button></td><td>{count}</td></tr>
             ))}
           </tbody></table>
-          <h4>Reason codes <small>(one interaction can carry several)</small></h4>
+          <h4>{t("Reason codes")} <small>{t("(one interaction can carry several)")}</small></h4>
           <table className="stats-table"><tbody>
-            {partition.byReasonCode.length === 0 && <tr><td colSpan={2}>none</td></tr>}
+            {partition.byReasonCode.length === 0 && <tr><td colSpan={2}>{t("none")}</td></tr>}
             {partition.byReasonCode.map((item) => (
-              <tr key={item.reasonCode}><td><code>{item.reasonCode}</code></td><td>{item.interactionCount}</td></tr>
+              <tr key={item.reasonCode}><td><button className="table-link" onClick={() => onFilter("reasonCode", item.reasonCode)}>{item.reasonCode}</button></td><td>{item.interactionCount}</td></tr>
             ))}
           </tbody></table>
         </div>
         <div>
-          <h4>By relationship</h4>
+          <h4>{t("By relationship")}</h4>
           <table className="stats-table"><tbody>
             {partition.byRelationship.map((item) => (
-              <tr key={item.relationshipId}><td>{item.relationshipId}</td><td>{item.counters.interactionCount} calls</td><td>{item.counters.blockDecisionCount} blocked</td></tr>
+              <tr key={item.relationshipId}><td><button className="table-link" onClick={() => onFilter("relationshipId", item.relationshipId)}>{item.relationshipId}</button></td><td>{item.counters.interactionCount} {t("calls")}</td><td>{item.counters.blockDecisionCount} {t("blocked")}</td></tr>
             ))}
           </tbody></table>
-          <h4>By source actor</h4>
+          <h4>{t("By source actor")}</h4>
           <table className="stats-table"><tbody>
             {partition.byActor.map((item) => (
-              <tr key={item.sourceActorId}><td>{item.sourceActorId}</td><td>{item.counters.interactionCount} calls</td><td>{item.counters.blockDecisionCount} blocked</td></tr>
+              <tr key={item.sourceActorId}><td><button className="table-link" onClick={() => onFilter("sourceActorId", item.sourceActorId)}>{item.sourceActorId}</button></td><td>{item.counters.interactionCount} {t("calls")}</td><td>{item.counters.blockDecisionCount} {t("blocked")}</td></tr>
             ))}
           </tbody></table>
-          <h4>By policy</h4>
+          <h4>{t("By policy")}</h4>
           <table className="stats-table"><tbody>
-            {partition.byPolicy.length === 0 && <tr><td colSpan={3}>none</td></tr>}
+            {partition.byPolicy.length === 0 && <tr><td colSpan={3}>{t("none")}</td></tr>}
             {partition.byPolicy.map((item) => (
-              <tr key={item.policyId}><td>{item.policyId}</td><td>{item.counters.interactionCount} calls</td><td>{item.counters.blockDecisionCount} blocked</td></tr>
+              <tr key={item.policyId}><td><button className="table-link" onClick={() => onFilter("policyId", item.policyId)}>{item.policyId}</button></td><td>{item.counters.interactionCount} {t("calls")}</td><td>{item.counters.blockDecisionCount} {t("blocked")}</td></tr>
             ))}
           </tbody></table>
-          <h4>By mode</h4>
+          <h4>{t("By mode")}</h4>
           <table className="stats-table"><tbody>
-            {partition.byMode.length === 0 && <tr><td colSpan={3}>none</td></tr>}
+            {partition.byMode.length === 0 && <tr><td colSpan={3}>{t("none")}</td></tr>}
             {partition.byMode.map((item) => (
-              <tr key={item.mode}><td>{item.mode}</td><td>{item.counters.interactionCount} calls</td><td>{item.counters.blockDecisionCount} blocked</td></tr>
+              <tr key={item.mode}><td><button className="table-link" onClick={() => onFilter("mode", item.mode)}>{t(item.mode)}</button></td><td>{item.counters.interactionCount} {t("calls")}</td><td>{item.counters.blockDecisionCount} {t("blocked")}</td></tr>
             ))}
           </tbody></table>
         </div>
       </div>
-      <h4>Hourly buckets (UTC)</h4>
+      <h4>{t("Hourly buckets (UTC)")}</h4>
       <table className="stats-table stats-timeseries"><thead>
-        <tr><th>Bucket</th><th>Interactions</th><th>Block decisions</th><th>Enforced</th><th>Would-block</th><th>Partial/bypass</th></tr>
+        <tr><th>{t("Bucket")}</th><th>{t("Interactions")}</th><th>{t("Block decisions")}</th><th>{t("Enforced")}</th><th>{t("Would-block")}</th><th>{t("Partial/bypass")}</th></tr>
       </thead><tbody>
         {partition.timeSeries.map((bucket) => (
           <tr key={bucket.bucketStart}>
@@ -90,99 +99,220 @@ function PartitionView({ partition }: { partition: SecurityStatisticsPartition }
   );
 }
 
-export function StatsPanel({
-  rawLedgerEvents,
-  importedFormat,
-  notify,
-  onImportTelemetry,
-}: {
-  rawLedgerEvents: Array<Record<string, unknown>> | null;
-  importedFormat: string | null;
-  notify: (message: string) => void;
-  onImportTelemetry: () => void;
+type InvestigationRecord = {
+  interactionId: string; traceId?: string; tenantId?: string; dataSource: string;
+  sourceActorId: string; targetActorId: string | null; relationshipId: string; policyId: string | null;
+  mode: string | null; reasonCodes: string[]; controlEvaluated: boolean; securityOutcome: string;
+  firstOccurredAt: string; coverage?: { armed: string[]; ran: string[]; flagged: string[] };
+};
+const SEARCH_FIELDS = ["sourceActorId", "targetActorId", "traceId", "reasonCode", "outcome", "relationshipId", "policyId", "mode", "dataSource"] as const;
+type InvestigationFilters = Record<typeof SEARCH_FIELDS[number], string>;
+const FILTER_LABELS: Record<typeof SEARCH_FIELDS[number], string> = { sourceActorId: "Source actor", targetActorId: "Target actor", traceId: "Trace ID", reasonCode: "Reason code", outcome: "Outcome", relationshipId: "Relationship", policyId: "Policy", mode: "Mode", dataSource: "Evidence source" };
+function readInvestigationRecords(value: unknown): InvestigationRecord[] {
+  if (!Array.isArray(value) || value.some((record) => !record || typeof record !== "object" ||
+    ["interactionId", "dataSource", "sourceActorId", "relationshipId", "securityOutcome", "firstOccurredAt"].some((key) => typeof record[key] !== "string") ||
+    !Array.isArray(record.reasonCodes) || record.reasonCodes.some((reason: unknown) => typeof reason !== "string") ||
+    record.coverage && ["armed", "ran", "flagged"].some((key) => !Array.isArray(record.coverage[key])))) throw new Error("Invalid interaction search response");
+  return value as InvestigationRecord[];
+}
+const emptyFilters: InvestigationFilters = { sourceActorId: "", targetActorId: "", traceId: "", reasonCode: "", outcome: "", relationshipId: "", policyId: "", mode: "", dataSource: "" };
+type LocalReview = { status: "unreviewed" | "investigating" | "resolved"; notes: string };
+
+export type LedgerConnection = { apiUrl: string; token: string; tenantId: string; rangeFrom: string; rangeTo: string };
+
+export function StatsPanel({ rawLedgerEvents, importedFormat, notify, onImportTelemetry, initialTraceId, onContext, ledgerConnection, onLedgerConnection }: {
+  rawLedgerEvents: Array<Record<string, unknown>> | null; importedFormat: string | null;
+  notify: (message: Message) => void; onImportTelemetry: () => void; initialTraceId: string;
+  onContext: (patch: LifecycleContext) => void;
+  ledgerConnection: LedgerConnection; onLedgerConnection: (patch: Partial<LedgerConnection>) => void;
 }) {
-  const [source, setSource] = useState<"offline" | "live">("offline");
-  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8791");
-  const [token, setToken] = useState("");
-  const [tenantId, setTenantId] = useState("tenant-a");
-  const [rangeFrom, setRangeFrom] = useState("2026-01-01T00:00:00Z");
-  const [rangeTo, setRangeTo] = useState("2027-01-01T00:00:00Z");
+  const { t } = useLanguage();
+  const [source, setSource] = useState<"offline" | "live">(initialTraceId ? "live" : "offline");
+  const { apiUrl, token, tenantId, rangeFrom, rangeTo } = ledgerConnection;
   const [liveStats, setLiveStats] = useState<SecurityStatistics | null>(null);
   const [fetching, setFetching] = useState(false);
-
-  const offlineResult = useMemo((): { stats: SecurityStatistics | null; error: string | null } => {
-    if (!rawLedgerEvents) return { stats: null, error: null };
+  const [error, setError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<InvestigationFilters>({ ...emptyFilters, traceId: initialTraceId });
+  const [interactions, setInteractions] = useState<InvestigationRecord[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [searchScope, setSearchScope] = useState<Message>("");
+  const [selectedInteraction, setSelectedInteraction] = useState<InvestigationRecord | null>(null);
+  const [traceOnlyId, setTraceOnlyId] = useState("");
+  const [traceEvents, setTraceEvents] = useState<Array<Record<string, unknown>>>([]);
+  const [traceCursor, setTraceCursor] = useState<string | null>(null);
+  const [traceLoaded, setTraceLoaded] = useState(false);
+  const [traceBusy, setTraceBusy] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [review, setReview] = useState<LocalReview>({ status: "unreviewed", notes: "" });
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [reviewKey, setReviewKey] = useState("");
+  const searchRequest = useRef(0);
+  const traceRequest = useRef(0);
+  const resultQuery = useRef<URLSearchParams | null>(null);
+  const resultConnection = useRef<{ url: string; token: string; tenant: string } | null>(null);
+  const investigator = useRef<HTMLElement>(null);
+  useEffect(() => () => { searchRequest.current += 1; traceRequest.current += 1; }, []);
+  const offlineResult = useMemo(() => {
+    if (!rawLedgerEvents) return { stats: null, records: [] as InvestigationRecord[], error: null };
     try {
-      return { stats: summarizeSecurityStatistics(rawLedgerEvents), error: null };
-    } catch (error) {
-      return { stats: null, error: error instanceof Error ? error.message : "invalid Ledger events" };
-    }
+      const records = reduceInteractions(rawLedgerEvents).map((record): InvestigationRecord => {
+        const traceId = rawLedgerEvents.find((event) => event.interaction_id === record.interactionId)?.trace_id;
+        return { ...record, traceId: typeof traceId === "string" ? traceId : undefined, coverage: { armed: [...record.coverage.armed], ran: [...record.coverage.ran], flagged: [...record.coverage.flagged] } };
+      });
+      return { stats: summarizeSecurityStatistics(rawLedgerEvents) as SecurityStatistics, records, error: null };
+    } catch (cause) { return { stats: null, records: [], error: cause instanceof Error ? cause.message : "Invalid Ledger events" }; }
   }, [rawLedgerEvents]);
 
-  async function fetchLive() {
-    setFetching(true);
-    try {
-      const query = new URLSearchParams({ from: rangeFrom, to: rangeTo });
-      const response = await fetch(`${apiUrl.replace(/\/$/, "")}/v1/statistics?${query}`, {
-        headers: { Authorization: `Bearer ${token}`, "X-Interlock-Tenant-Id": tenantId },
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body?.error?.code ?? `HTTP ${response.status}`);
-      setLiveStats(body.statistics);
-      notify(`Live statistics loaded · ${body.statistics.interactionCount} interactions in range`);
-    } catch (error) {
-      setLiveStats(null);
-      notify(`Live statistics failed · ${error instanceof Error ? error.message : "request error"}`);
-    } finally {
-      setFetching(false);
-    }
+  async function ledgerCall(path: string, connection = { url: apiUrl, token, tenant: tenantId }): Promise<Record<string, unknown>> {
+    const response = await fetch(`${connection.url.replace(/\/$/, "")}${path}`, { headers: { Authorization: `Bearer ${connection.token}`, "X-Interlock-Tenant-Id": connection.tenant } });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body?.error?.code ?? `HTTP ${response.status}`);
+    return body;
   }
-
+  function validateWindow() {
+    if (!Number.isFinite(Date.parse(rangeFrom)) || !Number.isFinite(Date.parse(rangeTo)) || Date.parse(rangeFrom) >= Date.parse(rangeTo)) throw new Error("Enter a valid ISO 8601 observation window with From before To");
+  }
+  function resetInvestigation() {
+    searchRequest.current += 1; traceRequest.current += 1;
+    setInteractions(null); setNextCursor(null); setSelectedInteraction(null); setTraceOnlyId(""); setSearchScope(""); resultQuery.current = null; resultConnection.current = null;
+    setTraceEvents([]); setTraceCursor(null); setTraceLoaded(false); setTraceBusy(false); setFetching(false); setError(null); setLiveStats(null);
+  }
+  async function fetchLive() {
+    const request = ++searchRequest.current;
+    setFetching(true); setError(null);
+    try {
+      validateWindow();
+      const body = await ledgerCall(`/v1/statistics?${new URLSearchParams({ from: rangeFrom, to: rangeTo })}`);
+      if (request !== searchRequest.current) return;
+      setLiveStats(body.statistics as SecurityStatistics);
+      onContext({ observation: message("Ledger API · {0} → {1} · aggregate", String(rangeFrom), String(rangeTo)) });
+      notify("Live statistics loaded for the selected observation window");
+    } catch (cause) { if (request === searchRequest.current) { setLiveStats(null); setError(cause instanceof Error ? cause.message : "Statistics request failed"); } }
+    finally { if (request === searchRequest.current) setFetching(false); }
+  }
+  async function searchInteractions(cursor?: string, appliedFilters = filters) {
+    const request = ++searchRequest.current;
+    setFetching(true); setError(null);
+    if (!cursor) { setInteractions(null); setNextCursor(null); setSelectedInteraction(null); setTraceOnlyId(""); traceRequest.current += 1; setTraceBusy(false); }
+    try {
+      if (source === "offline") {
+        const rows = offlineResult.records.filter((record) => SEARCH_FIELDS.every((key) => {
+          const value = appliedFilters[key];
+          return !value || (key === "reasonCode" ? record.reasonCodes.includes(value) : key === "outcome" ? record.securityOutcome === value : record[key] === value);
+        }));
+        setInteractions(rows); setSearchScope(message("Imported {0} · {1} events · {2} matched interactions · {3}", String(importedFormat ?? "Ledger"), String(rawLedgerEvents?.length ?? 0), String(rows.length), String(Object.entries(appliedFilters).filter(([, value]) => value).map(([key, value]) => `${key}=${value}`).join(", ") || "all filters clear")));
+        onContext({ observation: message("Imported {0} · {1} events", String(importedFormat), String(rawLedgerEvents?.length ?? 0)) });
+        return;
+      }
+      let query: URLSearchParams;
+      if (cursor && resultQuery.current) query = new URLSearchParams(resultQuery.current);
+      else {
+        validateWindow();
+        query = new URLSearchParams({ start: rangeFrom, end: rangeTo, limit: "100" });
+        SEARCH_FIELDS.forEach((key) => { if (appliedFilters[key]) query.set(key, appliedFilters[key]); });
+        resultQuery.current = query;
+        resultConnection.current = { url: apiUrl, token, tenant: tenantId };
+      }
+      if (cursor) query.set("cursor", cursor);
+      const body = await ledgerCall(`/v1/interactions?${query}`, resultConnection.current!);
+      if (request !== searchRequest.current) return;
+      const rows = readInvestigationRecords(body.interactions);
+      setInteractions((previous) => cursor ? [...(previous ?? []), ...rows] : rows);
+      setNextCursor(typeof body.nextCursor === "string" ? body.nextCursor : null);
+      const observation = body.observation as { eventCount?: number } | undefined;
+      const scope = message("Ledger API · {0} → {1} · {2} observed events · {3}", String(query.get("start")), String(query.get("end")), String(observation?.eventCount ?? "—"), String(SEARCH_FIELDS.filter((key) => query.has(key)).map((key) => `${key}=${query.get(key)}`).join(", ") || "all filters clear"));
+      setSearchScope(scope); onContext({ observation: scope });
+    } catch (cause) { if (request === searchRequest.current) setError(cause instanceof Error ? cause.message : "Interaction search failed"); }
+    finally { if (request === searchRequest.current) setFetching(false); }
+  }
+  async function loadTrace(record: Pick<InvestigationRecord, "traceId">, cursor?: string) {
+    const request = ++traceRequest.current;
+    setTraceBusy(true); setTraceError(null);
+    if (!cursor) { setTraceEvents([]); setTraceCursor(null); setTraceLoaded(false); }
+    try {
+      if (!record.traceId) throw new Error("This interaction has no trace ID in the available evidence");
+      if (source === "offline") {
+        setTraceEvents((rawLedgerEvents ?? []).filter((event) => event.trace_id === record.traceId)); setTraceLoaded(true); return;
+      }
+      const query = new URLSearchParams({ limit: "100" });
+      if (cursor) query.set("cursor", cursor);
+      const body = await ledgerCall(`/v1/traces/${encodeURIComponent(record.traceId)}?${query}`, resultConnection.current ?? undefined);
+      if (request !== traceRequest.current) return;
+      if (!Array.isArray(body.events)) throw new Error("Invalid trace response");
+      setTraceEvents((previous) => cursor ? [...previous, ...body.events as Array<Record<string, unknown>>] : body.events as Array<Record<string, unknown>>);
+      setTraceCursor(typeof body.next_cursor === "string" ? body.next_cursor : null); setTraceLoaded(true);
+    } catch (cause) { if (request === traceRequest.current) setTraceError(cause instanceof Error ? cause.message : "Trace request failed"); }
+    finally { if (request === traceRequest.current) setTraceBusy(false); }
+  }
+  function selectInteraction(record: InvestigationRecord) {
+    setTraceOnlyId(""); setSelectedInteraction(record); onContext({ trace: record.traceId ?? "Unavailable" });
+    const key = `interlock.studio.review.v1:${JSON.stringify([source === "live" ? resultConnection.current?.url : "import", record.tenantId ?? tenantId, record.dataSource, record.interactionId])}`;
+    setReviewKey(key); setReview({ status: "unreviewed", notes: "" }); setReviewMessage("");
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored) {
+        const value = JSON.parse(stored);
+        if (!["unreviewed", "investigating", "resolved"].includes(value.status) || typeof value.notes !== "string") throw new Error("Invalid stored review");
+        setReview(value);
+      }
+    } catch { setReviewMessage("Local review could not be read. Existing stored notes have not been changed."); }
+    void loadTrace(record);
+  }
+  function openTrace() {
+    if (!filters.traceId.trim()) return;
+    setSelectedInteraction(null); setTraceOnlyId(filters.traceId.trim());
+    resultConnection.current = { url: apiUrl, token, tenant: tenantId };
+    onContext({ trace: filters.traceId.trim() });
+    void loadTrace({ traceId: filters.traceId.trim() });
+  }
+  function saveReview() {
+    try { window.localStorage.setItem(reviewKey, JSON.stringify(review)); setReviewMessage("Saved in this browser only. Ledger evidence is unchanged."); }
+    catch { setReviewMessage("Save failed: browser storage is unavailable or full. Copy your notes before leaving."); }
+  }
+  function filterFromSummary(field: string, value: string, dataSource: string) {
+    const next = { ...emptyFilters, dataSource, [field]: value };
+    setFilters(next); investigator.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    void searchInteractions(undefined, next);
+  }
+  const importedWindow = useMemo(() => {
+    const times = (rawLedgerEvents ?? []).reduce<[number, number]>((range, event) => {
+      const time = typeof event.occurred_at === "string" ? Date.parse(event.occurred_at) : NaN;
+      return Number.isFinite(time) ? [Math.min(range[0], time), Math.max(range[1], time)] : range;
+    }, [Infinity, -Infinity]);
+    return Number.isFinite(times[0]) ? `${new Date(times[0]).toISOString()} → ${new Date(times[1]).toISOString()}` : "No dated events";
+  }, [rawLedgerEvents]);
   const stats = source === "live" ? liveStats : offlineResult.stats;
-  return (
-    <div className="stats-panel">
-      <div className="stats-source-row">
-        <div className="graph-tabs">
-          <button aria-pressed={source === "offline"} className={source === "offline" ? "active" : ""} onClick={() => setSource("offline")}>Imported telemetry</button>
-          <button aria-pressed={source === "live"} className={source === "live" ? "active" : ""} onClick={() => setSource("live")}>Live API</button>
-        </div>
-        {source === "live" && (
-          <div className="live-controls live-control-grid">
-            <label><span>Ledger API URL</span><input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="http://127.0.0.1:8791" /></label>
-            <label><span>Bearer token</span><input value={token} onChange={(event) => setToken(event.target.value)} placeholder="statistics:read" type="password" /></label>
-            <label><span>Tenant</span><input value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="tenant-a" /></label>
-            <label><span>From · ISO 8601</span><input value={rangeFrom} onChange={(event) => setRangeFrom(event.target.value)} /></label>
-            <label><span>To · ISO 8601</span><input value={rangeTo} onChange={(event) => setRangeTo(event.target.value)} /></label>
-            <button className="primary-button" disabled={fetching} onClick={fetchLive}>{fetching ? "Fetching…" : "Fetch"}</button>
-          </div>
-        )}
-      </div>
-      {source === "offline" && offlineResult.error && (
-        <div className="canvas-empty static error-state"><span>!</span><strong>Telemetry cannot be aggregated</strong>
-          <p>{offlineResult.error}. Import Ledger events with valid UTC timestamps, or choose Live API.</p>
-          <button onClick={onImportTelemetry}>Replace telemetry</button>
-        </div>
-      )}
-      {!stats && source === "offline" && !offlineResult.error && (
-        <div className="canvas-empty static"><span>Σ</span><strong>No ledger events to aggregate</strong>
-          <p>{importedFormat === "OTLP_JSON"
-            ? "Statistics need raw Interlock Ledger events; the current import is OTLP spans."
-            : "Import Interlock Ledger JSON (the same file the drift view uses), or switch to Live API."}</p>
-          <button onClick={onImportTelemetry}>Import Ledger telemetry</button>
-        </div>
-      )}
-      {!stats && source === "live" && (
-        <div className="canvas-empty static"><span>Σ</span><strong>Not connected</strong><p>Point at a Ledger API with the statistics:read scope and fetch a range.</p></div>
-      )}
-      {stats && stats.partitions.length === 0 && (
-        <div className="canvas-empty static"><span>Σ</span><strong>No interactions in range</strong><p>The event set contains no interaction lifecycles to aggregate.</p></div>
-      )}
-      {stats && source === "offline" && rawLedgerEvents?.some((event) => "integrity_hash" in event) && (
-        <p className="panel-note">Offline browser statistics do not verify Ledger integrity hashes. Confirm evidence with the authenticated API or Python verifier.</p>
-      )}
-      {stats && stats.partitions.map((partition) => <PartitionView key={partition.dataSource} partition={partition} />)}
-    </div>
-  );
+  return <div className="stats-panel">
+    <div className="stats-source-row"><div className="graph-tabs"><button aria-pressed={source === "offline"} className={source === "offline" ? "active" : ""} onClick={() => { resetInvestigation(); setSource("offline"); }}>{t("Imported telemetry")}</button><button aria-pressed={source === "live"} className={source === "live" ? "active" : ""} onClick={() => { resetInvestigation(); setSource("live"); }}>{t("Live API")}</button></div></div>
+    {source === "live" && <div className="live-controls live-control-grid">
+      <label>{t("Ledger API URL")}<input value={apiUrl} onChange={(event) => { resetInvestigation(); onLedgerConnection({ apiUrl: event.target.value }); }} /></label>
+      <label>{t("Bearer token")}<input type="password" value={token} onChange={(event) => { resetInvestigation(); onLedgerConnection({ token: event.target.value }); }} placeholder="statistics:read and events:read" /></label>
+      <label>{t("Tenant")}<input value={tenantId} onChange={(event) => { resetInvestigation(); onLedgerConnection({ tenantId: event.target.value }); }} /></label>
+      <label>{t("From · ISO 8601")}<input value={rangeFrom} onChange={(event) => { resetInvestigation(); onLedgerConnection({ rangeFrom: event.target.value }); }} /></label>
+      <label>{t("To · ISO 8601")}<input value={rangeTo} onChange={(event) => { resetInvestigation(); onLedgerConnection({ rangeTo: event.target.value }); }} /></label>
+      <button className="primary-button" disabled={fetching || !token || !tenantId} onClick={fetchLive}>{fetching ? t("Loading…") : t("Fetch statistics")}</button>
+    </div>}
+    <p className="panel-note">{source === "live" ? t("statistics:read loads aggregates; events:read searches interactions and trace evidence. The time window selects interactions by their first event; completed outcomes may arrive later.") : t(message("Source: {0} · {1} events · {2}. Imported evidence is limited to this file; integrity hashes are not verified in the browser.", importedFormat ?? t("No import"), String(rawLedgerEvents?.length ?? 0), t(importedWindow)))} {t("Observed control coverage describes evaluated checks, not proof that all intended controls ran.")}</p>
+    {(error || offlineResult.error && source === "offline") && <p className="connection-status error" role="alert">{t(error ?? offlineResult.error)}</p>}
+    {!stats && <div className="runtime-empty-note">{source === "live" ? t("No aggregate loaded. Connect and fetch statistics, or search interactions below.") : t("Import raw Ledger events to view statistics and investigate interactions.")}{source === "offline" && <button className="secondary-button" onClick={onImportTelemetry}>{t("Import Ledger telemetry")}</button>}</div>}
+    <section className="investigation-panel" ref={investigator} aria-label={t("Interaction investigation")}>
+      <h3>{t("Investigate interactions")}</h3><p className="panel-note">{t("Filters match exact IDs or values. Choose an interaction to inspect its trace and keep local investigation notes.")}</p>
+      <div className="investigation-filters">{SEARCH_FIELDS.slice(0, 3).map((key) => <label key={key}>{t(FILTER_LABELS[key])}<input value={filters[key]} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div><details className="advanced-filters"><summary>{t("More filters")}</summary><div className="investigation-filters">{SEARCH_FIELDS.slice(3).map((key) => <label key={key}>{t(FILTER_LABELS[key])}<input value={filters[key]} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div></details>
+      <div className="run-actions"><button className="primary-button" disabled={fetching || source === "live" && (!token || !tenantId)} onClick={() => void searchInteractions()}>{t("Search interactions")}</button><button className="secondary-button" disabled={!filters.traceId.trim() || traceBusy || source === "live" && (!token || !tenantId)} onClick={openTrace}>{t("Open trace evidence")}</button><button className="secondary-button" onClick={() => setFilters(emptyFilters)}>{t("Clear filters")}</button></div>
+      {searchScope && <p className="panel-note">{t(searchScope)}. {interactions?.length ?? 0} {t("loaded")}{nextCursor ? t(" · more results available") : t(" · result set complete")}.</p>}
+      {interactions?.length === 0 && <p>{t("No matching interactions in the available evidence.")}</p>}
+      {interactions && interactions.length > 0 && <div className="interaction-list">{interactions.map((record) => <button key={record.interactionId} aria-pressed={selectedInteraction?.interactionId === record.interactionId} className="interaction-row" onClick={() => selectInteraction(record)}><strong>{record.sourceActorId} → {record.targetActorId ?? t("Unknown target")}</strong><span>{record.interactionId} · {t(record.securityOutcome)} · {record.mode ?? t("Unknown mode")}</span><small>{record.firstOccurredAt} · {record.dataSource} · {record.controlEvaluated ? t("Control evaluated") : t("No control evaluation evidence")}</small></button>)}</div>}
+      {nextCursor && <button className="secondary-button" disabled={fetching} onClick={() => void searchInteractions(nextCursor)}>{t("Load more interactions")}</button>}
+      {(selectedInteraction || traceOnlyId) && <article className="interaction-detail"><h4>{t("Trace:")} {selectedInteraction?.traceId ?? traceOnlyId}</h4>{selectedInteraction && <><p>{selectedInteraction.relationshipId} · {selectedInteraction.policyId ?? t("No policy ID")} · {selectedInteraction.reasonCodes.join(", ") || t("No reason codes")}</p><p className="panel-note">{t("Observed checks:")} {selectedInteraction.coverage?.ran.length ?? 0} {t("ran,")} {selectedInteraction.coverage?.flagged.length ?? 0} {t("flagged,")} {selectedInteraction.coverage?.armed.length ?? 0} {t("armed. Missing evidence is not a clean result.")}</p></>}
+        {traceError && <p role="alert" className="connection-status error">{t(traceError)}</p>}<p>{traceBusy ? t("Loading trace evidence…") : traceLoaded ? t(message("{0} events loaded{1}", String(traceEvents.length), t(traceCursor ? " · incomplete, load the next page" : source === "offline" ? " · imported file only" : " · all available trace pages loaded"))) : t("Trace evidence not loaded")}</p>
+        <div className="trace-events">{traceEvents.map((event, index) => <details key={String(event.id ?? event.event_id ?? index)}><summary>{String(event.occurred_at ?? t("Unknown time"))} · {String(event.event_type ?? t("Unknown event"))}</summary><pre>{JSON.stringify(event, null, 2)}</pre></details>)}</div>
+        <button className="secondary-button" disabled={traceBusy || !(selectedInteraction?.traceId ?? traceOnlyId)} onClick={() => void loadTrace({ traceId: selectedInteraction?.traceId ?? traceOnlyId }, traceCursor ?? undefined)}>{traceCursor ? t("Load more trace events") : t("Refresh trace")}</button>
+        {selectedInteraction && <div className="local-review"><h4>{t("Local investigation · this browser only")}</h4><label>{t("Status")}<select value={review.status} onChange={(event) => setReview((current) => ({ ...current, status: event.target.value as LocalReview["status"] }))}><option value="unreviewed">{t("Unreviewed")}</option><option value="investigating">{t("Investigating")}</option><option value="resolved">{t("Resolved locally")}</option></select></label><label>{t("Reviewer notes")}<textarea value={review.notes} onChange={(event) => setReview((current) => ({ ...current, notes: event.target.value }))} /></label><button className="secondary-button" onClick={saveReview}>{t("Save local review")}</button><p className="panel-note" role="status">{t(reviewMessage) || t("These notes are not shared, sent to the server, or an operational approval.")}</p></div>}
+      </article>}
+    </section>
+    {stats?.partitions.length === 0 && <p>{t("No interaction lifecycles in the aggregate.")}</p>}
+    {stats?.partitions.map((partition) => <PartitionView key={partition.dataSource} partition={partition} onFilter={(field, value) => filterFromSummary(field, value, partition.dataSource)} />)}
+  </div>;
 }
 
 type BundleFile = {
@@ -194,6 +324,7 @@ type BundleFile = {
 };
 
 type RunTask = {
+  pendingCall?: {requestId: string; [key: string]: unknown} | null;
   taskId: string;
   state: string;
   attempts: number;
@@ -209,6 +340,7 @@ type RunTask = {
 type RunOutcomes = { executed: number; goalMet: number; securityMet: number; total: number };
 
 type WorkflowRun = {
+  input?: Record<string, unknown>;
   id: string;
   architectureId: string;
   architectureVersion: string;
@@ -236,6 +368,7 @@ function outcomeState(value: boolean | null | undefined): "yes" | "no" | "unknow
 }
 
 function OutcomeBadge({ label, value }: { label: string; value: boolean | null | undefined }) {
+  const { t } = useLanguage();
   const state = outcomeState(value);
   return (
     <span
@@ -252,7 +385,7 @@ function OutcomeBadge({ label, value }: { label: string; value: boolean | null |
         fontWeight: 600,
       }}
     >
-      {label} · {state}
+     {t(label)} · {t(state)}
     </span>
   );
 }
@@ -266,7 +399,10 @@ type RunEvent = {
 
 const TERMINAL_RUN_STATES = new Set(["COMPLETED", "FAILED", "CANCELED"]);
 
+export type LifecycleContext = { bundle?: Message; activeDeployment?: Message; run?: Message; trace?: Message; observation?: Message };
+
 type ControlPlaneConnectionProps = {
+  onContext: (patch: LifecycleContext) => void;
   apiUrl: string;
   token: string;
   onApiUrlChange: (value: string) => void;
@@ -287,16 +423,28 @@ export function RunsPanel({
   onApiUrlChange,
   onTokenChange,
   onOpenRuntimeTelemetry,
+  onOpenStatisticsTrace,
+  onContext,
 }: {
-  notify: (message: string) => void;
+  notify: (message: Message) => void;
+  onOpenStatisticsTrace: (traceId: string, createdAt: string) => void;
   onOpenRuntimeTelemetry: (events: Array<Record<string, unknown>>, source: string) => void;
 } & ControlPlaneConnectionProps) {
+  const { t } = useLanguage();
   const [inputText, setInputText] = useState("{}");
+  const [inputSchema, setInputSchema] = useState<Record<string, unknown>>();
+  const [runReadiness, setRunReadiness] = useState<{ready?: boolean | null; hostConfigured?: boolean} | null>(null);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [busy, setBusy] = useState(false);
+  const connectionKey = `${apiUrl}\n${token}`;
+  const [connection, setConnection] = useState<{ key: string; state: "loading" | "connected" | "error"; active: Record<string, unknown> | null; error: Message | null } | null>(null);
+  const [operationError, setOperationError] = useState<Message | null>(null);
+  const connectionState = connection?.key === connectionKey ? connection.state : "disconnected";
+  const activeDeployment = connectionState === "connected" ? connection?.active : null;
+  const canStart = connectionState === "connected" && activeDeployment?.mode === "ENFORCE" && (runReadiness?.ready === true || runReadiness?.hostConfigured === false);
   const shouldAutoLoad = useRef(Boolean(token));
   const autoLoadStarted = useRef(false);
 
@@ -326,18 +474,27 @@ export function RunsPanel({
       const run = readRun(runBody.run);
       if (!run) throw new Error("RUN-RESPONSE-INVALID");
       setSelectedRun(run);
+      onContext({ run: `${run.id} · ${run.architectureId} v${run.architectureVersion}`, trace: run.traceId });
       setRuns((items) => items.map((item) => item.id === run.id ? run : item));
       setEvents(Array.isArray(eventBody.events) ? eventBody.events as RunEvent[] : []);
-      if (announce) notify(`Run refreshed · ${run.state}`);
+      if (announce) notify(message("Run refreshed · {0}", String(run.state)));
     } catch (error) {
-      if (announce) notify(`Run refresh failed · ${error instanceof Error ? error.message : "request error"}`);
+      setOperationError(message("Run refresh failed · {0}", String(error instanceof Error ? error.message : "request error")));
+      if (announce) notify(message("Run refresh failed · {0}", String(error instanceof Error ? error.message : "request error")));
     }
-  }, [call, notify]);
+  }, [call, notify, onContext]);
 
   const refreshRuns = useCallback(async (announce = true) => {
     setBusy(true);
+    setOperationError(null);
+    setConnection({ key: connectionKey, state: "loading", active: null, error: null });
     try {
-      const body = await call("/v1/runs");
+      const [body, deployment] = await Promise.all([call("/v1/runs"), call("/v1/runtime/status")]);
+      const readiness = deployment.runtimeReadiness as Record<string, unknown> | undefined;
+      setInputSchema(readiness?.runInputSchema as Record<string, unknown> | undefined);
+      setRunReadiness(readiness ?? null);
+      setConnection({ key: connectionKey, state: "connected", active: deployment.active as Record<string, unknown> | null, error: null });
+      onContext({ activeDeployment: deployment.active ? String((deployment.active as Record<string, unknown>).bundleDigest) : "None" });
       const nextRuns = (Array.isArray(body.runs) ? body.runs : []).map(readRun).filter((item): item is WorkflowRun => Boolean(item));
       setRuns(nextRuns);
       const nextId = selectedRunId && nextRuns.some((run) => run.id === selectedRunId) ? selectedRunId : nextRuns[0]?.id ?? null;
@@ -345,13 +502,15 @@ export function RunsPanel({
       setSelectedRun(nextId ? nextRuns.find((run) => run.id === nextId) ?? null : null);
       if (nextId) await loadRun(nextId);
       else setEvents([]);
-      if (announce) notify(`Runs refreshed · ${nextRuns.length} visible`);
+      if (announce) notify(message("Runs refreshed · {0} visible", String(nextRuns.length)));
     } catch (error) {
-      if (announce) notify(`Runs failed · ${error instanceof Error ? error.message : "request error"}`);
+      const failure = message("Runs failed · {0}", String(error instanceof Error ? error.message : "request error"));
+      setConnection({ key: connectionKey, state: "error", active: null, error: failure });
+      if (announce) notify(failure);
     } finally {
       setBusy(false);
     }
-  }, [call, loadRun, notify, selectedRunId]);
+  }, [call, connectionKey, loadRun, notify, onContext, selectedRunId]);
 
   useEffect(() => {
     if (!shouldAutoLoad.current || autoLoadStarted.current) return;
@@ -360,12 +519,14 @@ export function RunsPanel({
   }, [refreshRuns]);
 
   useEffect(() => {
-    if (!selectedRunId || (selectedRun && TERMINAL_RUN_STATES.has(selectedRun.state))) return;
+    if (connectionState !== "connected" || !selectedRunId || (selectedRun && TERMINAL_RUN_STATES.has(selectedRun.state))) return;
     const timer = window.setInterval(() => { void loadRun(selectedRunId); }, 1500);
     return () => window.clearInterval(timer);
-  }, [loadRun, selectedRun, selectedRunId]);
+  }, [connectionState, loadRun, selectedRun, selectedRunId]);
 
   async function startRun() {
+    if (!canStart) return;
+    setOperationError(null);
     setBusy(true);
     try {
       const input = JSON.parse(inputText);
@@ -376,16 +537,18 @@ export function RunsPanel({
       setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)]);
       setSelectedRunId(run.id);
       setSelectedRun(run);
+      onContext({ run: `${run.id} · ${run.architectureId} v${run.architectureVersion}`, trace: run.traceId });
       setEvents([]);
-      notify(`Run started · ${run.id}`);
+      notify(message("Run started · {0}", String(run.id)));
     } catch (error) {
-      notify(`Start failed · ${error instanceof Error ? error.message : "request error"}`);
+      setOperationError(message("Start failed · {0}", String(error instanceof Error ? error.message : "request error")));
+      notify(message("Start failed · {0}", String(error instanceof Error ? error.message : "request error")));
     } finally {
       setBusy(false);
     }
   }
 
-  async function runCommand(path: string, success: string) {
+  async function runCommand(path: string, success: Message) {
     if (!selectedRunId) return;
     setBusy(true);
     try {
@@ -395,21 +558,23 @@ export function RunsPanel({
       notify(success);
       await loadRun(selectedRunId);
     } catch (error) {
-      notify(`Run command failed · ${error instanceof Error ? error.message : "request error"}`);
+      setOperationError(message("Run command failed · {0}", String(error instanceof Error ? error.message : "request error")));
+      notify(message("Run command failed · {0}", String(error instanceof Error ? error.message : "request error")));
     } finally {
       setBusy(false);
     }
   }
 
-  async function approveTask(taskId: string) {
+  async function approveTask(taskId: string, requestId?: string) {
     if (!selectedRunId) return;
     setBusy(true);
     try {
-      await call(`/v1/runs/${encodeURIComponent(selectedRunId)}/tasks/${encodeURIComponent(taskId)}/approve`, { method: "POST", body: "{}" });
-      notify(`Approval submitted · ${taskId}`);
+      await call(`/v1/runs/${encodeURIComponent(selectedRunId)}/tasks/${encodeURIComponent(taskId)}/approve`, { method: "POST", body: JSON.stringify(requestId ? {requestId} : {}) });
+      notify(message("Approval submitted · {0}", String(taskId)));
       await loadRun(selectedRunId);
     } catch (error) {
-      notify(`Approval failed · ${error instanceof Error ? error.message : "request error"}`);
+      setOperationError(message("Approval failed · {0}", String(error instanceof Error ? error.message : "request error")));
+      notify(message("Approval failed · {0}", String(error instanceof Error ? error.message : "request error")));
     } finally {
       setBusy(false);
     }
@@ -420,71 +585,78 @@ export function RunsPanel({
   return (
     <div className="stats-panel runs-panel">
       <div className="deploy-header">
-        <div className="panel-heading"><span>RUN</span><strong>Deployment-bound workflow runs</strong></div>
-        <p className="panel-note">A run uses the exact architecture in the active ENFORCE bundle. The host must provide every A2A, MCP, Local, or Human transport adapter; missing adapters fail closed.</p>
+        <div className="panel-heading"><span>{t("RUN")}</span><strong>{t("Deployment-bound workflow runs")}</strong></div>
+        <p className="panel-note">{t("A run uses the exact architecture in the active ENFORCE bundle. The host must provide every A2A, MCP, Local, or Human transport adapter; missing adapters fail closed.")}</p>
       </div>
 
       <div className="control-plane-card runs-connection">
-        <div><strong>Run Control</strong><span>Bearer credentials stay in this browser session only.</span></div>
+        <div><strong>{t("Run Control")}</strong><span>{t("Bearer credentials stay in this browser session only.")}</span></div>
         <div className="live-controls live-control-grid compact">
-          <label><span>Control plane URL</span><input value={apiUrl} onChange={(event) => onApiUrlChange(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
-          <label><span>Bearer token</span><input value={token} onChange={(event) => onTokenChange(event.target.value)} placeholder="run scopes" type="password" /></label>
-          <button className="secondary-button" disabled={busy} onClick={() => void refreshRuns()}>{busy ? "Working…" : "Refresh runs"}</button>
+          <label><span>{t("Control plane URL")}</span><input value={apiUrl} onChange={(event) => onApiUrlChange(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
+          <label><span>{t("Bearer token")}</span><input value={token} onChange={(event) => onTokenChange(event.target.value)} placeholder="run:read, run:create, deploy:read" type="password" /></label>
+          <button className="secondary-button" disabled={busy || !token.trim() || !apiUrl.trim()} onClick={() => void refreshRuns()}>{busy ? t("Working…") : t("Refresh runs")}</button>
         </div>
       </div>
 
+      <div className={`connection-status ${connectionState}`} role="status"><strong>{connectionState === "disconnected" ? t("Not connected") : connectionState === "loading" ? t("Checking runs and active deployment…") : connectionState === "error" ? t("Connection failed") : t("Connected")}</strong><span>{connectionState === "error" ? t(connection?.error) : activeDeployment ? t(message("Active: {0} · {1}", String(activeDeployment.mode), String(activeDeployment.bundleDigest))) : connectionState === "connected" ? t("No active deployment. Promote an approved bundle in Deploy.") : t("Ask the control-plane administrator for a tenant-bound token with run:read, run:create, and deploy:read. Task approvals need run:approve; cancellation needs run:cancel. Then refresh.")}</span></div>
+      {operationError && <p className="connection-status error" role="alert">{t(operationError)}</p>}
+      <Readiness value={connectionState === "connected" ? runReadiness : null}/>
       <section className="run-start-card">
-        <div><strong>Start from active deployment</strong><span>Input is sent to the deployed workflow coordinator. Run and trace IDs are generated server-side.</span></div>
-        <label className="deploy-field"><span>Workflow input · JSON object</span><textarea className="run-input" value={inputText} onChange={(event) => setInputText(event.target.value)} spellCheck={false} /></label>
-        <button className="primary-button run-start-button" disabled={busy || !inputText.trim()} onClick={() => void startRun()}>Start run</button>
+        <div><strong>{t("Start from active deployment")}</strong><span>{t("Input is sent to the deployed workflow coordinator. Run and trace IDs are generated server-side.")}</span></div>
+        <InputFields schema={inputSchema} text={inputText} onChange={setInputText}/><label className="deploy-field"><span>{t("Workflow input · advanced JSON object")}</span><textarea className="run-input" value={inputText} onChange={(event) => setInputText(event.target.value)} spellCheck={false} /></label>
+        <button className="primary-button run-start-button" disabled={busy || !canStart || !inputText.trim()} onClick={() => void startRun()}>{t("Start run")}</button>
       </section>
 
       <div className="runs-layout">
         <section className="run-list-card">
-          <div className="run-section-heading"><div><strong>Runs</strong><span>{runs.length} visible to this tenant</span></div></div>
+          <div className="run-section-heading"><div><strong>{t("Runs")}</strong><span>{connectionState === "connected" ? runs.length : "—"} {t("visible to this tenant")}</span></div></div>
           <div className="run-list">
-            {runs.length === 0 && <div className="run-empty">Connect and refresh to inspect tenant-scoped runs.</div>}
-            {runs.map((run) => <button key={run.id} className={selectedRunId === run.id ? "active" : ""} onClick={() => { setSelectedRunId(run.id); setSelectedRun(run); void loadRun(run.id); }}><span><strong>{run.id}</strong><small>{run.architectureId} · v{run.architectureVersion}</small></span><i className={`run-state state-${run.state.toLowerCase()}`}>{run.state.replaceAll("_", " ")}</i></button>)}
+            {runs.length === 0 && <div className="run-empty">{t("Connect and refresh to inspect tenant-scoped runs.")}</div>}
+            {(connectionState === "connected" ? runs : []).map((run) => <button key={run.id} className={selectedRunId === run.id ? "active" : ""} onClick={() => { setSelectedRunId(run.id); setSelectedRun(run); void loadRun(run.id); }}><span><strong>{run.id}</strong><small>{run.architectureId} · v{run.architectureVersion}</small></span><i className={`run-state state-${run.state.toLowerCase()}`}>{t(run.state).replaceAll("_", " ")}</i></button>)}
           </div>
         </section>
 
         <section className="run-detail-card">
-          {!selectedRun && <div className="run-empty detail">Select a run to inspect task state, approvals, and ledger evidence.</div>}
-          {selectedRun && <>
+          {!selectedRun && <div className="run-empty detail">{t("Select a run to inspect task state, approvals, and ledger evidence.")}</div>}
+          {connectionState === "connected" && selectedRun && <>
             <div className="run-detail-header">
-              <div><span>RUN</span><strong>{selectedRun.id}</strong><small><code>{selectedRun.bundleDigest}</code></small></div>
-              <i className={`run-state state-${selectedRun.state.toLowerCase()}`}>{selectedRun.state.replaceAll("_", " ")}</i>
+              <div><span>{t("RUN")}</span><strong>{selectedRun.id}</strong><small><code>{selectedRun.bundleDigest}</code></small></div>
+              <i className={`run-state state-${selectedRun.state.toLowerCase()}`}>{t(selectedRun.state).replaceAll("_", " ")}</i>
             </div>
-            <div className="run-meta"><span><b>Trace</b><code>{selectedRun.traceId}</code></span><span><b>Messages</b>{selectedRun.messagesUsed}</span><span><b>Updated</b>{selectedRun.updatedAt}</span>{selectedRun.errorCode && <span className="run-error"><b>Error</b>{selectedRun.errorCode}</span>}</div>
+            <div className="run-meta"><span><b>{t("Trace")}</b><code>{selectedRun.traceId}</code></span><span><b>{t("Messages")}</b>{selectedRun.messagesUsed}</span><span><b>{t("Updated")}</b>{selectedRun.updatedAt}</span>{selectedRun.errorCode && <span className="run-error"><b>{t("Error")}</b>{selectedRun.errorCode}</span>}</div>
+            {selectedRun.errorCode === "RUN-EFFECT-UNCERTAIN" && <p role="status">{t("Execution server contact was lost after execution started. External actions may have completed. Check the destination before creating another run; this run will not be replayed automatically.")}</p>}
             {selectedRun.outcomes && <div className="run-meta run-outcomes-summary">
-              <span><b>Executed</b>{selectedRun.outcomes.executed}/{selectedRun.outcomes.total}</span>
-              <span><b>Goal met</b>{selectedRun.outcomes.goalMet}/{selectedRun.outcomes.total}</span>
-              <span><b>Security met</b>{selectedRun.outcomes.securityMet}/{selectedRun.outcomes.total}</span>
+              <span><b>{t("Executed")}</b>{selectedRun.outcomes.executed}/{selectedRun.outcomes.total}</span>
+              <span><b>{t("Goal met")}</b>{selectedRun.outcomes.goalMet}/{selectedRun.outcomes.total}</span>
+              <span><b>{t("Security met")}</b>{selectedRun.outcomes.securityMet}/{selectedRun.outcomes.total}</span>
             </div>}
+            <details open><summary>{t("Submitted workflow input")}</summary><pre>{JSON.stringify(selectedRun.input ?? {}, null, 2)}</pre></details>
             <div className="run-actions">
-              <button className="secondary-button" disabled={busy} onClick={() => void loadRun(selectedRun.id, true)}>Refresh</button>
-              <button className="primary-button" disabled={busy || events.length === 0} onClick={() => onOpenRuntimeTelemetry(events, `Run ${selectedRun.id}`)}>Open runtime graph</button>
-              <button className="secondary-button" disabled={busy || terminal} onClick={() => void runCommand("/resume", "Resume requested")}>Resume</button>
-              <button className="danger-button" disabled={busy || terminal} onClick={() => void runCommand("/cancel", "Run canceled")}>Cancel</button>
+              <button className="secondary-button" disabled={busy} onClick={() => void loadRun(selectedRun.id, true)}>{t("Refresh")}</button>
+              <button className="primary-button" disabled={busy || events.length === 0} onClick={() => onOpenRuntimeTelemetry(events, `Run ${selectedRun.id}`)}>{t("Open runtime graph")}</button>
+              <button className="secondary-button" onClick={() => onOpenStatisticsTrace(selectedRun.traceId, selectedRun.createdAt)}>{t("Investigate trace")}</button>
+              <button className="secondary-button" disabled={busy || terminal} onClick={() => void runCommand("/resume", "Resume requested")}>{t("Resume")}</button>
+              <button className="danger-button" disabled={busy || terminal} onClick={() => void runCommand("/cancel", "Run canceled")}>{t("Cancel")}</button>
             </div>
-            <div className="run-section-heading"><div><strong>Tasks</strong><span>{selectedTasks.length} deployment tasks</span></div></div>
+            <div className="run-section-heading"><div><strong>{t("Tasks")}</strong><span>{selectedTasks.length} {t("deployment tasks")}</span></div></div>
             <div className="run-task-list">
               {selectedTasks.map(([taskId, task]) => <article className="run-task" key={taskId}>
-                <div><span><strong>{taskId}</strong><small>{task.attempts} attempt{task.attempts === 1 ? "" : "s"}{task.externalTaskId ? ` · ${task.externalTaskId}` : ""}</small></span><i className={`run-state state-${task.state.toLowerCase()}`}>{task.state.replaceAll("_", " ")}</i></div>
+                <div><span><strong>{taskId}</strong><small>{t(message("{0} attempt{1}", task.attempts, task.attempts === 1 ? "" : "s"))}{task.externalTaskId ? ` · ${task.externalTaskId}` : ""}</small></span><i className={`run-state state-${task.state.toLowerCase()}`}>{t(task.state).replaceAll("_", " ")}</i></div>
                 <div className="run-task-outcomes" style={{ display: "flex", gap: "0.4em", flexWrap: "wrap", margin: "0.35em 0" }}>
-                  <OutcomeBadge label="Executed" value={task.executed ?? false} />
-                  <OutcomeBadge label="Goal" value={task.goalMet ?? null} />
-                  <OutcomeBadge label="Security" value={task.securityMet ?? null} />
+                  <OutcomeBadge label={t("Executed")} value={task.executed ?? false} />
+                  <OutcomeBadge label={t("Goal")} value={task.goalMet ?? null} />
+                  <OutcomeBadge label={t("Security")} value={task.securityMet ?? null} />
                 </div>
                 {(task.errorCode || task.errorMessage) && <p className="run-task-error">{task.errorCode}{task.errorMessage ? ` · ${task.errorMessage}` : ""}</p>}
                 {task.output && Object.keys(task.output).length > 0 && <pre><code>{JSON.stringify(task.output, null, 2)}</code></pre>}
-                {task.state === "WAITING_APPROVAL" && <button className="primary-button approve-task" disabled={busy} onClick={() => void approveTask(taskId)}>Approve task</button>}
+                {task.pendingCall && <div className="pending-call"><strong>{t("Exact proposed tool call")}</strong><pre>{JSON.stringify(task.pendingCall, null, 2)}</pre><small>{t("Approval applies only to this request ID and arguments. Changed proposals require a new review.")}</small></div>}
+                {task.state === "WAITING_APPROVAL" && <button className="primary-button approve-task" disabled={busy} onClick={() => void approveTask(taskId, task.pendingCall?.requestId)}>{t("Approve reviewed task")}</button>}
               </article>)}
             </div>
-            <div className="run-section-heading events-heading"><div><strong>Ledger evidence</strong><span>{events.length} trace events</span></div></div>
+            <div className="run-section-heading events-heading"><div><strong>{t("Ledger evidence")}</strong><span>{events.length} {t("trace events")}</span></div></div>
             <div className="run-events">
-              {events.length === 0 && <div className="run-empty">No events returned for this trace.</div>}
-              {[...events].reverse().slice(0, 30).map((event, index) => <div key={`${event.occurred_at ?? "event"}-${index}`}><span>{event.occurred_at ?? "—"}</span><strong>{event.event_type ?? "UNKNOWN_EVENT"}</strong>{event.payload?.reason_code && <code>{String(event.payload.reason_code)}</code>}</div>)}
+              {events.length === 0 && <div className="run-empty">{t("No events returned for this trace.")}</div>}
+              {[...events].reverse().slice(0, 30).map((event, index) => <div key={`${event.occurred_at ?? "event"}-${index}`}><span>{event.occurred_at ?? "—"}</span><strong>{event.event_type ?? "UNKNOWN_EVENT"}</strong>{Boolean(event.payload?.reason_code) && <code>{String(event.payload?.reason_code)}</code>}</div>)}
             </div>
           </>}
         </section>
@@ -495,53 +667,113 @@ export function RunsPanel({
 
 export function DeployPanel({
   notify,
+  onContext,
+  draftProject,
+  rawArchitecture,
   onBackToDesign,
   apiUrl,
   token,
   onApiUrlChange,
   onTokenChange,
 }: {
-  notify: (message: string) => void;
+  notify: (message: Message) => void;
   onBackToDesign: () => void;
+  draftProject: { id: string; version: string };
+  rawArchitecture: string;
 } & ControlPlaneConnectionProps) {
+  const { t } = useLanguage();
   const [active, setActive] = useState<Record<string, unknown> | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [bundle, setBundle] = useState<BundleFile | null>(null);
+  const requiredRefs = useMemo(() => {
+    try {
+      const manifest = bundle ? JSON.parse(bundle.rawText).architecture : JSON.parse(rawArchitecture);
+      return [...new Set((manifest?.nodes ?? []).map((node: {annotations?:Record<string,unknown>}) =>
+        (node.annotations?.["interlock.runtime"] as Record<string,unknown> | undefined)?.credentialRef)
+        .filter((ref:unknown):ref is string=>typeof ref === "string" && Boolean(ref)))] as string[];
+    } catch {return [];}
+  },[rawArchitecture,bundle]);
   const [approvalText, setApprovalText] = useState("");
+  const [hostStatus, setHostStatus] = useState<Record<string, unknown> | null>(null);
+  const [readiness, setReadiness] = useState<unknown>(null);
+  const [approvalContext, setApprovalContext] = useState<{statement: Record<string, unknown>; trustedApprovers: Array<{approverId:string;keyId:string;publicKeyHex:string}>} | null>(null);
+  const [approverKeyId, setApproverKeyId] = useState("");
+  const [reviewed, setReviewed] = useState(false);
+  const [signingBusy, setSigningBusy] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState<number>(0);
   const bundleInput = useRef<HTMLInputElement>(null);
+  const [statusMessage, setStatusMessage] = useState<Message>("Not connected · refresh to inspect the active deployment");
+  const [statusChecked, setStatusChecked] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [diff, setDiff] = useState<{ baseDigest: string | null; bundleDigest: string; changes: Array<{ path: string; before: unknown; after: unknown }>; changeCount: number } | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const deploymentRequest = useRef(0);
+  useEffect(() => () => { deploymentRequest.current += 1; }, []);
+  function invalidateConnection() { setApproverKeyId(""); setBundle(null); setReadiness(null); setPendingApprovals(0); setHistory([]); setApprovalContext(null); setReviewed(false); setApprovalText(""); setHostStatus(null); deploymentRequest.current += 1; setDiff(null); setStatusLoading(false); setDiffLoading(false); setStatusChecked(false); setActive(null); onContext({ activeDeployment: "Connection changed · not checked" }); }
+  async function refreshDiff(digest: string, baseDigest: string | null, request = deploymentRequest.current) {
+    setDiff(null); setDiffError(null); setDiffLoading(true); setApprovalContext(null); setReviewed(false); setApprovalText("");
+    try {
+      const body = await call(`/v1/bundles/${encodeURIComponent(digest)}/diff`);
+      if (request !== deploymentRequest.current) return;
+      if (body.baseDigest !== baseDigest || body.bundleDigest !== digest || !Array.isArray(body.changes)) throw new Error("Deployment changed during comparison. Refresh status before signing.");
+      const context = await call(`/v1/bundles/${encodeURIComponent(digest)}/approval-context`);
+      if (request !== deploymentRequest.current) return;
+      const statement = context.statement as Record<string, unknown>;
+      if (statement.bundleDigest !== digest || statement.fromDigest !== baseDigest) throw new Error("Approval context changed. Refresh comparison.");
+      setApprovalContext(context as NonNullable<typeof approvalContext>);
+      setDiff(body as NonNullable<typeof diff>);
+    } catch (error) { if (request === deploymentRequest.current) setDiffError(error instanceof Error ? error.message : "Policy comparison failed"); }
+    finally { if (request === deploymentRequest.current) setDiffLoading(false); }
+  }
+  function report(message: Message) { setStatusMessage(message); notify(message); }
 
   async function call(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
+    const request = deploymentRequest.current;
     const response = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
       ...init,
       headers: { Authorization: `Bearer ${token}`, ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error((body as { error?: { code?: string } })?.error?.code ?? `HTTP ${response.status}`);
+    if (request !== deploymentRequest.current) throw new Error("Deployment context changed; retry in the current connection");
+    if (!response.ok) throw new Error([body?.error?.code, body?.error?.message].filter(Boolean).join(": ") || `HTTP ${response.status}`);
     return body as Record<string, unknown>;
   }
 
   async function refreshStatus() {
+    const request = ++deploymentRequest.current;
+    setStatusLoading(true);
+    setStatusChecked(false);
+    setDiff(null);
     try {
-      const body = await call("/v1/deploy/status");
+      const [body, host] = await Promise.all([call("/v1/deploy/status"), call("/v1/runtime/status")]);
+      if (request === deploymentRequest.current) setHostStatus(host);
+      if (request !== deploymentRequest.current) return;
       setActive((body.active as Record<string, unknown>) ?? null);
+      onContext({ activeDeployment: body.active ? String((body.active as Record<string, unknown>).bundleDigest) : "None" });
       setHistory((body.history as string[]) ?? []);
-      notify("Deployment status refreshed");
+      setStatusChecked(true);
+      report("Deployment status refreshed");
+      if (bundle) await refreshDiff(bundle.bundleDigest, (body.active as Record<string, unknown> | null)?.bundleDigest as string ?? null, request);
     } catch (error) {
-      notify(`Status failed · ${error instanceof Error ? error.message : "request error"}`);
-    }
+      if (request !== deploymentRequest.current) return;
+      report(message("Status failed · {0}", String(error instanceof Error ? error.message : "request error")));
+    } finally { if (request === deploymentRequest.current) setStatusLoading(false); }
   }
 
   async function importBundle(file: File) {
+    const request = ++deploymentRequest.current; setReadiness(null); setDiff(null); setDiffError(null); setDiffLoading(false); setStatusLoading(false); setApprovalText("");
     try {
       const rawText = await file.text();
+      if (request !== deploymentRequest.current) return;
       const value = JSON.parse(rawText);
-      if (!value.bundleDigest || !value.deployable) throw new Error("not a deployable --shadow bundle");
+      if (typeof value.bundleDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.bundleDigest) || value.deployable !== true || typeof value.architectureId !== "string" || typeof value.version !== "string") throw new Error("not a deployable --shadow bundle");
       setBundle({ architectureId: value.architectureId, version: String(value.version), bundleDigest: value.bundleDigest, deployable: true, rawText });
       setPendingApprovals(0);
-      notify(`Bundle loaded · ${value.bundleDigest.slice(0, 18)}…`);
+      onContext({ bundle: `${value.architectureId} v${value.version} · ${value.bundleDigest}` });
+      report(message("Bundle loaded · {0}…", String(value.bundleDigest.slice(0, 18))));
     } catch (error) {
-      notify(`Bundle rejected · ${error instanceof Error ? error.message : "invalid JSON"}`);
+      report(message("Bundle rejected · {0}", String(error instanceof Error ? error.message : "invalid JSON")));
     }
   }
 
@@ -552,14 +784,15 @@ export function DeployPanel({
       // JSON.stringify-ing can turn `110.0` into `110`, invalidating the
       // canonical bundle digest even though the numeric value is unchanged.
       const body = await call("/v1/bundles", { method: "POST", body: bundle.rawText });
-      notify(`Proposed · commit ${(body.commit as string).slice(0, 10)}`);
+      report(message("Proposed · commit {0}", String((body.commit as string).slice(0, 10))));
+      await refreshStatus();
     } catch (error) {
-      notify(`Propose failed · ${error instanceof Error ? error.message : "request error"}`);
+      report(message("Propose failed · {0}", String(error instanceof Error ? error.message : "request error")));
     }
   }
 
   async function submitApproval() {
-    if (!bundle) return;
+    if (!bundle || !statement) return;
     try {
       const value = JSON.parse(approvalText);
       const body = await call(`/v1/bundles/${bundle.bundleDigest}/approvals`, {
@@ -568,20 +801,23 @@ export function DeployPanel({
       });
       setPendingApprovals(Number(body.pendingApprovals ?? 0));
       setApprovalText("");
-      notify(`Approval accepted · ${body.pendingApprovals} pending`);
+      report(message("Approval accepted · {0} pending", String(body.pendingApprovals)));
     } catch (error) {
-      notify(`Approval rejected · ${error instanceof Error ? error.message : "invalid approval JSON"}`);
+      report(message("Approval rejected · {0}", String(error instanceof Error ? error.message : "invalid approval JSON")));
     }
   }
 
   async function promote() {
-    if (!bundle) return;
+    if (!bundle || !statement) return;
     try {
       const body = await call(`/v1/bundles/${bundle.bundleDigest}/promote`, { method: "POST" });
       setActive(((body.active as Record<string, unknown>) ?? null));
-      notify("Promoted SHADOW → ENFORCE");
+      onContext({ activeDeployment: body.active ? String((body.active as Record<string, unknown>).bundleDigest) : "None" });
+      setDiff(null); setApprovalText("");
+      await refreshStatus();
+      report("Promoted SHADOW → ENFORCE");
     } catch (error) {
-      notify(`Promotion refused · ${error instanceof Error ? error.message : "request error"}`);
+      report(message("Promotion refused · {0}", String(error instanceof Error ? error.message : "request error")));
     }
   }
 
@@ -589,74 +825,109 @@ export function DeployPanel({
     try {
       const body = await call("/v1/deploy/rollback", { method: "POST", body: JSON.stringify({ targetDigest }) });
       setActive(((body.active as Record<string, unknown>) ?? null));
-      notify("Rolled back");
+      onContext({ activeDeployment: body.active ? String((body.active as Record<string, unknown>).bundleDigest) : "None" });
+      setDiff(null); setApprovalText("");
+      await refreshStatus();
+      report("Rolled back");
     } catch (error) {
-      notify(`Rollback refused · ${error instanceof Error ? error.message : "request error"}`);
+      report(message("Rollback refused · {0}", String(error instanceof Error ? error.message : "request error")));
     }
   }
 
-  const statement = bundle
-    ? {
-        purpose: "studio-architecture-deploy",
-        architectureId: bundle.architectureId,
-        bundleDigest: bundle.bundleDigest,
-        fromDigest: (active?.bundleDigest as string | undefined) ?? null,
-        toMode: "ENFORCE",
-      }
-    : null;
+  const statement = bundle && statusChecked && diff && diff.bundleDigest === bundle.bundleDigest && diff.baseDigest === (active?.bundleDigest ?? null) ? approvalContext?.statement ?? null : null;
+  async function compileDraft() {
+    const request = ++deploymentRequest.current;
+    setSigningBusy(true); setPendingApprovals(0); setBundle(null); setDiff(null); setApprovalContext(null); setReviewed(false); setApprovalText("");
+    try {
+      const response = await compileDraftRequest(call, rawArchitecture);
+      if (request !== deploymentRequest.current) return;
+      setReadiness(response.runtimeReadiness ?? response.findings);
+      if (response.deployable !== true) throw new Error(t(message("Draft is not deployable. {0}", String(JSON.stringify(response.findings)))));
+      if (typeof response.rawBundle !== "string") throw new Error("Compiler did not return the exact raw bundle");
+      setBundle({architectureId:String(response.architectureId), version:String(response.version), bundleDigest:String(response.bundleDigest), deployable:true, rawText:response.rawBundle});
+      onContext({bundle:String(response.bundleDigest)}); report("Draft compiled. Propose it to load the review comparison.");
+    } catch (error) {report(error instanceof Error ? error.message : "Compilation failed");}
+    finally {setSigningBusy(false);}
+  }
+  async function signFile(file: File) {
+    if (!statement || !reviewed || !approvalContext) return;
+    if (file.size > 1024) {report("Signing seed file is too large. Choose 32 raw bytes or 64 hexadecimal characters."); return;}
+    const context = approvalContext; const request = deploymentRequest.current;
+    setSigningBusy(true);
+    try {
+      const approver = context.trustedApprovers.find(item => item.keyId === approverKeyId);
+      if (!approver) throw new Error("Choose a trusted approver");
+      const signed = await signApproval(new Uint8Array(await file.arrayBuffer()), statement, approver);
+      if (request !== deploymentRequest.current || context !== approvalContext) return;
+      setApprovalText(JSON.stringify(signed, null, 2)); report("Signed locally and verified against the trusted public key. Submit when ready.");
+    } catch (error) {report(error instanceof Error ? error.message : "Signing failed");}
+    finally {setSigningBusy(false);}
+  }
 
   return (
     <div className="stats-panel deploy-panel">
       <div className="deploy-header">
-        <div className="panel-heading"><span>OPERATE</span><strong>Compile, approve, and promote</strong></div>
-        <p className="panel-note">Design does not become runtime directly. Export the manifest, compile a SHADOW bundle with the CLI, then promote it here. Runtime appears only after real telemetry is observed.</p>
+        <div className="panel-heading"><span>{t("OPERATE")}</span><strong>{t("Compile, approve, and promote")}</strong></div>
+        <p className="panel-note">{t("Compile the current draft, review its changes, sign locally, then promote. Runtime evidence appears after you start a run.")}</p>
         <div className="deploy-handoff">
-          <div><span>DESIGN HANDOFF</span><strong>Browser draft → signed deployment bundle</strong></div>
-          <code>interlock studio lint architecture.json</code>
-          <code>interlock studio compile --shadow architecture.json</code>
-          <button className="secondary-button" onClick={onBackToDesign}>Back to design</button>
+          <div><span>{t("DESIGN HANDOFF")}</span><strong>{draftProject.id} v{draftProject.version} {t("→ signed deployment bundle")}</strong></div>
+          <span>{t("Daily workflow stays in Studio. The host manages adapters, credentials, and trusted public keys.")}</span>
+          <button className="secondary-button" onClick={onBackToDesign}>{t("Back to design")}</button>
         </div>
-        <p className="panel-note signing-note">Signing keys never enter this browser. Approvers sign with <code>interlock studio approve</code>; the control plane verifies the two-person rule server-side.</p>
+        <p className="panel-note signing-note">{t("Signing happens in browser memory with WebCrypto. Private key bytes are never sent or saved; the server verifies distinct trusted approvals.")}</p>
       </div>
 
       <div className="control-plane-card">
-        <div><strong>Control plane</strong><span>Connect to inspect status and submit the bundle.</span></div>
+        <div><strong>{t("Control plane")}</strong><span>{t("Connect to inspect status and submit the bundle.")}</span></div>
         <div className="live-controls live-control-grid compact">
-          <label><span>Control plane URL</span><input value={apiUrl} onChange={(event) => onApiUrlChange(event.target.value)} placeholder="http://127.0.0.1:8792" /></label>
-          <label><span>Bearer token</span><input value={token} onChange={(event) => onTokenChange(event.target.value)} placeholder="deployment scope" type="password" /></label>
-          <button className="secondary-button" onClick={refreshStatus}>Refresh status</button>
+          <label><span>{t("Control plane URL")}</span><input value={apiUrl} onChange={(event) => { invalidateConnection(); setStatusMessage("Connection changed · refresh status"); onApiUrlChange(event.target.value); }} placeholder="http://127.0.0.1:8792" /></label>
+          <label><span>{t("Bearer token")}</span><input value={token} onChange={(event) => { invalidateConnection(); setStatusMessage("Credentials changed · refresh status"); onTokenChange(event.target.value); }} placeholder={t("deployment scope")} type="password" /></label>
+          <button className="secondary-button" disabled={statusLoading || !token.trim()} onClick={refreshStatus}>{statusLoading ? t("Checking…") : t("Refresh status")}</button>
         </div>
       </div>
 
+      <p className="connection-status" role="status">{t(statusMessage)}</p>
+      {hostStatus && <HostReadiness value={hostStatus} apiUrl={apiUrl} requiredRefs={requiredRefs}/>}
+      <Readiness value={readiness}/>
       <div className="deploy-steps">
         <section className="deploy-step">
-          <div className="step-heading"><span>1</span><div><strong>Load compiled bundle</strong><small>{bundle ? "Bundle ready" : "Waiting for --shadow bundle"}</small></div></div>
-          <p>Choose the deployable JSON produced by the CLI.</p>
+          <div className="step-heading"><span>1</span><div><strong>{t("Compile current draft")}</strong><small>{bundle ? t("Bundle ready") : t("Ready to compile your draft")}</small></div></div>
+          <p>{t("Server compilation validates the current draft and checks runtime bindings.")}</p><button className="primary-button" disabled={signingBusy || !token.trim()} onClick={() => void compileDraft()}>{t("Compile current draft")}</button>
           <input ref={bundleInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importBundle(file); }} />
-          <button className="telemetry-button primary deploy-file" onClick={() => bundleInput.current?.click()}><span>↑</span>Load compile --shadow bundle</button>
-          {bundle && <div className="runtime-source-card"><span>BUNDLE</span><strong>{bundle.architectureId} v{bundle.version}</strong><small><code>{bundle.bundleDigest}</code></small></div>}
-          <button className="secondary-button" disabled={!bundle} onClick={propose}>Propose to review store</button>
+          <button className="telemetry-button primary deploy-file" onClick={() => bundleInput.current?.click()}><span>↑</span>{t("Import compiled bundle (advanced)")}</button>
+          {bundle && <div className="runtime-source-card"><span>{t("BUNDLE")}</span><strong>{bundle.architectureId} v{bundle.version}</strong><small><code>{bundle.bundleDigest}</code></small></div>}
+          <button className="secondary-button" disabled={!bundle} onClick={propose}>{t("Propose to review store")}</button>
         </section>
 
         <section className="deploy-step">
-          <div className="step-heading"><span>2</span><div><strong>Sign approval context</strong><small>{statement ? "Context ready" : "Available after step 1"}</small></div></div>
-          <p>Each approver signs this context with <code>interlock studio approve</code>.</p>
+          <div className="step-heading"><span>2</span><div><strong>{t("Sign approval context")}</strong><small>{statement ? t("Context ready") : t("Available after step 1")}</small></div></div>
+          <p>{t("Compare the proposed architecture with the active deployment before signing. Each approver signs the exact server-issued context below.")}</p>
+          {bundle && <button className="secondary-button" disabled={statusLoading || diffLoading || !token} onClick={refreshStatus}>{t("Refresh deployment comparison")}</button>}
+          {diffLoading && <p role="status">{t("Comparing proposed and active architecture…")}</p>}
+          {diffError && <p className="connection-status error" role="alert">{t("Comparison unavailable:")} {t(diffError)}{t(". Propose the bundle first, then refresh.")}</p>}
+          {diff && <div className="deployment-diff"><strong>{diff.changeCount} {t("policy and architecture changes")}</strong><p className="panel-note">{t("Base:")} {diff.baseDigest ?? t("No active deployment")}<br />{t("Proposed:")} {diff.bundleDigest}</p>{diff.changes.length === 0 && <p>{t("No architecture changes from the active deployment.")}</p>}{diff.changes.map((change) => <details key={change.path}><summary>{change.path}</summary><div className="diff-values"><div><strong>{t("Before")}</strong><pre>{JSON.stringify(change.before, null, 2)}</pre></div><div><strong>{t("After")}</strong><pre>{JSON.stringify(change.after, null, 2)}</pre></div></div></details>)}</div>}
+          {bundle && diff && hostStatus && <CandidateComparison key={JSON.stringify([bundle.bundleDigest,diff.baseDigest,apiUrl,token,hostStatus.targetId,hostStatus.tenantId])} bundle={bundle} baseDigest={diff.baseDigest} hostStatus={hostStatus} readiness={readiness} call={call}/>}
+          {bundle && (bundle.architectureId !== draftProject.id || bundle.version !== draftProject.version) && <p className="connection-status">{t("Loaded bundle is")} {bundle.architectureId} v{bundle.version}{t("; the current local draft is")} {draftProject.id} v{draftProject.version}{t(". Approval applies to the loaded bundle.")}</p>}
+          {statement && <dl className="host-context review-context"><dt>{t("Control plane")}</dt><dd>{apiUrl}</dd><dt>{t("Target")}</dt><dd>{String(statement.targetId ?? hostStatus?.targetId ?? "Unknown")}</dd><dt>{t("Tenant")}</dt><dd>{String(statement.tenantId ?? hostStatus?.tenantId ?? "Unknown")}</dd></dl>}
           {statement
             ? <pre className="statement-block"><code>{JSON.stringify(statement, null, 2)}</code></pre>
-            : <div className="step-placeholder">Load and propose a bundle to generate the exact signing context.</div>}
+            : <div className="step-placeholder">{t("Load and propose a bundle, then refresh its comparison with the active deployment to generate the signing context.")}</div>}
         </section>
 
         <section className="deploy-step">
-          <div className="step-heading"><span>3</span><div><strong>Submit signed approvals</strong><small>{pendingApprovals > 0 ? `${pendingApprovals} pending` : "Two-person rule verified server-side"}</small></div></div>
-          <label className="deploy-field"><span>Signed approval JSON</span><textarea className="approval-input" value={approvalText} onChange={(event) => setApprovalText(event.target.value)} placeholder='{"approverId": …, "keyId": …, "signature": …}' /></label>
-          <button className="secondary-button" disabled={!bundle || !approvalText.trim()} onClick={submitApproval}>Submit approval</button>
+          <div className="step-heading"><span>3</span><div><strong>{t("Submit signed approvals")}</strong><small>{pendingApprovals > 0 ? t(message("{0} pending", String(pendingApprovals))) : t("Distinct reviewer identities verified server-side")}</small></div></div>
+          <label className="review-confirm"><input type="checkbox" checked={reviewed} disabled={!statement} onChange={e => {setReviewed(e.target.checked);setApprovalText("");}}/>{t("I reviewed the proposed changes and deployment context.")}</label>
+          <label>{t("Trusted approver")}<select value={approverKeyId} onChange={e => {setApproverKeyId(e.target.value);setApprovalText("");}}><option value="">{t("Choose approver…")}</option>{approvalContext?.trustedApprovers.map(item => <option key={item.keyId} value={item.keyId}>{item.approverId} · {item.keyId}</option>)}</select></label>
+          <label>{t("Private signing seed file")}<input type="file" disabled={!statement || !reviewed || !approverKeyId || signingBusy} onChange={e => {const file=e.target.files?.[0];e.target.value="";if(file) void signFile(file);}}/><small>{t("32 raw bytes or 64 hexadecimal characters. Sign again with a different approver for the second approval.")}</small></label>
+          <label className="deploy-field"><span>{t("Signed approval JSON")}</span><textarea className="approval-input" value={approvalText} onChange={(event) => setApprovalText(event.target.value)} placeholder='{"approverId": …, "keyId": …, "signature": …}' /></label>
+          <button className="secondary-button" disabled={!statement || !reviewed || !approvalText.trim() || signingBusy} onClick={submitApproval}>{t("Submit approval")}</button>
         </section>
 
         <section className="deploy-step">
-          <div className="step-heading"><span>4</span><div><strong>Promote and monitor</strong><small>{active ? `${String(active.mode ?? "ENFORCE")} active` : "No active deployment"}</small></div></div>
-          <button className="primary-button promote-button" disabled={!bundle} onClick={promote}>Promote SHADOW → ENFORCE</button>
-          {active ? <div className="runtime-source-card"><span>{String(active.mode ?? "ENFORCE")}</span><strong><code>{String(active.bundleDigest ?? "")}</code></strong>{Array.isArray(active.approvers) && <small>approved by {(active.approvers as string[]).join(", ")}</small>}<button className="danger-button" disabled={!bundle || bundle.bundleDigest === String(active.bundleDigest)} onClick={() => bundle && rollback(bundle.bundleDigest)}>Rollback to loaded bundle</button></div> : <div className="step-placeholder">Connect to the control plane to inspect the active bundle.</div>}
-          {history.length > 0 && <><h4>Deployment history</h4><ul className="deploy-history">{history.slice(0, 8).map((line, index) => <li key={index}><code>{line}</code></li>)}</ul></>}
+          <div className="step-heading"><span>4</span><div><strong>{t("Promote and monitor")}</strong><small>{active ? t(message("{0} active", String(active.mode ?? "ENFORCE"))) : statusChecked ? t("No active deployment") : t("Deployment not checked")}</small></div></div>
+          <button className="primary-button promote-button" disabled={!statement || statusLoading || diffLoading} onClick={promote}>{t("Promote SHADOW → ENFORCE")}</button>
+          {active ? <div className="runtime-source-card"><span>{String(active.mode ?? "ENFORCE")}</span><strong><code>{String(active.bundleDigest ?? "")}</code></strong>{Array.isArray(active.approvers) && <small>{t("approved by")} {(active.approvers as string[]).join(", ")}</small>}<button className="danger-button" disabled={!bundle || bundle.bundleDigest === String(active.bundleDigest)} onClick={() => bundle && rollback(bundle.bundleDigest)}>{t("Rollback to loaded bundle")}</button></div> : <div className="step-placeholder">{t("Connect to the control plane to inspect the active bundle.")}</div>}
+          {history.length > 0 && <><h4>{t("Deployment history")}</h4><ul className="deploy-history">{history.slice(0, 8).map((line, index) => <li key={index}><code>{line}</code></li>)}</ul></>}
         </section>
       </div>
     </div>

@@ -1,30 +1,40 @@
-"""Shared approval store for external-write intents.
-
-Both enforcement points -- the gateway and the SDK -- can hold an approval that binds an
-approval id to an exact arguments hash, canonical destination set, and expiry for one
-tenant. Extracted from the gateway so ``Interlock`` (the SDK) can grant and validate
-approvals without duplicating the binding logic.
-"""
+"""Process-local, one-use approvals bound to an exact invocation and installed policy."""
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from .canonical import canonical_digest
-from .models import InvocationIntent
+from .models import InvocationIntent, LinkPolicy
 from .security import canonical_destination
+
+
+def approval_binding(
+    *, tenant_id: str, source_actor_id: str, target_actor_id: str, revision_id: str | None,
+    policy: LinkPolicy, intent: InvocationIntent, arguments: Mapping[str, Any],
+) -> str:
+    intent_values = asdict(intent)
+    del intent_values["approval_id"]
+    intent_values["destinations"] = sorted({canonical_destination(item) for item in intent.destinations})
+    return canonical_digest({
+        "tenant": tenant_id, "source": source_actor_id, "target": target_actor_id, "revision": revision_id,
+        "policy": {key: sorted(value) if isinstance(value, frozenset) else value
+                   for key, value in asdict(policy).items()},
+        "intent": {key: sorted(value) if isinstance(value, frozenset) else value
+                   for key, value in intent_values.items()},
+        "arguments": arguments,
+    })
 
 
 @dataclass(frozen=True, slots=True)
 class Approval:
     approval_id: str
-    tenant_id: str
-    arguments_hash: str
-    destinations: tuple[str, ...]
+    binding_hash: str
     expires_at_epoch: float
     approver: str
 
@@ -32,61 +42,31 @@ class Approval:
 class ApprovalStore:
     def __init__(self) -> None:
         self._approvals: dict[str, Approval] = {}
+        self._lock = threading.Lock()
 
-    def grant(
-        self,
-        *,
-        tenant_id: str,
-        arguments: Mapping[str, Any],
-        canonical_destinations: tuple[str, ...],
-        approver: str,
-        ttl_seconds: int = 300,
-    ) -> Approval:
-        approval = Approval(
-            approval_id=str(uuid.uuid4()),
-            tenant_id=tenant_id,
-            arguments_hash=canonical_digest(arguments),
-            destinations=canonical_destinations,
-            expires_at_epoch=time.time() + ttl_seconds,
-            approver=approver,
-        )
-        self._approvals[approval.approval_id] = approval
+    def grant(self, *, binding_hash: str, approver: str, ttl_seconds: int = 300) -> Approval:
+        if not approver.strip() or ttl_seconds <= 0:
+            raise ValueError("approver and positive approval TTL are required")
+        approval = Approval(str(uuid.uuid4()), binding_hash, time.time() + ttl_seconds, approver)
+        with self._lock:
+            self._approvals[approval.approval_id] = approval
         return approval
 
-    def find(self, tenant_id: str, arguments: Mapping[str, Any], destinations: tuple[str, ...]) -> Approval | None:
-        """The unexpired approval bound to exactly these arguments and destinations, if one exists.
+    def find(self, binding_hash: str) -> Approval | None:
+        with self._lock:
+            return next((approval for approval in self._approvals.values()
+                         if approval.binding_hash == binding_hash and approval.expires_at_epoch > time.time()), None)
 
-        This is how a caller that does not hold an approval id -- an adapter relaying a model's
-        tool call -- still gets to use an approval an operator granted for that exact call.
+    def valid(self, approval_id: str | None, binding_hash: str, *, consume: bool = False) -> bool:
+        """Consumption is atomic and happens before execution, including a failed execution.
+
+        Evaluation and observation never spend an approval. A spent grant cannot authorize a
+        second operation; gateway retries use the original idempotency result instead.
         """
-        try:
-            canonical = tuple(canonical_destination(item) for item in destinations)
-        except ValueError:
-            return None
-        arguments_hash = canonical_digest(arguments)
-        now = time.time()
-        for approval in self._approvals.values():
-            if (
-                approval.tenant_id == tenant_id
-                and approval.arguments_hash == arguments_hash
-                and approval.destinations == canonical
-                and approval.expires_at_epoch >= now
-            ):
-                return approval
-        return None
-
-    def valid(self, intent: InvocationIntent, tenant_id: str, arguments: Mapping[str, Any]) -> bool:
-        if not intent.approval_id:
-            return False
-        approval = self._approvals.get(intent.approval_id)
-        try:
-            destinations = tuple(canonical_destination(item) for item in intent.destinations)
-        except ValueError:
-            return False
-        return bool(
-            approval
-            and approval.tenant_id == tenant_id
-            and approval.arguments_hash == canonical_digest(arguments)
-            and approval.destinations == destinations
-            and approval.expires_at_epoch >= time.time()
-        )
+        with self._lock:
+            approval = self._approvals.get(approval_id)
+            if not approval or approval.binding_hash != binding_hash or approval.expires_at_epoch <= time.time():
+                return False
+            if consume:
+                del self._approvals[approval.approval_id]
+            return True

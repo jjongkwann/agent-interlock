@@ -1,0 +1,499 @@
+{
+  "observed_at": "2026-10-07 KST",
+  "purpose": "Agent Interlock direction review: selected enterprise hiring evidence, not a market census",
+  "dataset_source": "Private local archive of public job postings (jobs.jsonl)",
+  "dataset_modified": "2026-10-07 09:23 KST",
+  "dataset_coverage": {
+    "total_rows": 5294,
+    "first_found": "2026-07-27",
+    "last_found": "2026-10-07",
+    "rows_by_source": {
+      "wanted": 748,
+      "jumpit": 1355,
+      "daangn": 41,
+      "lg": 26,
+      "samsung": 30,
+      "toss": 217,
+      "sk": 25,
+      "hyundai": 32,
+      "autoever": 30,
+      "mobis": 32,
+      "remember": 2134,
+      "devrunner": 624
+    }
+  },
+  "caveats": [
+    "found is initial capture date, not original posted date",
+    "due is cached status/deadline, not live-open verification",
+    "keyword-filtered historical local collection, not enterprise job market denominator",
+    "devrunner description is third-party summary unless verified_original present",
+    "official application-start/updated date is recorded separately; exact original datePosted was not generally exposed",
+    "Never combine the requirements of five NAVER Cloud AI Security positions into one required-skills list",
+    "A job purpose/task mentions MCP or A2A is not automatically a candidate required qualification",
+    "A future deadline and readable detail are weaker than explicit official open status",
+    "LG 1002127_1 is closed historical evidence, excluded from current open hiring examples"
+  ],
+  "selected_record_count": 13,
+  "unique_official_url_count": 11,
+  "distinct_source_company_label_count": 7,
+  "company_label_note": "NAVER and NAVER Cloud share one source company label; labels are not legal-entity counts",
+  "content_policy": "Metadata and researcher summaries only; no full posting bodies or applicant data",
+  "jobs": [
+    {
+      "job_id": "lg:1002127_1",
+      "company": "LG CNS",
+      "title": "AI (AX) — 2026년 하반기 LG CNS 신입사원 채용",
+      "found": "2026-09-14",
+      "actual_posted_date": null,
+      "application_start": null,
+      "due": "closed",
+      "live_open_status": "cached_closed_historical_example",
+      "official_url": "https://careers.lg.com/apply/detail?id=1002127",
+      "supported_skills_summary": {
+        "purpose": "고객 비즈니스 AI 서비스 구현, 마감된 신입 채용 역사적 사례",
+        "required": [
+          "LLM/Agent 프로젝트",
+          "Prompt Engineering/RAG 관심",
+          "AI/ML 이해"
+        ],
+        "preferred": [
+          "Git/Docker/Kubernetes 기본지식"
+        ],
+        "tasks": [
+          "RAG/Function Calling/MCP",
+          "Multi-Agent/LangChain/LangGraph/VectorDB"
+        ]
+      },
+      "evidence_scope": "historical_closed"
+    },
+    {
+      "job_id": "lg:1001432_2",
+      "company": "LG CNS",
+      "title": "AI Architect — [LG CNS] 어플리케이션 아키텍트/AI 아키텍트 모집(경력)",
+      "found": "2026-09-15",
+      "actual_posted_date": null,
+      "application_start": "2026-03-11 09:00",
+      "due": "2026-10-31",
+      "live_open_status": "official_recAvail_1_applyAvailable_Y",
+      "official_url": "https://careers.lg.com/apply/detail?id=1001432",
+      "verification_method": "existing company_jobs.detail read-only public endpoint",
+      "supported_skills_summary": {
+        "purpose": "개발 전 공정에 적용하는 Agentic AI 공통 플랫폼",
+        "required": [
+          "LLM Agent Architecture",
+          "Ontology Modeling",
+          "Graph Database",
+          "Prompt Engineering",
+          "RAG/LLM Python",
+          "REST API/SQL/Git"
+        ],
+        "preferred": [
+          "AI 관련 플랫폼 구축/프로젝트"
+        ],
+        "tasks": [
+          "분석·설계·개발·테스트 연결 AI-Native 구조",
+          "안정성/확장성",
+          "Docker/Kubernetes 클라우드 아키텍처"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "sk:R261940",
+      "company": "SK주식회사(AX)",
+      "title": "AI 플랫폼 아키텍트 전문가 영입",
+      "found": "2026-09-15",
+      "actual_posted_date": null,
+      "application_start": "2026-09-11",
+      "due": "2026-11-20",
+      "live_open_status": "official_page_readable_apply_button_and_future_deadline",
+      "official_url": "https://www.skcareers.com/Recruit/Detail/R261940",
+      "verification_method": "web official page",
+      "supported_skills_summary": {
+        "purpose": "고객 AX 에이전트 플랫폼 설계·패키징·현장 배포",
+        "required": [
+          "IT 개발/운영 10년 이상",
+          "시스템 아키텍처·데이터 migration",
+          "클라우드/컨테이너 운영 장애대응",
+          "AI/LLM/RAG/Agent 아키텍처 이해"
+        ],
+        "preferred": [
+          "Python",
+          "온프레미스/폐쇄망",
+          "비동기/큐 기반 분산 아키텍처"
+        ],
+        "tasks": [
+          "Agent Orchestration Platform",
+          "A2A/MCP/Connector 통합",
+          "인증·권한 전파/접근제어",
+          "관측성·장애분석"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "sk:R261939",
+      "company": "SK주식회사(AX)",
+      "title": "AI Agent 개발자 전문가 영입",
+      "found": "2026-09-15",
+      "actual_posted_date": null,
+      "application_start": "2026-09-11",
+      "due": "2026-11-20",
+      "live_open_status": "official_page_readable_apply_button_and_future_deadline",
+      "official_url": "https://www.skcareers.com/Recruit/Detail/R261939",
+      "verification_method": "web official page",
+      "supported_skills_summary": {
+        "purpose": "업무/데이터 연동을 에이전트 서비스로 구현·운영",
+        "required": [
+          "소프트웨어/데이터엔지니어링 5년 이상",
+          "Python 서비스/API/데이터파이프라인",
+          "외부 시스템/API 연동",
+          "LLM/RAG/Agent 동작 이해"
+        ],
+        "preferred": [
+          "LangChain/LangGraph",
+          "MCP 서버/Tool",
+          "멀티 Agent",
+          "RAG/VectorDB/하이브리드검색",
+          "권한 기반 데이터접근",
+          "정량 평가/Observability/Tracing",
+          "비동기 호출 안정화/Docker/Kubernetes"
+        ],
+        "tasks": [
+          "Tool calling/상태·컨텍스트/오류처리",
+          "MCP 및 M365·Google·사내API",
+          "응답/검색 품질 측정·회귀검증"
+        ],
+        "qualification_note": "AI Agent 개발 경험은 필수가 아니라고 명시"
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "sk:R261936",
+      "company": "SK주식회사(AX)",
+      "title": "AI Agent 엔지니어 영입",
+      "found": "2026-09-15",
+      "actual_posted_date": null,
+      "application_start": "2026-09-11",
+      "due": "2026-11-20",
+      "live_open_status": "official_page_readable_apply_button_and_future_deadline",
+      "official_url": "https://www.skcareers.com/Recruit/Detail/R261936",
+      "verification_method": "web official page",
+      "supported_skills_summary": {
+        "purpose": "에이전트 코어 응용과 평가·안전성 체계 내재화",
+        "required": [
+          "API 기반 비동기 시스템 설계/운영",
+          "Tool calling/RAG 포함 LLM 시스템 구현",
+          "Agent 품질 평가/디버깅",
+          "Git/컨테이너 이해"
+        ],
+        "preferred": [
+          "Multi-Agent 설계/운영",
+          "Tool 권한/Prompt Injection/Guardrail",
+          "LLM 평가/벤치마크",
+          "코딩에이전트 적용"
+        ],
+        "tasks": [
+          "Agent Harness/Reasoning/Skills",
+          "Logging/Tracing/Evaluation"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "hyundai:2026_N2_347",
+      "company": "현대자동차",
+      "title": "[제조로보틱스] 휴머노이드 로봇 운영 솔루션 개발",
+      "found": "2026-09-15",
+      "actual_posted_date": null,
+      "application_start": null,
+      "due": "2026-10-13",
+      "live_open_status": "detail_readable_deadline_future",
+      "official_url": "https://talent.hyundai.com/apply/applyView.hc?recuYy=2026&recuType=N2&recuCls=347",
+      "verification_method": "existing company_jobs.detail read-only public endpoint",
+      "supported_skills_summary": {
+        "purpose": "공장 휴머노이드 로봇/현장 미들웨어 및 예외 대응 운영",
+        "required": [
+          "이공계 학사 이상",
+          "로봇/자동화 미들웨어·플랫폼 개발 또는 통신 프로토콜 표준화 5년 이상",
+          "비즈니스 영어",
+          "소켓/비동기 통신/메시지큐 이해",
+          "로봇 HW/SW 기술 소통"
+        ],
+        "preferred": [
+          "LLM/생성형AI 에이전트/자동화 workflow",
+          "실시간 작업할당/우선순위 알고리즘"
+        ],
+        "tasks": [
+          "실패/예외 원인 판단·대안",
+          "작업 재할당/우선순위 오케스트레이션",
+          "통신 단절/예외 통합검증"
+        ]
+      },
+      "evidence_scope": "adjacent_robotics_role"
+    },
+    {
+      "job_id": "autoever:210269",
+      "company": "현대오토에버",
+      "title": "[Tech] AI Engineer - AI Agent 엔지니어",
+      "found": "2026-09-15",
+      "actual_posted_date": null,
+      "application_start": null,
+      "due": "2026-10-29",
+      "live_open_status": "detail_readable_deadline_future",
+      "official_url": "https://career.hyundai-autoever.com/ko/o/210269",
+      "verification_method": "existing company_jobs.detail read-only public endpoint",
+      "supported_skills_summary": {
+        "purpose": "그룹 서비스/제품의 업무자동화 AI 공통기술",
+        "required": [
+          "AI Agent 아키텍처/Orchestration",
+          "Agentic AI 라이브러리/서비스/플랫폼",
+          "도구·리소스·시스템 연계",
+          "MLOps 파이프라인/서비스 연계"
+        ],
+        "preferred": [
+          "A2A/MCP 프로토콜 개발",
+          "지식그래프/온톨로지",
+          "클라우드 AI 서비스 개발/배포"
+        ],
+        "tasks": [
+          "MCP 채널 연동",
+          "AI API/마이크로서비스/성능튜닝"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "remember:341597",
+      "company": "쿠팡(주)",
+      "title": "AI Security Architect",
+      "found": "2026-09-23",
+      "actual_posted_date": null,
+      "application_start": null,
+      "due": "상시",
+      "live_open_status": "official_page_readable_no_deadline_or_apply_state_verified",
+      "official_url": "https://www.coupang.jobs/kr/jobs/8224844/staff-ai-security-architect/",
+      "official_notice_id": "8224844",
+      "verification_method": "web official page; headline Staff AI Security Architect",
+      "supported_skills_summary": {
+        "purpose": "AI/ML 전사 보안 reference architecture·위협모델·거버넌스",
+        "required": [
+          "기술경력 6년 이상",
+          "AI/ML 및 AWS/GCP/Azure 아키텍처",
+          "Prompt Injection/Model Theft/Data Poisoning/OWASP LLM",
+          "분산서비스 위협모델/보안표준"
+        ],
+        "preferred": [
+          "규제/개인정보보호",
+          "Confidential Computing/Differential Privacy/PII",
+          "Zero Trust"
+        ],
+        "tasks": [
+          "LLM Guardrail/agentic system/privacy",
+          "리스크 지표/고위험 설계감사",
+          "보안 프레임워크/자동 compliance"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role",
+      "official_updated_date": "2026-10-01"
+    },
+    {
+      "job_id": "samsung:23284_14005",
+      "company": "삼성생명",
+      "title": "데이터 엔지니어 — 경력사원 채용(AX/PI, 경영지원, CISO)",
+      "found": "2026-10-02",
+      "actual_posted_date": null,
+      "application_start": "202610020900",
+      "due": "2026-10-12",
+      "live_open_status": "official_isOpened_1",
+      "official_url": "https://www.samsungcareers.com/hr/?no=23284",
+      "verification_method": "existing company_jobs.detail read-only public endpoint",
+      "supported_skills_summary": {
+        "purpose": "AI 응답품질과 데이터·지식 신뢰성 관리",
+        "required": [
+          "데이터 플랫폼/엔지니어링 5년 이상",
+          "AI Agent/생성형AI 데이터품질·검색·답변정확도 개선",
+          "메타데이터 관리",
+          "VectorDB/검색/AI연계"
+        ],
+        "preferred": [
+          "AI/데이터 플랫폼 구축·운영",
+          "대규모 데이터 분석·운영"
+        ],
+        "tasks": [
+          "Agent 오답 분석/품질 검증",
+          "검증기준/운영 프로세스",
+          "지식 Product 개선"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "samsung:23284_14006",
+      "company": "삼성생명",
+      "title": "솔루션 아키텍트 — 경력사원 채용(AX/PI, 경영지원, CISO)",
+      "found": "2026-10-02",
+      "actual_posted_date": null,
+      "application_start": "202610020900",
+      "due": "2026-10-12",
+      "live_open_status": "official_isOpened_1",
+      "official_url": "https://www.samsungcareers.com/hr/?no=23284",
+      "verification_method": "existing company_jobs.detail read-only public endpoint",
+      "supported_skills_summary": {
+        "purpose": "금융 처리계와 AI서비스 안전 연계 및 접근통제",
+        "required": [
+          "API 시스템연계 설계·구축 5년 이상",
+          "AI Agent/LLM/MCP 연계 이해",
+          "OAuth 2.0/IAM/RBAC 설계"
+        ],
+        "preferred": [
+          "MCP 서버 개발·운영/AI Agent 플랫폼",
+          "금융권 보안규제",
+          "Kubernetes/클라우드"
+        ],
+        "tasks": [
+          "API Gateway/APIM/MCP",
+          "사용승인/권한정책",
+          "호출량 제어/장애추적/보안감사"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "samsung:23284_14008",
+      "company": "삼성생명",
+      "title": "AI 서비스 개발 — 경력사원 채용(AX/PI, 경영지원, CISO)",
+      "found": "2026-10-02",
+      "actual_posted_date": null,
+      "application_start": "202610020900",
+      "due": "2026-10-12",
+      "live_open_status": "official_isOpened_1",
+      "official_url": "https://www.samsungcareers.com/hr/?no=23284",
+      "verification_method": "existing company_jobs.detail read-only public endpoint",
+      "supported_skills_summary": {
+        "purpose": "금융 특화 AI workflow/서비스 솔루션 개발·운영",
+        "required": [
+          "Flask/FastAPI/Django Python backend 5년 이상",
+          "Vue.js",
+          "MongoDB/Redis",
+          "LangChain/LangGraph 멀티에이전트",
+          "데이터셋/Context Engineering"
+        ],
+        "preferred": [
+          "AI workflow 기획/설계",
+          "WebSocket",
+          "대규모 LLM서비스"
+        ],
+        "tasks": [
+          "workflow 설계/구축",
+          "AI서비스 패키징/모니터링"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "devrunner:2229",
+      "company": "네이버",
+      "title": "[NAVER Cloud] AI Security 분야 채용 (경력)",
+      "found": "2026-10-06",
+      "actual_posted_date": null,
+      "application_start": "2026-09-30",
+      "due": "2026-10-14",
+      "live_open_status": "official_page_readable_future_deadline",
+      "official_url": "https://recruit.navercorp.com/rcrt/view.do?annoId=30005520",
+      "official_notice_id": "30005520",
+      "verification_method": "direct read-only official HTML",
+      "supported_skills_summary": {
+        "purpose": "AI for Security / Security for AI 5개 직무 채용 묶음",
+        "required_by_role": {
+          "RL환경 엔지니어": [
+            "Sandbox",
+            "Verifier",
+            "IaC",
+            "Python",
+            "3년 이상"
+          ],
+          "Offensive/Defensive AI 보안": [
+            "AI Agent",
+            "Orchestration",
+            "Tool Calling",
+            "Python",
+            "3년 이상"
+          ],
+          "Security for AI": [
+            "AI Red Teaming",
+            "LLM 보안",
+            "AI Safety",
+            "Guardrail",
+            "3년 이상"
+          ],
+          "FDE": [
+            "온프레미스/망분리",
+            "보안성검토",
+            "연동설계",
+            "PoC",
+            "3년 이상"
+          ],
+          "AI Security 학습데이터 엔지니어": [
+            "보안 데이터 큐레이션",
+            "라벨링",
+            "위협 분석",
+            "Offensive/Defensive Security",
+            "3년 이상"
+          ]
+        },
+        "required_note": "한 사람이 모두 갖춰야 하는 필수요건으로 합치지 않음"
+      },
+      "evidence_scope": "relevant_agent_role"
+    },
+    {
+      "job_id": "devrunner:2228",
+      "company": "네이버",
+      "title": "[NAVER] AI 에이전트 엔지니어 (경력)",
+      "found": "2026-10-06",
+      "actual_posted_date": null,
+      "application_start": "2026-09-30",
+      "due": "2026-10-12",
+      "live_open_status": "official_page_readable_future_deadline",
+      "official_url": "https://recruit.navercorp.com/rcrt/view.do?annoId=30005508",
+      "official_notice_id": "30005508",
+      "verification_method": "direct read-only official HTML",
+      "supported_skills_summary": {
+        "purpose": "의료 AI 에이전트 연구·평가·상용 서비스",
+        "required": [
+          "PyTorch/Python",
+          "LangChain/LangGraph/AutoGen 1종 이상",
+          "planning/tool-calling/memory",
+          "RAG/벡터DB/embedding",
+          "정량지표/자동 eval harness/데이터셋",
+          "Git/PR/CI/CD",
+          "논문분석/재현",
+          "Codex/ClaudeCode 개발 workflow"
+        ],
+        "preferred": [
+          "LangSmith/Langfuse/W&B observability",
+          "multi-agent",
+          "RL/alignment/safety",
+          "Docker/Kubernetes",
+          "production 운영",
+          "GraphRAG"
+        ],
+        "tasks": [
+          "workflow orchestration/상태관리",
+          "task-success/tool-call accuracy/hallucination 지표",
+          "latency/cost/reliability",
+          "의료 auditability"
+        ]
+      },
+      "evidence_scope": "relevant_agent_role"
+    }
+  ],
+  "read_only_execution": {
+    "remote_writes": false,
+    "public_job_jsonl_only": true,
+    "private_candidate_application_docs_accessed": false,
+    "paid_model_calls_or_collect_calls": false,
+    "database_format": "JSONL, not SQLite",
+    "rrsi_recall": "provider=codex, no eligible lessons"
+  }
+}

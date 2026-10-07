@@ -32,55 +32,41 @@ MCP·Tool 위협 M1–M9 전체를 데이터 흐름 단위로 집행한다. 각 
 
 ## 빠른 시작
 
+저장소 루트에서 Python 3.11+ 가상환경을 만들고 adapter를 설치한 다음 예제를 실행한다.
+
 ```bash
-# 별도 설치 없이 테스트 (zero-dependency reference core)
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-
-# 고객 지원 Agent: 두 Tool을 모두 guard한 Claude Tool Runner 실행
-PYTHONPATH=src python3 -m examples.support_agent.run "Where is order 1001? Email the customer."
-
-# 환불 Agent: 별도 manifest를 쓰는 두 번째 프로젝트, 동일한 adapter — 세 Tool을 모두 guard
-PYTHONPATH=src python3 -m examples.refund_agent.run "Refund order 2001 and let the customer know."
-
-# 안전한 email Tool 호출 예제
-PYTHONPATH=src python3 examples/secure_email.py
-
-# Architecture → MCP transport → Ledger 수직 슬라이스
-PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
-
-# Trust Boundary → A2A Broker → Task orchestration → Ledger 수직 슬라이스
-PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
-
-# 외부 부작용 없는 fake-data 플랫폼 E2E
-.venv/bin/python -m pytest -q tests/test_platform_e2e.py
-
-# test-only adapter로 실제 Run Control HTTP create/approve/cancel E2E
-.venv/bin/python -m pytest -q tests/test_run_control.py
-
-# 보안 아키텍처 lint·compile
-PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture compile examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture compile --shadow examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture runtime-diff examples/secure_multi_agent_architecture.json examples/runtime_drift_otlp.json
-
-# 박스 기반 Security Architecture Studio
-cd studio
-npm install
-npm run dev
-
-# editable install을 원하는 경우
-python3 -m pip install -e .
-
-# PostgreSQL adapter까지 설치하는 경우
-python3 -m pip install -e '.[postgres]'
-
-# 지원 Agent 예제가 쓰는 Anthropic Tool Runner adapter 포함
-python3 -m pip install -e '.[anthropic]'
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[anthropic,jwt]'
+python examples/secure_email.py
+interlock architecture lint examples/secure_multi_agent_architecture.json
+interlock architecture compile examples/secure_multi_agent_architecture.json --shadow > bundle.json
 ```
 
-지원 Agent 예제는 Claude API를 호출하며 자격 증명은 Anthropic SDK가 처리한다(`ANTHROPIC_API_KEY`).
-자격 증명이 없으면 `tests/test_example_support_agent.py`가 `examples/support_agent/recorded/`의
-녹화된 turn을 재생해 동일한 `build()`와 동일한 guard된 Tool 경로를 그대로 검증한다.
+로컬 email 예제는 외부 부작용이 없다. 실제 Claude Tool Runner를 실행하려면 `ANTHROPIC_API_KEY`를 설정한 뒤 실행한다.
+
+```bash
+python -m examples.support_agent.run "Where is order 1001? Email the customer."
+```
+
+실행 시 Anthropic API를 호출한다. API 키 없이 녹화된 호출을 재생하려면 같은 저장소 루트에서 시험을 실행한다.
+
+```bash
+python -m pip install pytest
+python -m pytest -q tests/test_example_support_agent.py tests/test_platform_e2e.py tests/test_run_control.py
+```
+
+Studio는 저장소 루트에서 별도 터미널을 열어 실행한다(Node 22.13+).
+
+```bash
+cd studio
+npm ci
+npm run dev
+```
+
+Studio에서 설정만으로 만들고 실행하려면 [Studio builder 시작 가이드](docs/studio-builder.ko.md)를 따른다. `interlock serve --data-dir PATH --origin http://localhost:3102`로 로컬 host를 준비하면 JSON 변환, 고정 HTTPS JSON 요청, Anthropic 도구 사용 agent를 구성하고 컴파일·브라우저 서명·배포·실행할 수 있다. Model task는 명시적으로 선택한 여러 도구를 사용할 수 있으며, 임의의 업무 코드나 다른 protocol에는 별도 adapter가 필요하다. 여러 실행 서버는 [원격 worker 운영 가이드](docs/distributed-workers.ko.md)에 따라 `--dispatch remote`와 `interlock worker`로 연결한다.
+
+기존 Python agent를 보호하려면 [SDK 도입](docs/16-adding-interlock-to-an-agent.ko.md), 직접 작성한 업무 도구와 PostgreSQL을 연결하려면 [managed support host](docs/managed-support-host.md)를 따른다.
 
 ## 제품 구성
 
@@ -139,7 +125,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 
 ## 현재 구현
 
-문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. Core는 외부 런타임 의존성이 없고 PostgreSQL adapter만 optional `postgres` extra를 사용한다.
+문서의 최초 구현 순서에 맞춘 Python 3.11 reference core가 포함되어 있다. Core는 외부 런타임 의존성이 없고 adapter는 optional `postgres`, `anthropic`, `jwt` extra를 사용한다.
 
 **SDK·Gateway 정책 코어**
 
@@ -147,7 +133,7 @@ InterlockGraph  설계·실행·공격 경로 그래프
 - MCP Tool 정의 canonical/raw digest와 `DISCOVERED` → `APPROVED` → `ACTIVE` 상태 전이
 - definition drift, metadata instruction, cross-server reference 격리
 - 호출 인수 schema, 데이터 등급, secret, 목적지, token binding, 선언 부작용 정책
-- hash·목적지에 결합된 승인과 hash-bound connector 실행 — gateway와 SDK 모두 `ApprovalStore`를 공유하므로 `Interlock.grant_approval(...)` 또는 `MCPToolGateway.grant_approval`로 승인을 발급하고, Tool Runner 어댑터의 `approve` hook으로도 도달 가능. [docs/02 §4.2](docs/02-developer-framework-design.ko.md) 참고
+- Gateway와 SDK의 일회성 호출 승인: tenant, source/target, definition revision, 설치된 policy, intent, 정확한 인자에 결합하고 실행 직전에 원자적으로 소비한다. [docs/02 §4.2](docs/02-developer-framework-design.ko.md) 참고.
 - 집행점 셋 전부의 뒤에 있는 단일 `Check` 표(check 29개)와 각 집행점이 선택하는 `Profile`: MCP gateway 21, SDK 19, A2A broker 17. **공유되는 것은 메커니즘이지 커버리지가 아니다** — broker는 gateway와 check 9개만 공유하며 egress·용량·taint 통제가 없다
 - `OBSERVE`, `SHADOW`, `ENFORCE` 모드
 - Tool result secret 정제, `UNTRUSTED_TOOL_RESULT` taint, schema 격리
@@ -198,13 +184,13 @@ InterlockGraph  설계·실행·공격 경로 그래프
 
 **도입 계층(Adoption layer)**
 
-- Anthropic Tool Runner adapter(`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`), 공유 승인 저장소에 도달하는 `approve=` hook
+- Anthropic Tool Runner adapter(`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`), 공유 승인 구현에 도달하는 `approve=` hook
 - 인수와 MCP tool annotation에서 도출한 intent를 선언과 비교 판정(`INTERLOCK-INTENT-ARGUMENT-MISMATCH`)
 - `interlock verify`: 프레임워크 fixture가 아니라 프로젝트 자신의 guarded tool에 L1 시나리오 9개 실행
 - `interlock architecture skeleton`이 내는 프로젝트 모듈 계약(`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`)
 - acceptance-criteria 문법과 task별 결과 3종(`executed`/`goalMet`/`securityMet`)
 - 배포 모드 단일화: 저작된 manifest가 아니라 배포 기록의 mode가 실행을 지배
-- SDK가 gateway의 실행 후 처리와 승인 저장소를 공유
+- SDK가 gateway의 실행 후 처리와 승인 구현을 공유
 - 지원하지 않는 JSON Schema keyword를 정의 시점에 거부
 - Studio 프로젝트: 신규/열기/저장, 편집 가능한 id/version, manifest import
 
@@ -249,4 +235,10 @@ InterlockGraph  설계·실행·공격 경로 그래프
 
 프로덕션 통합으로 추가된 것: persistent PostgreSQL DefinitionRegistry와 분산 Session/OAuth/Config store(RLS·migration 0002/0003), macOS Seatbelt·Linux bwrap seccomp sandbox(live 집행 시험), 실 소켓 egress backend의 DNS·IP pinning, Ed25519 publisher·Studio 승인 서명, Langfuse/LangSmith trace 어댑터, append-only WORM audit store, PostgreSQL live CI와 GitHub Actions. 제품 폐쇄 루프에는 tenant+interaction 전체 lifecycle 기반 보안 통계(Python·Studio Unicode golden 파리티), `GET /v1/statistics`, manifest→SDK skeleton·보안테스트, 공개키 검증 기반 2인 승격·rollback Control Plane, Studio 통계·배포 뷰와 read-only Live Attach가 포함된다.
 
-아직 배포되지 않은 것은 외부 연동 작업이 아니다: LangGraph adapter, Claude Agent SDK adapter, sidecar proxy, server-side MCP connector interception(API의 `mcp_servers`는 Anthropic 쪽에서 tool을 실행해 가로챌 수 없으므로 범위 밖), LLM-judge acceptance evaluator(문법은 구조적 평가만 함), [Control Coverage Statistics](docs/specs/2026-07-27-control-coverage-statistics.md)의 열린 질문으로 남아 있는 `BYPASSED` 의미론, PyPI 업로드, 그리고 여전히 `maxExportRecords`/`maxExportBytes`/`secretAction`과 부작용 action을 누락하는 manifest 파서(`architecture._parse_edge`). 이를 넘어서면 진짜 외부 연동 작업(Sigstore/Rekor·KMS/HSM·IdP·Secret Store, 실 egress sidecar와 S3 Object-Lock, OTLP gRPC·Collector·Incident 서비스, PostgreSQL HA·분산 rate limit·TLS, 원격 Git host PR 리뷰·배포, DPoP/mTLS·JWKS rotation·운영 consent/refresh-token)이 남는다. 자세한 계약 추적과 분류는 [06 구현 상태](docs/06-implementation-status.ko.md)를 따른다.
+아직 배포되지 않은 것은 외부 연동 작업이 아니다: LangGraph adapter, Claude Agent SDK adapter, sidecar proxy, server-side MCP connector interception(API의 `mcp_servers`는 Anthropic 쪽에서 tool을 실행해 가로챌 수 없으므로 범위 밖), LLM-judge acceptance evaluator(문법은 구조적 평가만 함), [Control Coverage Statistics](docs/specs/2026-07-27-control-coverage-statistics.md)의 열린 질문으로 남아 있는 `BYPASSED` 의미론, PyPI 업로드. 이를 넘어서면 진짜 외부 연동 작업(Sigstore/Rekor·KMS/HSM·IdP·Secret Store, 실 egress sidecar와 S3 Object-Lock, OTLP gRPC·Collector·Incident 서비스, PostgreSQL HA·분산 rate limit·TLS, 원격 Git host PR 리뷰·배포, DPoP/mTLS·JWKS rotation·운영 consent/refresh-token)이 남는다. 자세한 계약 추적과 분류는 [06 구현 상태](docs/06-implementation-status.ko.md)를 따른다.
+
+## 운영 계약
+
+Managed host는 전용 배포 owner와 scheduler 하나를 둔다. Tenant별 run/ledger API가 공유 SaaS tenant별 독립 배포를 제공하지는 않는다. SQLite run snapshot은 원래 bundle과 workflow 승인을 보존한다. 재시작 시 진행 중인 RUNNING 작업은 부작용 재실행 없이 `RUN-INTERRUPTED`로 중단되고, 대기·준비 작업은 명시적으로 resume한다. Terminal run은 직접 prune할 때까지 조회할 수 있다.
+
+PostgreSQL Ledger는 이벤트 증거를 영속화한다. Gateway 호출 승인·결과·멱등 cache는 process-local이다. 임의의 in-process adapter timeout은 외부 동작을 강제 중단하거나 되돌리지 못하며 취소는 협력적이다. 저작된 control, 설치된 classification·export·provenance hook, 관측된 판정은 서로 다른 증거다. 자세한 경계는 [구현 상태](docs/06-implementation-status.ko.md)와 [managed host](docs/managed-support-host.md)를 참고한다.

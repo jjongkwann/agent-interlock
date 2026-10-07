@@ -13,6 +13,17 @@ This is the ten-minute path from an existing tool-using agent to one whose every
 judged, recorded and verifiable. It uses the Anthropic Python SDK Tool Runner; the agent loop
 stays the SDK's, the tools stay yours, and Agent Interlock sits between the two.
 
+From the repository root, install into a Python 3.11+ environment first:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[anthropic,jwt]'
+python examples/secure_email.py
+```
+
+This page's `build()` reads a local manifest. It is the SDK adoption path and does not verify a promoted deployment. For reviewed deployment execution, use `load_promoted_architecture` and `build_managed_tools` as shown in the [managed support host](managed-support-host.md).
+
 ## 1. What you declare
 
 Three things, and only three:
@@ -78,12 +89,15 @@ schema keyword). The model never sees such a tool.
 
 ## 3. The agent loop
 
+Set `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` for the API account and model you intend to use.
+
 ```python
+import os
 import anthropic
 gateway, tools = build()
 client = anthropic.Anthropic()
 runner = client.beta.messages.tool_runner(
-    model="claude-opus-5", max_tokens=16000, tools=list(tools),
+    model=os.environ["ANTHROPIC_MODEL"], max_tokens=16000, tools=list(tools),
     messages=[{"role": "user", "content": "Where is order 1001? Email the customer."}],
 )
 final = runner.until_done()
@@ -95,14 +109,7 @@ verdict permits, and returns the sanitized result. A refused call reaches the mo
 `is_error` tool result carrying the reason codes, so the model can explain or retry within
 policy. Nothing is raised into the loop.
 
-**Approvals.** An edge with `externalWriteRequiresApproval: true` holds the first call with
-`INTERLOCK-APPROVAL-REQUIRED`. Pass `guard_tools(..., approve=...)` a function that receives the
-exact arguments the model chose and returns the approver's identity, or `None` to refuse; a grant
-is bound to those arguments and destinations and the call is judged again, so an approval cannot
-carry a denied destination through. An approval granted ahead of time with
-`gateway.grant_approval` is found by the same exact-arguments match. The hold stays in the ledger
-as an evaluation with no action, which is how the statistics tell "waited for a person" from
-"blocked".
+**Approvals.** An edge with `externalWriteRequiresApproval: true` holds an external write with `INTERLOCK-APPROVAL-REQUIRED`. Pass `guard_tools(..., approve=...)` a callback returning the reviewer identity, or `None` to refuse. The adapter binds the grant to tenant, source/target, active revision, installed policy, full derived intent and exact arguments, then evaluates again. `gateway.grant_approval` takes `tenant_id`, `source_actor_id`, `revision_id`, `intent`, `arguments` and `approver`; it resolves the target and installed policy from that revision. An arguments-only grant is not valid. A grant is consumed atomically before execution and cannot authorize another operation, even if the first execution fails. A denied destination remains denied. Evaluation does not consume the grant; the hold remains in the ledger as evidence of waiting for a person.
 
 Every step is in `gateway.ledger`: `INTERACTION_REQUESTED`, `DATA_FLOW_OBSERVED`,
 `CONTROL_EVALUATED` (with the coverage of every check), `ACTION_EXECUTED`,
@@ -140,3 +147,11 @@ exercised. Run it in CI next to your own tests.
 Your tool functions, your prompt, your loop. What Interlock owns is the judgment on each call and
 the evidence of it. When the manifest changes, re-run `lint`, regenerate or edit the bindings,
 and re-run `verify`.
+
+## Binding and operating limits
+
+`ToolBinding` accepts `classify`, `estimate_export` and `result_provenance` hooks. The application supplies these from trusted data and records their installation; a control drawn in the manifest is only authored intent. Installed hooks and an observed `CONTROL_EVALUATED` event are separate evidence. The managed helper requires all three hooks and verifies each tool's pinned definition digest against the promoted bundle. A local binding without classification uses the conservative D3 input default; missing result provenance remains `UNCLASSIFIED`.
+
+The skeleton also emits `<architecture>_edge_coverage.json`: static TOOL invocations from its first source are `WIRED`; other sources, dynamic selectors and other relationships are `MANUAL` with reasons. Complete each handler before claiming runtime coverage.
+
+Use PostgreSQL Ledger for durable event evidence. Gateway invocation approvals and idempotency results remain process-local; durable ledger events do not make tool execution exactly-once across restarts. Workflow cancellation is cooperative, and an in-process adapter's timeout cannot undo or forcibly stop an external side effect. The [managed host](managed-support-host.md) documents a dedicated deployment owner, restart recovery and explicit resume; it is not a shared multi-tenant deployment service.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { buildManifestPayload, emptyOrchestration, parseManifestPayload } from "../app/manifest.ts";
+import { buildManifestPayload, emptyOrchestration, parseManifestPayload } from "../app/architecture-model.ts";
 
 // A representative Studio graph: two zones, a directional boundary, a dynamic delegation edge
 // (which round-trips through targetSelector.sameTenant), a static tool edge with two controls of
@@ -172,4 +172,39 @@ test("rejects JSON that is not an Architecture manifest", () => {
   const result = parseManifestPayload({ kind: "Deployment", spec: {} });
   assert.equal(result.ok, false);
   assert.match(result.error, /Architecture manifest/);
+});
+
+
+test("import preserves the complete policy, selector, node and control contract while edits win", () => {
+  const exported = buildManifestPayload(sampleSnapshot(), sampleProject);
+  const node = exported.spec.nodes[0];
+  node.failureMode = "DEGRADE_READ_ONLY";
+  node.controls = [{ id: "node-gate", objective: "PREVENT", timing: "ADMISSION", enforcementPoint: "SDK", assurance: "ENFORCED", description: "Check admission" }];
+  const edge = exported.spec.edges[0];
+  edge.controls[0].description = "Delegation identity check";
+  edge.targetSelector = { types: ["AGENT", "SUBAGENT"], requiredCapabilities: ["CUSTOM"], idPattern: "worker.[!0-9]*?", sameTenant: false };
+  Object.assign(edge.policy, { id: "reviewed-policy", version: "2.8", deniedDataClasses: ["D1"], requireActiveDefinition: false, requireDigestPin: false, allowCrossServerReferences: true, requireExplicitDestination: false, newDestinationAction: "BLOCK", tokenPassthrough: true, requireAudience: false, requireResource: false, requireActorBinding: false, decisionTtlSeconds: 80 });
+  const parsed = parseManifestPayload(exported);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(buildManifestPayload(parsed.snapshot, parsed.project), exported);
+  parsed.snapshot.edges[0].mode = "OBSERVE";
+  parsed.snapshot.edges[0].sameTenant = true;
+  const edited = buildManifestPayload(parsed.snapshot, parsed.project).spec.edges[0];
+  assert.equal(edited.policy.mode, "OBSERVE");
+  assert.equal(edited.targetSelector.sameTenant, true);
+  assert.equal(edited.targetSelector.idPattern, edge.targetSelector.idPattern);
+});
+
+test("omitted imported policy settings keep Python defaults and do not infer write access", () => {
+  const exported = buildManifestPayload(sampleSnapshot(), sampleProject);
+  exported.spec.edges[0].policy = {};
+  delete exported.spec.nodes[2].sideEffects;
+  const parsed = parseManifestPayload(exported);
+  assert.equal(parsed.ok, true);
+  const rebuilt = buildManifestPayload(parsed.snapshot, parsed.project);
+  assert.deepEqual(rebuilt.spec.nodes[2].sideEffects, []);
+  assert.deepEqual(rebuilt.spec.edges[0].policy.allowedDataClasses, ["D2", "D3", "D7"]);
+  assert.deepEqual(rebuilt.spec.edges[0].policy.deniedDataClasses, ["D5", "D8"]);
+  assert.equal(rebuilt.spec.edges[0].policy.externalWriteRequiresApproval, true);
+  assert.equal(rebuilt.spec.edges[0].policy.maxDelegationDepth, 1);
 });

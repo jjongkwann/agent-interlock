@@ -65,6 +65,7 @@ def activate_bundle(store: GitBundleStore) -> DeploymentBundle:
     approvals = (
         sign_deployment_approval(
             bundle,
+            target_id=store.target_id, tenant_id=store.tenant_id,
             from_digest=None,
             to_mode="ENFORCE",
             approver_id="run-security-reviewer",
@@ -73,6 +74,7 @@ def activate_bundle(store: GitBundleStore) -> DeploymentBundle:
         ),
         sign_deployment_approval(
             bundle,
+            target_id=store.target_id, tenant_id=store.tenant_id,
             from_digest=None,
             to_mode="ENFORCE",
             approver_id="run-platform-reviewer",
@@ -94,7 +96,7 @@ class RunningRunControl:
         allowed_origins: frozenset[str] = frozenset(),
         ledger: InMemoryLedger | None = None,
     ) -> None:
-        self.store = GitBundleStore(root)
+        self.store = GitBundleStore(root, tenant_id="tenant-run-a")
         if activate:
             activate_bundle(self.store)
         scopes = frozenset(
@@ -172,6 +174,90 @@ class RunningRunControl:
 
 @unittest.skipUnless(CRYPTO_AVAILABLE, "Ed25519 is required for deployment-bound Run Control tests")
 class RunControlAPITests(unittest.TestCase):
+    def test_dynamic_approval_requires_current_call_and_does_not_exhaust_retries(self):
+        from dataclasses import replace
+
+        from agent_interlock.orchestration import TaskExecutionHeld
+
+        calls = []
+
+        def execute(value):
+            run = plane.run_service.run_store.get(tenant_id=value.tenant_id, run_id=value.run_id)
+            pending = run.tasks[value.task.id].pending_call
+            if value.task.id == "task.research":
+                if not pending or f"{value.task.id}:{pending['requestId']}" not in run.approvals:
+                    raise TaskExecutionHeld(
+                        {"arguments": {"query": "review this exact input"}, "definitionDigest": "fixture"}
+                    )
+                calls.append(value.attempt)
+                return TaskExecutionResult(output={"evidenceIds": ["fixture"], "artifacts": [{}]})
+            return TaskExecutionResult(output={"receiptId": "fixture", "status": "TEST_ONLY"})
+
+        with (
+            tempfile.TemporaryDirectory() as root,
+            RunningRunControl(
+                root, lambda _: {transport: CallableTaskAdapter(execute) for transport in TaskTransport}
+            ) as plane,
+        ):
+            _, created = plane.request("POST", "/v1/runs", body={"input": {}})
+            run_id = created["run"]["id"]
+            held = plane.wait_for_state(run_id, "WAITING_APPROVAL")
+            pending = held["tasks"]["task.research"]["pendingCall"]
+            path = f"/v1/runs/{run_id}/tasks/task.research/approve"
+            for body in ({}, {"requestId": "stale"}, []):
+                status, _ = plane.request("POST", path, body=body)
+                self.assertIn(status, (400, 409))
+            self.assertEqual(calls, [])
+            stored = plane.run_service.run_store.get(tenant_id="tenant-run-a", run_id=run_id)
+            overlap = "task.research:" + pending["requestId"]
+            plane.run_service.run_store.save(
+                replace(stored, tasks={**stored.tasks, overlap: stored.tasks["task.research"]})
+            )
+            status, refused = plane.request("POST", path, body={"requestId": pending["requestId"]})
+            self.assertEqual(status, 409)
+            self.assertEqual(refused["error"]["code"], "RUN-APPROVAL-SCOPE-COLLISION")
+            plane.run_service.run_store.save(stored)
+            status, _ = plane.request("POST", path, body={"requestId": pending["requestId"]})
+            self.assertEqual(status, 202)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                _, state = plane.request("GET", f"/v1/runs/{run_id}")
+                if state["run"]["tasks"]["task.research"]["state"] == "COMPLETED":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(calls, [1])
+            self.assertIsNone(state["run"]["tasks"]["task.research"]["pendingCall"])
+            events = plane.run_service.events(tenant_id="tenant-run-a", run_id=run_id)
+            self.assertEqual(
+                [e["payload"]["requestId"] for e in events if e["event_type"] == "WORKFLOW_TASK_APPROVED"],
+                [pending["requestId"]],
+            )
+
+    def test_cancel_during_failure_prevents_another_adapter_attempt(self) -> None:
+        calls = []
+
+        def execute(value):
+            calls.append(value.attempt)
+            plane.run_service.cancel(tenant_id=value.tenant_id, run_id=value.run_id)
+            raise RuntimeError("adapter failed after cancellation")
+
+        with (
+            tempfile.TemporaryDirectory() as root,
+            RunningRunControl(
+                root,
+                lambda _: {transport: CallableTaskAdapter(execute) for transport in TaskTransport},
+            ) as plane,
+        ):
+            run = plane.run_service.create(tenant_id="tenant-run-a", workflow_input={}, run_id="cancel-retry")
+            deadline = time.monotonic() + 3
+            while not calls and time.monotonic() < deadline:
+                time.sleep(0.01)
+            worker = plane.run_service._workers.get(("tenant-run-a", run["id"]))
+            if worker:
+                worker.join(timeout=3)
+            self.assertEqual(calls, [1])
+            self.assertEqual(plane.run_service.get(tenant_id="tenant-run-a", run_id=run["id"])["state"], "CANCELED")
+
     def test_active_bundle_run_waits_for_approval_and_completes(self) -> None:
         calls = {"a2a": 0, "mcp": 0}
 
@@ -196,6 +282,10 @@ class RunControlAPITests(unittest.TestCase):
             }
 
         with tempfile.TemporaryDirectory() as root, RunningRunControl(root, adapter_provider) as plane:
+            status, runtime = plane.request("GET", "/v1/runtime/status")
+            self.assertEqual(status, 200)
+            self.assertFalse(runtime["runtimeReadiness"]["hostConfigured"])
+            self.assertIsNone(runtime["runtimeReadiness"]["ready"])
             status, body = plane.request(
                 "POST",
                 "/v1/runs",
@@ -244,9 +334,7 @@ class RunControlAPITests(unittest.TestCase):
 
     def test_scope_and_tenant_isolation_are_enforced(self) -> None:
         def adapter_provider(_compiled):  # noqa: ANN001
-            done = CallableTaskAdapter(
-                lambda _value: TaskExecutionResult(output={}, metadata={"accepted": True})
-            )
+            done = CallableTaskAdapter(lambda _value: TaskExecutionResult(output={}, metadata={"accepted": True}))
             return {TaskTransport.A2A: done, TaskTransport.MCP: done}
 
         with tempfile.TemporaryDirectory() as root, RunningRunControl(root, adapter_provider) as plane:
@@ -260,7 +348,7 @@ class RunControlAPITests(unittest.TestCase):
             status, denied = plane.request("POST", "/v1/runs", token=VIEWER_TOKEN, body={"input": {}})
             self.assertEqual((status, denied["error"]["code"]), (403, "CONTROL-SCOPE-DENIED"))
             status, hidden = plane.request("GET", f"/v1/runs/{run_id}", token=OTHER_TENANT_TOKEN)
-            self.assertEqual((status, hidden["error"]["code"]), (404, "RUN-NOT-FOUND"))
+            self.assertEqual((status, hidden["error"]["code"]), (403, "CONTROL-TENANT-DENIED"))
 
             status, other = plane.request(
                 "POST",
@@ -268,11 +356,9 @@ class RunControlAPITests(unittest.TestCase):
                 token=OTHER_TENANT_TOKEN,
                 body={"runId": run_id, "input": {}},
             )
-            self.assertEqual(status, 202)
-            self.assertEqual(other["run"]["id"], run_id)
+            self.assertEqual((status, other["error"]["code"]), (403, "CONTROL-TENANT-DENIED"))
             status, visible = plane.request("GET", f"/v1/runs/{run_id}", token=OTHER_TENANT_TOKEN)
-            self.assertEqual(status, 200)
-            self.assertEqual(visible["run"]["tenantId"], "tenant-run-b")
+            self.assertEqual((status, visible["error"]["code"]), (403, "CONTROL-TENANT-DENIED"))
 
             status, duplicate = plane.request("POST", "/v1/runs", body={"runId": run_id, "input": {}})
             self.assertEqual((status, duplicate["error"]["code"]), (409, "ORCH-RUN-DUPLICATE"))
@@ -280,22 +366,28 @@ class RunControlAPITests(unittest.TestCase):
             self.assertEqual((status, invalid["error"]["code"]), (400, "RUN-ID-INVALID"))
 
     def test_active_deployment_and_all_real_transport_adapters_are_required(self) -> None:
-        with tempfile.TemporaryDirectory() as root, RunningRunControl(
-            root,
-            lambda _compiled: {},
-            activate=False,
-        ) as plane:
+        with (
+            tempfile.TemporaryDirectory() as root,
+            RunningRunControl(
+                root,
+                lambda _compiled: {},
+                activate=False,
+            ) as plane,
+        ):
             status, body = plane.request("POST", "/v1/runs", body={"input": {}})
             self.assertEqual((status, body["error"]["code"]), (409, "RUN-ACTIVE-DEPLOYMENT-REQUIRED"))
 
-        with tempfile.TemporaryDirectory() as root, RunningRunControl(
-            root,
-            lambda _compiled: {
-                TaskTransport.A2A: CallableTaskAdapter(
-                    lambda _value: TaskExecutionResult(output={}, metadata={"accepted": True})
-                )
-            },
-        ) as plane:
+        with (
+            tempfile.TemporaryDirectory() as root,
+            RunningRunControl(
+                root,
+                lambda _compiled: {
+                    TaskTransport.A2A: CallableTaskAdapter(
+                        lambda _value: TaskExecutionResult(output={}, metadata={"accepted": True})
+                    )
+                },
+            ) as plane,
+        ):
             status, body = plane.request("POST", "/v1/runs", body={"input": {}})
             self.assertEqual((status, body["error"]["code"]), (503, "RUN-ADAPTER-MISSING"))
 
@@ -309,9 +401,7 @@ class RunControlAPITests(unittest.TestCase):
                 release.wait(timeout=2)
                 return TaskExecutionResult(output={"ignored": True}, metadata={"accepted": True})
 
-            done = CallableTaskAdapter(
-                lambda _value: TaskExecutionResult(output={}, metadata={"accepted": True})
-            )
+            done = CallableTaskAdapter(lambda _value: TaskExecutionResult(output={}, metadata={"accepted": True}))
             return {TaskTransport.A2A: CallableTaskAdapter(slow), TaskTransport.MCP: done}
 
         with tempfile.TemporaryDirectory() as root, RunningRunControl(root, adapter_provider) as plane:
@@ -356,8 +446,7 @@ class RunControlAPITests(unittest.TestCase):
             # record's mode (ENFORCE) is still what Run Control must actually enforce (D5).
             self.assertTrue(
                 all(
-                    edge["policy"]["mode"] == "SHADOW"
-                    for edge in promoted_bundle.body["architecture"]["spec"]["edges"]
+                    edge["policy"]["mode"] == "SHADOW" for edge in promoted_bundle.body["architecture"]["spec"]["edges"]
                 )
             )
 

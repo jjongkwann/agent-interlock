@@ -24,7 +24,13 @@ npm run lint
 
 `npm test` builds the Vinext application and verifies the rendered product shell and backend-compatible manifest contract.
 
+The build dependencies pin `braces` to commit `97308a01d091b211cf015314a2d0696da28a5392` from [upstream PR #78](https://github.com/micromatch/braces/pull/78), with tarball integrity recorded in `package-lock.json`. The reviewed patch limits parser and AST traversal depth to address [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm). It is not yet an upstream release. Tests exercise the installed package with deeply nested patterns and direct ASTs, as well as ordinary glob behavior. The package keeps its original name and version; version-based scanners may still flag `3.0.3`. Replace this pin with a fixed official release when available, retaining the regression tests.
+
 The `Runtime graph` and `Drift` tabs accept Interlock Ledger events or OTLP/HTTP JSON up to 5 MB. The `Statistics` tab aggregates raw Ledger events offline or reads the scoped statistics API. Imported files stay in the browser session.
+
+## Language
+
+Use the English / 한국어 selector in the header. Studio uses the browser language initially and remembers your choice in this browser. Project data, identifiers, API values, and exported manifests keep their original values.
 
 ## Projects
 
@@ -39,4 +45,4 @@ PYTHONPATH=../src python3 -m agent_interlock architecture lint ./agent-interlock
 PYTHONPATH=../src python3 -m agent_interlock architecture compile ./agent-interlock-architecture.json
 ```
 
-The `Deploy` tab talks only to an explicitly configured Control Plane. Approval private keys never enter the browser or server: approvers sign with `interlock studio approve`, while the Control Plane verifies identity-bound Ed25519 signatures using public keys. Promotion and rollback both require two distinct approvers and two distinct public keys; rollback targets must have been active previously.
+The `Deploy` tab talks only to an explicitly configured Control Plane. Approvers sign locally in the browser or with `interlock studio approve --repo <bundle-repository>`. Private keys are never sent to the server. The Control Plane verifies Ed25519 signatures bound to the approver, tenant, deployment target, bundle and active base. Promotion and rollback both require two distinct approvers and two distinct public keys; rollback targets must have been active previously.

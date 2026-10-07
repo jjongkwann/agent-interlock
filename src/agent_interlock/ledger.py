@@ -11,6 +11,8 @@ import threading
 import time
 import uuid
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -22,6 +24,17 @@ from .security import sanitize_secrets
 _SENSITIVE_KEY = re.compile(r"(?i)(authorization|password|secret|token|api[_-]?key|credential)")
 _FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_QUERY_LIMIT = 500
+_WORKFLOW_EVIDENCE: ContextVar[tuple[str, str, str, str] | None] = ContextVar("workflow_evidence", default=None)
+
+
+@contextmanager
+def workflow_evidence_scope(tenant_id: str, trace_id: str, run_id: str, task_id: str):
+    """Correlate synchronous adapter evidence without splitting the run trace."""
+    token = _WORKFLOW_EVIDENCE.set((tenant_id, trace_id, run_id, task_id))
+    try:
+        yield
+    finally:
+        _WORKFLOW_EVIDENCE.reset(token)
 
 
 class LedgerError(RuntimeError):
@@ -63,7 +76,7 @@ def redact_payload(value: Any, key: str = "") -> Any:
         return value if isinstance(value, str) and _FINGERPRINT.fullmatch(value) else "[REDACTED]"
     if key in {"secretDetected", "tokenPassthrough"}:
         return value if isinstance(value, bool) else "[REDACTED]"
-    if not isinstance(value, (Mapping, list, tuple, set, frozenset)) and _SENSITIVE_KEY.search(key):
+    if _SENSITIVE_KEY.search(key):
         return "[REDACTED]"
     if isinstance(value, Mapping):
         return {str(k): redact_payload(v, str(k)) for k, v in value.items()}
@@ -243,6 +256,9 @@ def build_event(
         raise ValueError("tenant_id, trace_id, span_id, and source_actor_id are required")
     if not isinstance(payload, Mapping):
         raise ValueError("payload must be a mapping")
+    scope = _WORKFLOW_EVIDENCE.get()
+    if scope is not None and scope[:2] == (tenant_id, trace_id):
+        payload = {**payload, "workflowRunId": scope[2], "workflowTaskId": scope[3]}
     normalized_payload = json.loads(canonical_json(redact_payload(payload)))
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     body = {

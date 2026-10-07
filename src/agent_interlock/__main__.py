@@ -7,17 +7,16 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 
 from .architecture import ArchitectureCompiler, ArchitectureGraph, FindingSeverity, compare_observed_runtime
-from .canonical import canonical_digest
-from .models import PolicyMode
 from .telemetry import import_runtime_telemetry
 
 
 def _load(path: str) -> ArchitectureGraph:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: architecture manifest must be a JSON object")
     return ArchitectureGraph.from_dict(value)
 
 
@@ -32,66 +31,12 @@ def _finding_value(finding) -> dict[str, str | None]:
     }
 
 
-def _compile_shadow(graph, compiler, findings) -> int:  # noqa: ANN001
-    """Review gate + SHADOW deploy: block on critical findings, else emit a SHADOW bundle.
+def _compile_shadow(graph) -> int:  # noqa: ANN001
+    from .studio_deploy import compile_review_bundle
 
-    Every edge policy mode is rewritten to SHADOW before compiling and before
-    ``to_manifest()``, so the bundle's ``architecture`` section and its
-    derived ``links[].mode`` are consistent, and both are covered by the
-    digest.
-    """
-    if any(item.severity == FindingSeverity.CRITICAL for item in findings):
-        print(
-            json.dumps(
-                {
-                    "architectureId": graph.id,
-                    "version": graph.version,
-                    "mode": "SHADOW",
-                    "deployable": False,
-                    "findings": [_finding_value(item) for item in findings],
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return 2
-    shadow_graph = replace(
-        graph,
-        edges=tuple(replace(edge, policy=replace(edge.policy, mode=PolicyMode.SHADOW)) for edge in graph.edges),
-    )
-    compiled = compiler.compile(shadow_graph, reject_critical=False)
-    links = [
-        {
-            "edgeId": edge.id,
-            "policyId": compiled.links[edge.id].id,
-            "source": edge.source,
-            "target": edge.target,
-            "relationship": edge.relationship,
-            "mode": compiled.links[edge.id].mode.value,
-        }
-        for edge in shadow_graph.edges
-    ]
-    body = {
-        "architectureId": shadow_graph.id,
-        "version": shadow_graph.version,
-        "actors": sorted(compiled.actors),
-        "links": links,
-        "architecture": shadow_graph.to_manifest(),
-    }
-    print(
-        json.dumps(
-            {
-                **body,
-                "mode": "SHADOW",
-                "deployable": True,
-                "bundleDigest": canonical_digest(body),
-                "findings": [_finding_value(item) for item in findings],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
-    return 0
+    result = compile_review_bundle(graph)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["deployable"] else 2
 
 
 def _studio_main(args: argparse.Namespace) -> int:
@@ -128,7 +73,7 @@ def _studio_main(args: argparse.Namespace) -> int:
     try:
         if args.action == "propose":
             bundle = DeploymentBundle.from_compile_output(json.loads(Path(args.bundle).read_text(encoding="utf-8")))
-            commit = GitBundleStore(args.repo).propose(bundle)
+            commit = GitBundleStore(args.repo, tenant_id=args.tenant).propose(bundle)
             return _emit({"bundleDigest": bundle.bundle_digest, "commit": commit})
         if args.action == "approve":
             key_hex = os.environ.get(args.key_env, "")
@@ -136,14 +81,17 @@ def _studio_main(args: argparse.Namespace) -> int:
                 print(f"approval key env {args.key_env} is empty", file=sys.stderr)
                 return 2
             bundle = DeploymentBundle.from_compile_output(json.loads(Path(args.bundle).read_text(encoding="utf-8")))
+            store = GitBundleStore(args.repo, tenant_id=args.tenant)
             from_digest = args.from_digest
-            if from_digest is None and args.repo:
-                active = GitBundleStore(args.repo).active()
+            if from_digest is None:
+                active = store.active()
                 from_digest = active["bundleDigest"] if active else None
             approval = sign_deployment_approval(
                 bundle,
                 from_digest=from_digest,
                 to_mode="ENFORCE",
+                target_id=store.target_id,
+                tenant_id=store.tenant_id,
                 approver_id=args.approver,
                 key_id=args.key_id,
                 key=bytes.fromhex(key_hex),
@@ -158,12 +106,14 @@ def _studio_main(args: argparse.Namespace) -> int:
                         bundle,
                         from_digest=from_digest,
                         to_mode="ENFORCE",
+                        target_id=store.target_id,
+                        tenant_id=store.tenant_id,
                         approver_id=args.approver,
                         key_id=args.key_id,
                     ),
                 }
             )
-        store = GitBundleStore(args.repo)
+        store = GitBundleStore(args.repo, tenant_id=args.tenant)
         if args.action in {"promote", "rollback"}:
             approvals = tuple(
                 DeploymentApproval(item["approverId"], item["keyId"], item["signature"])
@@ -217,9 +167,20 @@ def _verify_main(args) -> int:  # noqa: ANN001
     return 0 if report.passed else 1
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "serve":
+        from .local_host import main as serve
+
+        return serve(arguments[1:]) or 0
+    if arguments and arguments[0] == "worker":
+        from .remote_worker import main as worker
+
+        return worker(arguments[1:]) or 0
     parser = argparse.ArgumentParser(prog="interlock")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("serve", help="start the local Studio runtime and private setup")
+    commands.add_parser("worker", help="run an authenticated remote workflow worker")
     architecture = commands.add_parser("architecture", help="work with Architecture manifests")
     actions = architecture.add_subparsers(dest="action", required=True)
     for name in ("lint", "graph"):
@@ -246,7 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     propose.add_argument("--repo", required=True)
     approve = studio_actions.add_parser("approve")
     approve.add_argument("bundle")
-    approve.add_argument("--repo")
+    approve.add_argument("--repo", required=True, help="deployment store whose target and tenant are being approved")
     approve.add_argument("--from-digest")
     approve.add_argument("--approver", required=True)
     approve.add_argument("--key-id", required=True)
@@ -263,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     rollback.add_argument("--trusted-keys", required=True)
     status = studio_actions.add_parser("status")
     status.add_argument("--repo", required=True)
+    for action in (propose, approve, promote, rollback, status):
+        action.add_argument("--tenant", help="bind a new store or verify the existing store's tenant")
 
     verify = commands.add_parser(
         "verify",
@@ -286,18 +249,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     compiler = ArchitectureCompiler()
     findings = compiler.linter.lint(graph)
     if args.action == "skeleton":
-        from .scaffold import generate_security_tests, generate_skeleton, python_identifier
+        from .scaffold import edge_coverage, generate_security_tests, generate_skeleton, python_identifier
 
         base = python_identifier(graph.id)
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         skeleton_path = out_dir / f"{base}_skeleton.py"
         tests_path = out_dir / f"test_{base}_security.py"
+        coverage_path = out_dir / f"{base}_edge_coverage.json"
+        coverage = edge_coverage(graph)
+        coverage_path.write_text(json.dumps(coverage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         skeleton_path.write_text(generate_skeleton(graph, Path(args.manifest).resolve()), encoding="utf-8")
         tests_path.write_text(generate_security_tests(graph, f"{base}_skeleton"), encoding="utf-8")
         print(
             json.dumps(
-                {"architectureId": graph.id, "written": [str(skeleton_path), str(tests_path)]},
+                {
+                    "architectureId": graph.id,
+                    "written": [str(skeleton_path), str(tests_path), str(coverage_path)],
+                    "edgeCoverage": coverage,
+                },
                 ensure_ascii=False,
                 indent=2,
             )
@@ -358,7 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if getattr(args, "shadow", False):
-        return _compile_shadow(graph, compiler, findings)
+        return _compile_shadow(graph)
 
     compiled = compiler.compile(graph)
     print(
@@ -386,6 +356,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "INTERLOCK-CLI-INPUT-INVALID",
+                        "message": str(error),
+                        "remediation": "Check paths, JSON and manifest fields; use interlock --help for commands.",
+                    }
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        return 2
 
 
 if __name__ == "__main__":

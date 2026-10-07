@@ -8,11 +8,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .approvals import Approval, ApprovalStore
+from .approvals import Approval, ApprovalStore, approval_binding
 from .canonical import canonical_digest, canonical_json
 from .gateway import GatewayError
+from .intent import side_effect_rank
 from .ledger import InMemoryLedger, Ledger, declare_coverage
-from .models import ActorSpec, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode
+from .models import ActorSpec, CredentialClaims, InvocationIntent, LinkPolicy, PolicyMode, SideEffect
 from .policy import SDK_PROFILE, CheckContext, control_coverage, execution_permitted, run_checks, strongest_decision
 from .results import inspect_tool_result
 
@@ -55,8 +56,9 @@ class Actor:
 
 
 class Interlock:
-    def __init__(self, ledger: Ledger | None = None) -> None:
+    def __init__(self, ledger: Ledger | None = None, *, bundle_digest: str | None = None) -> None:
         self.ledger = ledger or InMemoryLedger()
+        self.bundle_digest = bundle_digest
         self._actors: dict[str, Actor] = {}
         self._links: dict[tuple[str, str], LinkPolicy] = {}
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
@@ -75,21 +77,26 @@ class Interlock:
             raise ValueError("actors must belong to this Interlock instance")
         self._links[(source.spec.id, target.spec.id)] = policy
 
+    def _approval_binding(
+        self, *, tenant_id: str, source_actor_id: str, target_actor_id: str,
+        intent: InvocationIntent, arguments: Mapping[str, Any],
+    ) -> str:
+        return approval_binding(
+            tenant_id=tenant_id, source_actor_id=source_actor_id, target_actor_id=target_actor_id,
+            revision_id=self._actors[target_actor_id].spec.definition_digest,
+            policy=self._links[(source_actor_id, target_actor_id)], intent=intent, arguments=arguments,
+        )
+
     def grant_approval(
-        self,
-        *,
-        tenant_id: str,
-        arguments: Mapping[str, Any],
-        canonical_destinations: tuple[str, ...],
-        approver: str,
-        ttl_seconds: int = 300,
+        self, *, tenant_id: str, source_actor_id: str, target_actor_id: str,
+        intent: InvocationIntent, arguments: Mapping[str, Any], approver: str, ttl_seconds: int = 300,
     ) -> Approval:
         return self._approvals.grant(
-            tenant_id=tenant_id,
-            arguments=arguments,
-            canonical_destinations=canonical_destinations,
-            approver=approver,
-            ttl_seconds=ttl_seconds,
+            binding_hash=self._approval_binding(
+                tenant_id=tenant_id, source_actor_id=source_actor_id, target_actor_id=target_actor_id,
+                intent=intent, arguments=arguments,
+            ),
+            approver=approver, ttl_seconds=ttl_seconds,
         )
 
     def design_graph(self) -> dict[str, Any]:
@@ -157,7 +164,8 @@ class Interlock:
         )
         self.ledger.append(
             "INTERACTION_REQUESTED",
-            payload={"argumentsHash": canonical_digest(arguments), "purpose": intent.purpose},
+            payload={"argumentsHash": canonical_digest(arguments), "purpose": intent.purpose,
+                     **({"bundleDigest": self.bundle_digest} if self.bundle_digest else {})},
             **common,
         )
         self.ledger.append(
@@ -170,6 +178,13 @@ class Interlock:
             },
             **common,
         )
+        try:
+            binding = self._approval_binding(
+                tenant_id=tenant_id, source_actor_id=source.spec.id, target_actor_id=target.spec.id,
+                intent=intent, arguments=arguments,
+            )
+        except ValueError:
+            binding = ""
         outcome = run_checks(
             policy,
             CheckContext(
@@ -181,7 +196,7 @@ class Interlock:
                 trace_id=trace,
                 span_id=span,
                 credential=credential,
-                approval_valid=self._approvals.valid(intent, tenant_id, arguments),
+                approval_valid=self._approvals.valid(intent.approval_id, binding),
                 relationship=policy.relationship,
                 payload_bytes=len(canonical_json(dict(arguments))),
             ),
@@ -198,6 +213,7 @@ class Interlock:
         self.ledger.append(
             "CONTROL_EVALUATED",
             payload={
+                **({"bundleDigest": self.bundle_digest} if self.bundle_digest else {}),
                 # Same nested shape the gateway emits, so analytics reduces both.
                 "control": {
                     "policyId": policy.id,
@@ -227,6 +243,11 @@ class Interlock:
             )
             self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
             raise GatewayError(f"actor invocation blocked: {', '.join(reasons)}")
+        if (enforced and policy.external_write_requires_approval
+                and side_effect_rank(intent.estimated_side_effect) >= side_effect_rank(SideEffect.EXTERNAL_WRITE)
+                and not self._approvals.valid(intent.approval_id, binding, consume=True)):
+            self.ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
+            raise GatewayError("approval expired, changed, or already consumed")
         execution_id = str(uuid.uuid4())
         try:
             result = function(arguments)

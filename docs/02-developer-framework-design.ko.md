@@ -79,7 +79,7 @@ def build(bindings=BINDINGS, *, ledger=None):
     return gateway, tools
 ```
 
-`guard_tools`는 각 definition을 admit하고 승인·활성화한 뒤, 격리된 definition — 숨은 지시, cross-server 참조, 지원하지 않는 schema keyword — 에 대한 tool은 돌려주지 않는다. 그래서 모델은 그런 tool을 보지 못한다. 반환되는 각 `GuardedTool`/`GuardedAsyncTool`은 매 호출마다 모델이 실제로 선택한 인자에서 intent를 도출하고, gateway에 판정을 묻고, 허용된 경우에만 실제 함수를 실행하고, sanitize된 결과를 반환한다. 거부는 raise되는 예외가 아니라 reason code를 담은 `is_error` tool 결과로 모델에 도달한다. `externalWriteRequiresApproval: true`인 edge는 `guard_tools(..., approve=...)`의 콜백 — 또는 미리 만들어 둔 `gateway.grant_approval` — 이 정확히 그 인자에 바인딩된 승인을 내줄 때까지 첫 호출을 hold한다.
+`guard_tools`는 각 definition을 admit하고 승인·활성화한 뒤, 격리된 definition — 숨은 지시, cross-server 참조, 지원하지 않는 schema keyword — 에 대한 tool은 돌려주지 않는다. 그래서 모델은 그런 tool을 보지 못한다. 반환되는 각 `GuardedTool`/`GuardedAsyncTool`은 매 호출마다 모델이 실제로 선택한 인자에서 intent를 도출하고, gateway에 판정을 묻고, 허용된 경우에만 실제 함수를 실행하고, sanitize된 결과를 반환한다. 거부는 raise되는 예외가 아니라 reason code를 담은 `is_error` tool 결과로 모델에 도달한다. `externalWriteRequiresApproval: true`인 edge는 `guard_tools(..., approve=...)`의 콜백 — 또는 미리 만들어 둔 `gateway.grant_approval` — 이 전체 호출 신원과 설치된 policy에 결합된 일회성 승인을 내줄 때까지 첫 호출을 hold한다.
 
 그런 다음 tool은 SDK 자체의 agentic loop 안에서 수정 없이 실행된다.
 
@@ -185,28 +185,27 @@ SDK가 없어도 Proxy로 통신은 관측할 수 있지만, plan step·memory p
 
 `wrap()`은 관측 전용이 아니다. `PolicyMode.ENFORCE`에서는 `SDK_PROFILE`의 check 18개를 실행하고(`sdk.py:152`), 종합 판정이 거부면 `GatewayError`를 raise한다. 호출은 일어나지 않는다. gateway의 check 20개 중 18개가 여기서 실행되며, 빠지는 것은 M2 definition check 2개뿐이다. SDK는 `ToolRevision`을 보유하지 않기 때문이다.
 
-**`wrap()`으로 감싼 Tool은 일치하는 승인을 보유하면 외부 쓰기를 수행할 수 있다.** `external_write_requires_approval`의 기본값이 `True`이므로 `approval_valid`가 설정되지 않는 한 모든 `EXTERNAL_WRITE` intent에서 `INTERLOCK-APPROVAL-REQUIRED`가 발생한다. 이제 gateway와 SDK는 승인 저장소 하나(`approvals.ApprovalStore`)를 공유한다. `Interlock.grant_approval(...)`은 `MCPToolGateway.grant_approval`과 같은 방식으로 승인을 발급하고, `_invoke`는 매 호출마다 이를 조회해 `CheckContext.approval_valid`로 전달한다. 승인은 발급 당시의 정확한 인자 해시, canonical 목적지 집합, tenant, 만료 시각에 바인딩되며 그 외에는 아무것도 검증하지 않는다.
+Gateway와 SDK는 같은 승인 구현을 쓰되 instance별 process-local 저장소를 가진다. `grant_approval`은 tenant, source·target Actor, definition revision/digest, 설치된 policy 내용, 전체 intent(canonical 목적지·data class·side effect 포함), 정확한 인자, 만료 시각에 결합한다. 승인된 외부 쓰기를 실행하기 직전에 원자적으로 소비하며, 실행이 실패해도 다시 쓸 수 없다. 다른 도구·목적·policy·두 번째 동작에는 쓸 수 없다. Gateway의 멱등 재시도는 원래 결과를 재사용하지만 이 호출 cache는 process 간에 영속되지 않는다.
 
 ```python
+from dataclasses import replace
+
 agent.connect(tool, LinkPolicy(id="p", version="1", mode=PolicyMode.ENFORCE))
 send = tool.wrap(send_email)
 arguments = {"to": "user@customer.example"}
+intent = InvocationIntent(
+    purpose="reply", destinations=("user@customer.example",),
+    estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+)
 approval = interlock.grant_approval(
-    tenant_id="t",
-    arguments=arguments,
-    canonical_destinations=(canonical_destination("user@customer.example"),),
-    approver="operator",
+    tenant_id="t", source_actor_id=agent.spec.id, target_actor_id=tool.spec.id,
+    intent=intent, arguments=arguments, approver="operator",
 )
 send(arguments, source=agent, tenant_id="t",
-     intent=InvocationIntent(purpose="reply",
-                             destinations=("user@customer.example",),
-                             estimated_side_effect=SideEffect.EXTERNAL_WRITE,
-                             approval_id=approval.approval_id))
-# 실행된다 -- approval_id 없이 같은 호출을 하면 여전히 다음을 raise한다
-# GatewayError: actor invocation blocked: INTERLOCK-APPROVAL-REQUIRED
+     intent=replace(intent, approval_id=approval.approval_id))
 ```
 
-`_invoke`는 gateway의 결과 처리도 공유한다. 반환되는 모든 값은 `results.inspect_tool_result`를 거치며, 이는 비밀정보를 redact하고 결과를 target의 output schema로 검증한다. `ENFORCE`에서는 schema가 유효하지 않은 결과가 gateway와 동일한 quarantine 값으로 교체되고, 인자 쪽 check가 아무것도 flag하지 않았더라도 `SECURITY_OUTCOME_SET`은 이 quarantine을 `SUCCEEDED`로 기록한다. `SHADOW`/`OBSERVE`에서는 sanitize만 되고 quarantine되지 않은 값이 반환되며 schema 오류는 결과를 바꾸지 않은 채 기록된다.
+`_invoke`는 gateway의 결과 처리도 공유한다. 반환되는 모든 값은 `results.inspect_tool_result`를 거치며, 이는 비밀정보를 redact하고 결과를 target의 output schema로 검증한다. `ENFORCE`에서는 schema가 유효하지 않은 결과가 gateway와 동일한 quarantine 값으로 교체되고, 인자 쪽 check가 아무것도 flag하지 않았더라도 `SECURITY_OUTCOME_SET`은 이 quarantine을 `SUCCEEDED`로 기록한다. SDK는 `SHADOW`/`OBSERVE`에서 sanitize하되 quarantine하지 않은 값을 반환하고 schema 오류를 기록한다. ENFORCE에서는 유효하지 않은 출력을 추가로 quarantine한다.
 
 `LinkPolicy(external_write_requires_approval=False)`는 통제를 완전히 내려놓는 명시적이고 감사 가능한 결정으로 여전히 사용할 수 있다. 승인이 없다고 부작용을 `EXTERNAL_WRITE`가 아닌 다른 값으로 선언해 우회해서는 안 된다. 그렇게 하면 눈에 보이는 hold를 잘해야 조용한 `L1-UNDECLARED-SIDE-EFFECT`로, 최악의 경우 탐지되지 않은 외부 쓰기로 바꾸는 것이다.
 

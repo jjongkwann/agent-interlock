@@ -28,6 +28,7 @@ export type DesignEdgeContract = {
   relationship: string;
   relationshipId: string;
   dynamic: boolean;
+  targetSelector?: { idPattern: string };
 };
 
 export type RuntimeDiff = {
@@ -63,7 +64,7 @@ export function computeRuntimeDiff(edges: DesignEdgeContract[], observations: Ru
 
 export function matchesEdge(edge: DesignEdgeContract, item: RuntimeObservation): boolean {
   if (edge.source !== item.source || edge.relationship !== item.relationship || edge.relationshipId !== item.relationshipId) return false;
-  return edge.dynamic ? item.target.startsWith(edge.target) : edge.target === item.target;
+  return edge.dynamic ? matchesGlob(item.target, edge.targetSelector?.idPattern ?? `${edge.target}*`) : edge.target === item.target;
 }
 
 function parseLedger(values: unknown[]): RuntimeImport {
@@ -177,4 +178,55 @@ function text(value: unknown): string | undefined {
 
 function booleanValue(value: unknown): boolean {
   return value === true || String(value).toLowerCase() === "true" || value === 1;
+}
+
+// Python fnmatchcase semantics: case-sensitive, * and ? include slashes/newlines,
+// bracket ranges and [!...] negation. Dynamic programming avoids regex backtracking.
+export function matchesGlob(value: string, pattern: string): boolean {
+  const characters = Array.from(value);
+  const glob = Array.from(pattern);
+  let matched = [true, ...characters.map(() => false)];
+  for (let i = 0; i < glob.length; i++) {
+    const token = glob[i];
+    let accepts = (character: string) => token === "?" || character === token;
+    if (token === "[") {
+      let end = i + 1;
+      if (glob[end] === "!") end++;
+      if (glob[end] === "]") end++;
+      while (end < glob.length && glob[end] !== "]") end++;
+      if (end < glob.length) {
+        // fnmatch removes descending ranges before interpreting leading !.
+        const chunks: string[][] = [];
+        let start = i + 1;
+        let dash = start + (glob[start] === "!" ? 2 : 1);
+        while (dash < end) {
+          while (dash < end && glob[dash] !== "-") dash++;
+          if (dash === end) break;
+          chunks.push(glob.slice(start, dash));
+          start = dash + 1;
+          dash += 3;
+        }
+        if (start < end) chunks.push(glob.slice(start, end));
+        else chunks[chunks.length - 1].push("-");
+        for (let j = chunks.length - 1; j > 0; j--) {
+          if (chunks[j - 1].at(-1)!.codePointAt(0)! > chunks[j][0].codePointAt(0)!) {
+            chunks[j - 1] = [...chunks[j - 1].slice(0, -1), ...chunks[j].slice(1)];
+            chunks.splice(j, 1);
+          }
+        }
+        const negated = chunks[0]?.[0] === "!";
+        if (negated) chunks[0].shift();
+        const body = chunks.map((chunk) => chunk.map((character) => "\\[]^-/".includes(character) ? `\\${character}` : character).join("")).join("-");
+        const matcher = body ? new RegExp(`^[${negated ? "^" : ""}${body}]$`, "u") : null;
+        accepts = (character) => matcher ? matcher.test(character) : negated;
+        i = end;
+      }
+    }
+    const next = [token === "*" && matched[0]];
+    characters.forEach((character, index) => {
+      next.push(token === "*" ? matched[index + 1] || next[index] : matched[index] && accepts(character));
+    });
+    matched = next;
+  }
+  return matched[characters.length];
 }

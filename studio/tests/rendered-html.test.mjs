@@ -40,11 +40,16 @@ test("server-renders the Agent Interlock Studio", async (context) => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
-  const html = await response.text();
+  const html = (await response.text()).replace(/<!--.*?-->/gs, "");
   assert.match(html, /<title>Agent Interlock · Security Architecture Studio<\/title>/i);
   assert.match(html, /Agent Interlock/);
   assert.match(html, /Security Architecture Studio/);
   assert.match(html, /Export manifest/);
+  assert.match(html, /Static design readiness/);
+  assert.doesNotMatch(html, /Security posture|Architecture conforms/);
+  assert.match(html, /aria-pressed="true"[^>]*title="Tool call arguments"/);
+  assert.match(html, /Draft: /);
+  assert.match(html, /Find actor or relationship/);
   assert.doesNotMatch(html, /Your site is taking shape|react-loading-skeleton|Codex is working/i);
 });
 
@@ -54,11 +59,11 @@ test("exports the backend architecture contract and removes starter artifacts", 
     readFile(new URL("../app/panels.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readFile(new URL("../app/manifest.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/architecture-model.ts", import.meta.url), "utf8"),
   ]);
 
   // The manifest <-> Studio-state translation (export and import) lives in the pure
-  // studio/app/manifest.ts module so studio/tests/manifest-roundtrip.test.mjs can exercise it
+  // studio/app/architecture-model.ts module so studio/tests/manifest-roundtrip.test.mjs can exercise it
   // without React; page.tsx just calls into it.
   assert.match(manifest, /apiVersion: "interlock\.dev\/v1alpha1"/);
   assert.match(manifest, /enforcementPoint: control\.point/);
@@ -77,7 +82,7 @@ test("exports the backend architecture contract and removes starter artifacts", 
   // "cannot evaluate" finding the linter does rather than reporting the draft clean.
   assert.match(manifest, /dataAccess: node\.dataAccess \?\? \[\]/);
   assert.doesNotMatch(manifest, /dataAccess: \[\],\n/);
-  assert.match(page, /Data access<input/);
+  assert.match(page, /<label>\{t\("Data access"\)\}<input[^\n]*value=\{\(selectedNode\.dataAccess/);
   assert.match(page, /Target actor declares no data access/);
   assert.match(page, /Runtime graph/);
   assert.match(page, /label: "Runs"/);
@@ -90,14 +95,14 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /ACTOR_NODE_WIDTH/);
   assert.match(page, /boardSize\.width - ACTOR_NODE_WIDTH/);
   assert.match(page, /Connected relationships will also be removed/);
-  assert.match(page, />Fit</);
-  assert.match(page, />Focus</);
-  assert.match(page, />Undo</);
-  assert.match(page, />Reset draft</);
+  assert.match(page, /t\("Fit"\)/);
+  assert.match(page, /t\("Focus"\)/);
+  assert.match(page, /t\("Undo"\)/);
+  assert.match(page, /t\("Reset draft"\)/);
   assert.match(page, /runtimeResultCount/);
   assert.match(page, /mobile-panel-actions/);
   assert.match(page, /const MIN_ZOOM = 0\.3/);
-  assert.match(page, /aria-label="Require human approval"/);
+  assert.match(page, /aria-label=\{t\("Require human approval"\)\}/);
   assert.match(page, /event\.code === "Equal"/);
   assert.match(page, /event\.code === "Minus"/);
   assert.match(page, /event\.metaKey \|\| event\.ctrlKey/);
@@ -109,7 +114,7 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /Add trust zone/);
   assert.match(page, /Fit around actors/);
   assert.match(page, /Move into zone/);
-  assert.match(page, /Resize zone: \$\{zone\.label\}/);
+  assert.match(page, /message\("Resize zone: \{0\}", String\(zone\.label\)\)/);
   assert.match(page, /Actor topology/);
   assert.match(page, /Task workflow/);
   assert.match(page, /Create matching boundary/);
@@ -117,8 +122,8 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(page, /workflowDependencyCreatesCycle/);
   assert.match(page, /Unavailable because it would create a workflow cycle/);
   assert.match(page, /\["USER", "AGENT", "SUBAGENT", "RAG", "TOOL", "MEMORY", "SCHEDULER", "EXTERNAL"\]/);
-  assert.match(panels, /Design does not become runtime directly/);
-  assert.match(panels, /Telemetry cannot be aggregated/);
+  assert.match(panels, /Compile the current draft, review its changes, sign locally/);
+  assert.match(panels, /role="alert">\{t\(error \?\? offlineResult\.error\)\}/);
   assert.match(panels, /Sign approval context/);
   assert.match(panels, /Deployment-bound workflow runs/);
   assert.match(panels, /Start run/);
@@ -126,7 +131,9 @@ test("exports the backend architecture contract and removes starter artifacts", 
   assert.match(panels, /WAITING_APPROVAL/);
   assert.match(panels, /missing adapters fail closed/);
   assert.match(page, /controlPlaneToken/);
-  assert.doesNotMatch(panels, /localStorage|sessionStorage/);
+  // Reviewer annotations persist locally; bearer credentials remain session state.
+  assert.match(panels, /localStorage\.setItem\(reviewKey, JSON\.stringify\(review\)\)/);
+  assert.doesNotMatch(panels, /(?:localStorage|sessionStorage)\.setItem\([^;\n]*(?:token|credentials)/i);
   assert.doesNotMatch(page, /demoRuntimeTelemetry|Load drift demo/);
   assert.doesNotMatch(panels, /fake adapter|fake run/i);
   assert.match(page, /— undeclared/);

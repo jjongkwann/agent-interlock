@@ -338,6 +338,8 @@ INSERT INTO interlock.agent_config_active (tenant_id, config_id, revision_id, co
 VALUES (%s, %s, %s, %s)
 ON CONFLICT (tenant_id, config_id)
     DO UPDATE SET revision_id = EXCLUDED.revision_id, config_digest = EXCLUDED.config_digest
+    WHERE agent_config_active.config_digest = %s
+RETURNING revision_id
 """.strip()
 
 
@@ -425,11 +427,15 @@ class PostgreSQLConfigStore(_PostgreSQLStoreBase):
                     canonical_json(_revision_value(active_copy)).decode("utf-8"),
                 ),
             )
-            self._execute_none(
+            activated = self._execute(
                 connection,
                 _UPSERT_ACTIVE,
-                (tenant_id, config_id, active_copy.revision_id, active_copy.config_digest),
+                (tenant_id, config_id, active_copy.revision_id, active_copy.config_digest, expected_active_digest),
             )
+            if activated is None:
+                # A missing row cannot be locked by SELECT FOR UPDATE. The unique
+                # key and conditional upsert arbitrate concurrent first activations.
+                raise ConfigStoreStale("active config digest changed during activation")
         self.write_count += 1
         return active_copy
 

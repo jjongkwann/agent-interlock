@@ -94,6 +94,59 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/interactions:
+    get:
+      operationId: searchInteractions
+      summary: Find interactions and their trace IDs from complete lifecycle evidence
+      description: >-
+        Requires events:read. Selects interactions started in [start,end), including
+        later lifecycle evidence. Exact filters apply after reduction. The cursor
+        is bound to the tenant, time window and filters. Exceeding the configured
+        event scan cap returns 422; no incomplete page is presented as complete.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - {name: start, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: end, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 2048}}
+        - {name: sourceActorId, in: query, schema: {type: string, minLength: 1}}
+        - {name: targetActorId, in: query, schema: {type: string, minLength: 1}}
+        - {name: traceId, in: query, schema: {type: string, minLength: 1}}
+        - {name: reasonCode, in: query, schema: {type: string, minLength: 1}}
+        - {name: outcome, in: query, schema: {type: string, minLength: 1}}
+        - {name: relationshipId, in: query, schema: {type: string, minLength: 1}}
+        - {name: policyId, in: query, schema: {type: string, minLength: 1}}
+        - {name: mode, in: query, schema: {type: string, minLength: 1}}
+        - {name: dataSource, in: query, schema: {type: string, minLength: 1}}
+      responses:
+        '200':
+          description: Interaction page with trace links, coverage, and observation window
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [interactions, nextCursor, window, observation]
+                properties:
+                  interactions:
+                    type: array
+                    items: {$ref: '#/components/schemas/InteractionRecord'}
+                  nextCursor: {type: [string, 'null']}
+                  window:
+                    type: object
+                    properties:
+                      start: {type: string, format: date-time}
+                      end: {type: string, format: date-time}
+                  observation:
+                    type: object
+                    properties:
+                      source: {const: LEDGER}
+                      eventCount: {type: integer, minimum: 0}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422':
+          description: Too much evidence; narrow the time range
+        '503': {$ref: '#/components/responses/Unavailable'}
   /v1/statistics:
     get:
       operationId: getStatistics
@@ -164,6 +217,38 @@ components:
       required: true
       schema: {type: string, minLength: 1, maxLength: 200}
   schemas:
+    InteractionRecord:
+      type: object
+      required: [interactionId, tenantId, traceId, sourceActorId, securityOutcome, coverage, firstOccurredAt]
+      properties:
+        interactionId: {type: string}
+        tenantId: {type: string}
+        sourceActorId: {type: string}
+        environment: {type: string}
+        dataSource: {type: string}
+        relationshipId: {type: string}
+        decision: {type: string}
+        securityOutcome: {type: string}
+        firstOccurredAt: {type: string}
+        traceId: {type: [string, 'null']}
+        targetActorId: {type: [string, 'null']}
+        policyId: {type: [string, 'null']}
+        mode: {type: [string, 'null']}
+        bundleDigest: {type: [string, 'null']}
+        actualEnforced: {type: boolean}
+        executionPermitted: {type: boolean}
+        controlEvaluated: {type: boolean}
+        executionAttempted: {type: boolean}
+        executionSucceeded: {type: boolean}
+        enforcementActionCompleted: {type: boolean}
+        reasonCodes: {type: array, items: {type: string}}
+        coverage:
+          type: object
+          required: [armed, ran, flagged]
+          properties:
+            armed: {type: array, items: {type: string}}
+            ran: {type: array, items: {type: string}}
+            flagged: {type: array, items: {type: string}}
     EventInput:
       type: object
       required: [event_type, tenant_id, trace_id, span_id, source_actor_id, payload]
@@ -299,6 +384,14 @@ components:
         - CONTROL_HEALTH_CHANGED
         - POLICY_CHANGED
         - TEST_EXECUTED
+        - WORKFLOW_RUN_CREATED
+        - WORKFLOW_RUN_STARTED
+        - WORKFLOW_RUN_WAITING_APPROVAL
+        - WORKFLOW_RUN_COMPLETED
+        - WORKFLOW_RUN_FAILED
+        - WORKFLOW_RUN_CANCELED
+        - WORKFLOW_TASK_STATUS_UPDATED
+        - WORKFLOW_TASK_APPROVED
     Severity:
       type: string
       enum: [INFO, LOW, MEDIUM, HIGH, CRITICAL]

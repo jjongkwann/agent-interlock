@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from agent_interlock import (
@@ -92,6 +93,17 @@ class FileWORMAuditStoreTests(unittest.TestCase):
         store = FileWORMAuditStore(self.path)
         self.assertEqual(store.entries(), ())
         self.assertTrue(store.verify_chain())
+
+    def test_concurrent_instances_share_sequence_and_dedupe(self):
+        stores = [FileWORMAuditStore(self.path), FileWORMAuditStore(self.path)]
+        records = [sealed(index) for index in range(12)]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            entries = list(pool.map(lambda pair: stores[pair[0] % 2].append(pair[1]), enumerate(records)))
+        self.assertEqual(sorted(entry.sequence for entry in entries), list(range(12)))
+        self.assertEqual(len(stores[0].entries()), 12)
+        self.assertTrue(FileWORMAuditStore(self.path).verify_chain())
+        with self.assertRaises(WORMViolation):
+            stores[1].append(records[0])
 
 
 if __name__ == "__main__":

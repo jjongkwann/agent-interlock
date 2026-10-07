@@ -23,8 +23,8 @@ status: active
 | 계약 | 구현 | 검증 |
 |---|---|---|
 | Actor `define` / `connect` / `wrap` | `src/agent_interlock/sdk.py` | `SDKTests`(**시험 한 개** — `define`/`connect`/graph 배선만), `tests/test_sdk_profile.py`(시험 14개: `wrap()`이 실행하는 check 19개, 그 rename map, 실행 게이트), `tests/test_sdk_results.py`(시험 8개: `Interlock.grant_approval`과 공유되는 `results.inspect_tool_result` 실행 후 처리) |
-| 통합 check 표·profile | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(28)·`run_checks` | `tests/test_check_table.py`(시험 20개: 표 구성, 커버리지 상태 4종(`RAN_CLEAN`, `RAN_FLAGGED`, `INAPPLICABLE`, `ABSENT`), check별 `armed`, 중복 id 거부) |
-| 집행점별 profile | `GATEWAY_PROFILE`(20) · `SDK_PROFILE`(18) · `A2A_PROFILE`(17) → `A2A_LINK_PROFILE`(12)·`A2A_BOUNDARY_PROFILE`(5) | profile마다 산출되는 코드 집합만이 아니라 rename map **전체**를 고정; 방출 가능한 reason key가 모두 매핑돼 있는지 정적 감사 |
+| 통합 check 표·profile | `policy.py` `Check`·`CheckScope`·`Profile`·`CheckContext`·`CHECKS`(29)·`run_checks` | `tests/test_check_table.py`(시험 20개: 표 구성, 커버리지 상태 4종(`RAN_CLEAN`, `RAN_FLAGGED`, `INAPPLICABLE`, `ABSENT`), check별 `armed`, 중복 id 거부) |
+| 집행점별 profile | `GATEWAY_PROFILE`(21) · `SDK_PROFILE`(19) · `A2A_PROFILE`(17) → `A2A_LINK_PROFILE`(12)·`A2A_BOUNDARY_PROFILE`(5) | profile마다 산출되는 코드 집합만이 아니라 rename map **전체**를 고정; 방출 가능한 reason key가 모두 매핑돼 있는지 정적 감사 |
 | 판정 심각도 순서 | `models.py` `_DECISION_RANK`(`ControlDecision` 멤버 11개 전부, fallback 없음; 완전하지 않으면 import 시점에 `RuntimeError`) | `tests/test_decision_ranking.py`(시험 12개: 완전성, 충돌 쌍을 이름으로 지목하는 유일성, `BYPASSED`가 `ALLOW`보다 아래, `ERROR`가 `QUARANTINE`보다 아래) |
 | 심각도와 분리해 집계하는 실행 permit | `policy.execution_permitted`, `PolicyDecisionRecord.execution_permitted`를 `permits_execution`으로 AND 결합 | `tests/test_execution_permit.py`(시험 10개; `[ALLOW, BYPASSED]`가 실행을 허용하지 **않음**을 고정) |
 | 모드와 무관한 "정책이 이의를 제기함" | `PolicyDecisionRecord.would_block`, `!= ALLOW`가 아니라 `_DECISION_RANK`에서 유도 | `tests/test_decision_ranking.py`; 남아 있는 `!= ALLOW` 술어 5개와 `BYPASSED`에서 어긋나는 것은 **의도된 것** |
@@ -113,11 +113,11 @@ status: active
 | Studio 통계·배포 뷰 | `studio/app/panels.tsx` (`StatsPanel`·`DeployPanel`), `page.tsx` stats/deploy 뷰 | 오프라인 ledger import 집계 + Live `/v1/statistics` fetch, control plane 승격 패널(서명 키는 브라우저 밖), build·lint·계약 시험 |
 | fake-data 플랫폼 전체 E2E | `tests/test_platform_e2e.py`, `tests/fixtures/platform_e2e/` | 전체 manifest digest→git propose→Ed25519 2인 ENFORCE→실제 localhost A2A→approval pause/resume→fake MCP 1회→Ledger Runtime/Statistics/Drift + D5 차단·미선언 bypass 시험 |
 | 배포 모드 단일화: 실행을 지배하는 것은 저작된 manifest가 아니라 배포 기록의 mode | `studio_deploy.py` `deployed_architecture`, `run_control.py` `RUN-MODE-MISMATCH` | `tests/test_run_control.py`(시험 5개: bundle에 저작된 mode와 무관하게 run edge가 집행됨) |
-| SDK가 gateway의 실행 후 처리와 승인 저장소를 공유 | `results.py` `inspect_tool_result`, `approvals.py` `ApprovalStore`, `sdk.py` `Interlock.grant_approval` | `tests/test_sdk_results.py`(시험 8개: 공유되는 secret 정제/schema 위반 quarantine, 정확한 인자·목적지에 바인딩된 승인이 SDK에서 도달 가능) |
+| SDK가 gateway의 실행 후 처리와 승인 구현을 공유 | `results.py` `inspect_tool_result`, `approvals.py` `ApprovalStore`, `sdk.py` `Interlock.grant_approval` | `tests/test_sdk_results.py`(시험 8개: 공유되는 secret 정제/schema 위반 quarantine, 전체 호출·policy에 결합된 일회성 승인이 SDK에서 도달 가능) |
 | 지원하지 않는 JSON Schema keyword를 정의 시점에 거부 | `security.py` `unsupported_schema_keywords`, `L1-M1-SCHEMA-KEYWORD-UNSUPPORTED` | `tests/test_core.py`(경로 한정 keyword 보고, `ActorSpec`/`ToolDefinition`/architecture linter 거부) |
 | 인수와 MCP tool annotation에서 도출한 intent를 선언과 비교 판정 | `intent.py` `derive_intent`, `policy.py` `INTERLOCK-INTENT-ARGUMENT-MISMATCH`(gateway·SDK profile) | `tests/test_intent.py`(시험 17개: `format`/`x-interlock-destination`에서 목적지 도출, `readOnlyHint`/`destructiveHint`에서 부작용 도출, 아무것도 도출할 수 없을 때 커버리지 채널을 통한 INAPPLICABLE) |
 | Anthropic Tool Runner adapter | `adapters/anthropic_tools.py` `ToolBinding`·`GuardedTool`·`GuardedAsyncTool`·`guard_tools`·`bind_architecture`, 승인 hook `approve=` | `tests/test_anthropic_adapter.py`(시험 14개: 동기/비동기 guarded 호출, raise가 아니라 `is_error` tool 결과로 차단, 승인 hook, 격리된 definition이 모델에 도달하지 않음) |
-| skeleton 생성기가 내는 프로젝트 모듈 계약 | `scaffold.py` `generate_skeleton`(`MANIFEST`·`TENANT_ID`·`SOURCE_ACTOR_ID`·`APPROVER`·`BINDINGS`·`build()`) | `tests/test_scaffold.py`(시험 4개), `tests/test_example_support_agent.py`(시험 5개: 같은 계약으로 `examples/support_agent/`를 녹화-재생 실행, 실제 API 키 불필요) |
+| skeleton 생성기가 내는 프로젝트 모듈 계약 | `scaffold.py` `generate_skeleton`(`MANIFEST`·`TENANT_ID`·`SOURCE_ACTOR_ID`·`APPROVER`·`BINDINGS`·`build()`) | `tests/test_scaffold.py`(시험 6개), `tests/test_example_support_agent.py`(시험 5개: 같은 계약으로 `examples/support_agent/`를 녹화-재생 실행, 실제 API 키 불필요) |
 | `interlock verify`: 프로젝트 자신의 guarded tool에 L1 corpus를 실행 | `verify.py`, `verify_corpus.py`(시나리오 9개: M1 오염된 설명, M2 definition drift, M3 cross-server 참조, M8 결과 내 credential, M9 미선언 목적지, M9 volume, 미선언 부작용, goal hijack, memory poisoning) | `tests/test_verify.py`(시험 16개: 시나리오별 pass/fail, 프로젝트에 시나리오 대상이 없을 때 `NOT-APPLICABLE` 보고, corpus canary 검사, exit code) |
 | Acceptance criteria 문법(`required:`/`nonempty:`/`equals:`)과 task별 결과 3종 | `orchestration.py` `OrchestrationTask.executed`/`goal_met`/`security_met`, `architecture.py` `ARCH-TASK-ACCEPTANCE-MISSING` | `tests/test_a2a.py`(문법 밖 criterion이 `goal_met=False`로 task를 실패시킴, boundary가 모든 시도를 막았을 때 `security_met`이 false) |
 
@@ -127,14 +127,14 @@ status: active
 
 `tests/test_l1_matrix.py`는 [05 검증 계획](05-l1-security-validation-plan.ko.md)의 L1-SIM-M1..M9 34개 test ID를 모두 SIMULATION으로 자동화한다. M4 publisher admission·목적지 egress deny/allow, M5 scope broadening·callback replay와 M6 private-IP redirect·response size·safe consent 경로도 독립 matrix 시험과 `TEST_EXECUTED` 증거를 남긴다. 다음 항목은 reference 검증 이후의 프로덕션 통합 경계다.
 
-현재 전체 회귀는 CI 경로(`PYTHONPATH=src:tests python3 -m unittest discover -s tests`)에서 **`Ran 715 tests, OK (skipped=12)`**이며, 여기에 Studio 14개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)가 더해진다. 통제 커버리지 작업으로 `test_control_coverage.py`가 추가됐다. 통합 판정 엔진 작업으로 시험 파일 6개 — `test_policy_characterization.py`, `test_a2a_characterization.py`, `test_check_table.py`, `test_sdk_profile.py`, `test_decision_ranking.py`, `test_execution_permit.py` — 가 추가됐고 `test_core.py`, `test_architecture.py`, `test_l1_matrix.py`, `test_scaffold.py`가 확장됐다. 도입 계층(adoption layer) 작업으로 `test_intent.py`, `test_anthropic_adapter.py`, `test_verify.py`, `test_sdk_results.py`, `test_example_support_agent.py`가 추가됐고 `test_core.py`, `test_run_control.py`, `test_a2a.py`, `test_scaffold.py`가 확장됐다. 이전에 게시한 454라는 숫자는 이 모든 작업보다 앞선 값이고, 수집 방식이 다른 `pytest` 경로에서 측정한 것이다. optional extra 없이 체크아웃하면 `pytest`에서는 적게 수집되므로, 인용할 숫자는 `unittest` 쪽이다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
+2026-09-11 변경 전 기록된 전체 회귀는 CI 경로(`PYTHONPATH=src:tests python3 -m unittest discover -s tests`)에서 **`Ran 715 tests, OK (skipped=12)`**이며, 여기에 Studio 14개(`npm test`, build·golden·Unicode·boundary/orchestration 계약 포함)가 더해진다. 통제 커버리지 작업으로 `test_control_coverage.py`가 추가됐다. 통합 판정 엔진 작업으로 시험 파일 6개 — `test_policy_characterization.py`, `test_a2a_characterization.py`, `test_check_table.py`, `test_sdk_profile.py`, `test_decision_ranking.py`, `test_execution_permit.py` — 가 추가됐고 `test_core.py`, `test_architecture.py`, `test_l1_matrix.py`, `test_scaffold.py`가 확장됐다. 도입 계층(adoption layer) 작업으로 `test_intent.py`, `test_anthropic_adapter.py`, `test_verify.py`, `test_sdk_results.py`, `test_example_support_agent.py`가 추가됐고 `test_core.py`, `test_run_control.py`, `test_a2a.py`, `test_scaffold.py`가 확장됐다. 이전에 게시한 454라는 숫자는 이 모든 작업보다 앞선 값이고, 수집 방식이 다른 `pytest` 경로에서 측정한 것이다. optional extra 없이 체크아웃하면 `pytest`에서는 적게 수집되므로, 인용할 숫자는 `unittest` 쪽이다. 현재 skip은 Linux+bwrap live와 DSN 없는 PostgreSQL live 계열이며, seccomp BPF 로직은 in-test classic-BPF 인터프리터로, 실 커널 집행은 CI `sandbox-live` job으로 검증한다.
 
 - Sigstore/Rekor 네트워크 검증(비대칭 서명·KMS 어댑터 지점은 구현됨)과 실제 egress proxy/sidecar sidecar의 socket·kill telemetry 운영 배선(DNS·연결 IP pinning은 `PinnedSocketEgressBackend`로 구현됨)
 - OTLP gRPC(:4317) streaming receiver(HTTP JSON receiver와 Langfuse/LangSmith 어댑터는 구현됨), Incident/response service
-- PostgreSQL 자동 partition/retention 운영과 connection pool·HA(live CI·프로비저닝은 구현됨)
+- PostgreSQL partition/retention 실행 예약과 HA(live CI·프로비저닝은 구현됨)
 - WORM 보존의 S3 Object-Lock 내구 backend(Protocol·append-only 해시체인 impl은 구현됨), 원격 Git host PR 리뷰 배선(로컬 git propose/promote/rollback은 구현됨)
 - 고급 MCP 비동기 task·cancellation, IdP key rotation·DPoP/mTLS sender-constrained token
-- A2A durable task/run store, signed Agent Card registry, SSE/subscription/push, 분산 scheduler/worker lease
+- A2A remote durable task store, signed Agent Card registry, SSE/subscription/push
 
 ## 다음 구현 순서
 
@@ -146,15 +146,15 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 
 **내부 구현 작업: 모두 완료됨.** artifact digest 검사와 exec 사이 TOCTOU 제거(fd 실행), 장기 process supervisor와 sandbox health telemetry, OTLP semantic convention 어댑터와 sampling 누락·Audit Sink 장애의 `CONTROL_HEALTH_CHANGED` 연결, MCP server-initiated request·비동기 task·cancellation/replay, PostgreSQL migration runner·자동 partition/retention·connection pool, WORM store의 파일 기반 append-only 영속화까지 이 저장소 안에서 구현·검증했다.
 
-**2026-07-19 제품 폐쇄 루프(설계→계약→개발→SHADOW 실행→증거→통계·drift→승격) 연결 계층도 완료됐다.** 통계는 이벤트 카운트가 아니라 tenant+interaction 상태 결합이며, REQUESTED 범위에 속한 interaction의 전체 lifecycle을 읽는다. 집행 성공은 완료된 enforcement action과 최종 BLOCKED 증거를 모두 요구하고, 교차언어 golden 계약은 Python API와 Studio 오프라인 import의 Unicode 정렬까지 동일하게 고정한다. 승격·rollback 승인은 approver identity를 포함한 Ed25519 statement이며 Control Plane에는 공개키만 둔다. 알려진 v1 한계: 통계 시계열은 표 렌더, control plane 대기 승인은 in-memory(재시작 시 재제출), 대용량 범위는 사전집계 없이 422로 방어, OTLP import는 통계 집계 불가(원본 ledger 이벤트 필요).
+**2026-07-19 제품 폐쇄 루프(설계→계약→개발→SHADOW 실행→증거→통계·drift→승격) 연결 계층도 완료됐다.** 통계는 이벤트 카운트가 아니라 tenant+interaction 상태 결합이며, REQUESTED 범위에 속한 interaction의 전체 lifecycle을 읽는다. 집행 성공은 완료된 enforcement action과 최종 BLOCKED 증거를 모두 요구하고, 교차언어 golden 계약은 Python API와 Studio 오프라인 import의 Unicode 정렬까지 동일하게 고정한다. 승격·rollback 승인은 approver identity를 포함한 Ed25519 statement이며 Control Plane에는 공개키만 둔다. 알려진 v1 한계: 통계 시계열은 표 렌더, 서명된 배포 대기 승인은 Git metadata에 영속화하고 승격 시 재검증, 대용량 범위는 사전집계 없이 422로 방어, OTLP import는 통계 집계 불가(원본 ledger 이벤트 필요).
 
-**2026-07-20 Trust Boundary→A2A→오케스트레이션 vertical slice도 완료됐다.** Studio의 Actor topology와 Task workflow가 한 manifest에 저장되고 compiler가 cross-zone boundary와 task transport를 함께 검증한다. A2A 1.0 JSON-RPC core는 REL-06과 boundary를 handler 실행 전에 집행하며 workflow engine은 dependency·retry·timeout·approval·budget을 적용한다. 운영 한계는 in-memory task/run store, 단일 프로세스 scheduler, 비스트리밍 A2A core다.
+**2026-07-20 Trust Boundary→A2A→오케스트레이션 vertical slice도 완료됐다.** Studio의 Actor topology와 Task workflow가 한 manifest에 저장되고 compiler가 cross-zone boundary와 task transport를 함께 검증한다. A2A 1.0 JSON-RPC core는 REL-06과 boundary를 handler 실행 전에 집행하며 workflow engine은 dependency·retry·timeout·approval·budget을 적용한다. Run snapshot은 선택적 SQLite store를 지원한다. Dispatch는 단일 host process가 담당하고 A2A core는 비스트리밍이다. 아래 운영 계약을 참고한다.
 
 **2026-09-08 도입 계층은 대체로 완료됐다. 아직 배포되지 않은 부분은 아래에 따로 적으며, "외부 연동"에 뭉뚱그리지 않는다.**
 
-**도입 계층 — 완료:** 배포 모드 단일화(저작된 manifest가 아니라 배포 기록의 mode가 실행을 지배), gateway의 결과 검사와 승인 저장소를 SDK가 공유해 `wrap()`에서도 `approval_valid`에 도달 가능, 지원하지 않는 JSON Schema keyword를 정의 시점에 거부, 인수와 MCP annotation에서 도출한 intent를 선언과 비교 판정(`INTERLOCK-INTENT-ARGUMENT-MISMATCH`), Anthropic Python SDK Tool Runner adapter(`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`, `approve=` hook), acceptance-criteria 문법과 task별 결과 3종(`executed`/`goalMet`/`securityMet`), 프로젝트 자신의 guarded tool에 L1 시나리오 9개를 실행하는 `interlock verify`, `interlock architecture skeleton`이 내는 프로젝트 모듈 계약(`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`), 녹화-재생 시험을 갖춘 실행 가능한 `examples/support_agent/`, Studio 프로젝트(신규/열기/저장, 편집 가능한 id/version, manifest import), `anthropic` extra를 갖춘 `0.2.0` 패키징.
+**도입 계층 — 완료:** 배포 모드 단일화(저작된 manifest가 아니라 배포 기록의 mode가 실행을 지배), gateway의 결과 검사와 승인 구현을 SDK가 공유해 `wrap()`에서도 `approval_valid`에 도달 가능, 지원하지 않는 JSON Schema keyword를 정의 시점에 거부, 인수와 MCP annotation에서 도출한 intent를 선언과 비교 판정(`INTERLOCK-INTENT-ARGUMENT-MISMATCH`), Anthropic Python SDK Tool Runner adapter(`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`, `approve=` hook), acceptance-criteria 문법과 task별 결과 3종(`executed`/`goalMet`/`securityMet`), 프로젝트 자신의 guarded tool에 L1 시나리오 9개를 실행하는 `interlock verify`, `interlock architecture skeleton`이 내는 프로젝트 모듈 계약(`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`), 녹화-재생 시험을 갖춘 실행 가능한 `examples/support_agent/`, Studio 프로젝트(신규/열기/저장, 편집 가능한 id/version, manifest import), `anthropic` extra를 갖춘 `0.2.0` 패키징.
 
-**도입 계층 — 미완료:** LangGraph adapter, Claude Agent SDK adapter, sidecar proxy, server-side MCP connector interception(API의 `mcp_servers`는 Anthropic 쪽에서 tool을 실행해 가로챌 수 없으므로 범위 밖), LLM-judge acceptance evaluator(문법은 구조적 평가만 함), [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md)의 열린 질문으로 남아 있는 `BYPASSED` 의미론, PyPI 업로드, `architecture._parse_edge`가 여전히 누락하는 manifest 필드 `maxExportRecords`/`maxExportBytes`/`secretAction`과 부작용 action. `externalWriteRequiresApproval`는 `EXTERNAL_WRITE`에만 `INTERLOCK-APPROVAL-REQUIRED`를 걸므로, `PAYMENT`·`DESTRUCTIVE_WRITE`·`PERMISSION_CHANGE`로 태그된 도구는 이 플래그가 켜져 있어도 보류되지 않습니다(`examples/refund_agent`를 만들며 발견, 그래서 환불 도구를 `EXTERNAL_WRITE`로 태그함).
+**도입 계층 — 미완료:** LangGraph adapter, Claude Agent SDK adapter, sidecar proxy, server-side MCP connector interception(API의 `mcp_servers`는 Anthropic 쪽에서 tool을 실행해 가로챌 수 없으므로 범위 밖), LLM-judge acceptance evaluator(문법은 구조적 평가만 함), [Control Coverage Statistics](specs/2026-07-27-control-coverage-statistics.md)의 열린 질문으로 남아 있는 `BYPASSED` 의미론, PyPI 업로드. `externalWriteRequiresApproval`는 `EXTERNAL_WRITE`에만 `INTERLOCK-APPROVAL-REQUIRED`를 걸므로, `PAYMENT`·`DESTRUCTIVE_WRITE`·`PERMISSION_CHANGE`로 태그된 도구는 이 플래그가 켜져 있어도 보류되지 않습니다(`examples/refund_agent`를 만들며 발견, 그래서 환불 도구를 `EXTERNAL_WRITE`로 태그함).
 
 **외부 연동 작업 (외부 서비스·플랫폼 필요):**
 
@@ -164,6 +164,32 @@ doc-06 §다음 순서의 10개 통합 항목을 모두 구현했다: (a) M1–M
 4. PostgreSQL HA·failover·distributed rate limit·TLS termination
 5. 원격 GitHub/GitLab PR 리뷰·배포 연결
 6. IdP JWKS cache·key rotation·장애 정책, DPoP/mTLS sender-constrained token, 운영 consent UI·HTTPS callback·refresh-token 수명주기
-7. A2A signed Agent Card registry, durable task/run store, SSE·push, distributed queue·worker HA
+7. A2A signed Agent Card registry, remote durable task store, SSE·push, distributed queue·worker HA
 
 gVisor·Kata·Kubernetes sandbox backend는 Bubblewrap/Seatbelt를 대체해야 하는 배포 환경에서만 필요한 선택 항목이다.
+
+## CLI와 생성된 연결 범위 (2026-09-11)
+
+```bash
+interlock architecture lint architecture.json
+interlock architecture compile architecture.json --shadow > bundle.json
+interlock architecture skeleton architecture.json --out-dir generated
+```
+
+Skeleton은 Python module, 보안 시험, `<architecture>_edge_coverage.json`을 생성한다. CLI JSON은 `edgeCoverage`, 생성 module은 `EDGE_COVERAGE`를 제공한다. 각 항목에는 `edgeId`, `sourceActorId`, `targetActorId`, `relationshipId`, `profile`, `bindingStatus`, `reason`이 있다. 첫 호출 source의 정적 REL-05 TOOL edge만 `WIRED` / `MCP_GATEWAY`이고 동적 edge, 다른 source, 나머지 관계는 이유와 함께 `MANUAL`이다. `WIRED`는 연결 코드 생성 상태다. 실제 handler 구현과 보안 집행 검증을 뜻하지 않으므로 handler를 완성하고 생성 시험 및 `interlock verify`를 실행해야 한다.
+
+파일 누락, 잘못된 JSON·manifest 필드는 stderr에 `INTERLOCK-CLI-INPUT-INVALID`와 해결 안내를 쓰고 exit 2를 반환한다. 잘못된 command 인수는 argparse의 usage/error와 exit 2를 사용한다. `verify`는 성공 0, 시나리오 실패 1, 잘못된 project 2를 유지한다. `architecture runtime-diff`는 drift 또는 telemetry import 문제가 있으면 3을 반환한다.
+
+## Managed runtime과 영속화 계약 (2026-09-11)
+
+`managed_runtime.load_promoted_architecture`는 active ENFORCE bundle을 읽고 digest를 고정한다. `build_managed_tools`는 그 compiled graph를 연결하고 tool definition digest를 검증하며 classification·export estimation·result provenance hook을 요구한다. 로컬 manifest의 `build()` 예제는 SDK 개발 경로다. [Managed support host](managed-support-host.md)는 Control Plane 배포 상태와 실행에 전용 owner를 둔다. Tenant별 event/run 조회가 단일 active deployment를 공유 SaaS tenant 배포 서비스로 바꾸지는 않는다.
+
+저작된 control, 설치된 hook, 관측된 판정은 별개다. `installedHooks`는 adapter 설치를, coverage 이벤트는 호출에서 평가된 check를 나타낸다. Diagram이나 생성된 `WIRED` binding만으로 집행을 증명할 수 없다.
+
+`SQLiteWorkflowRunStore`는 run·입력·출력·bundle digest·workflow 승인을 보존한다. Host 재시작 시 RUNNING run은 `RUN-INTERRUPTED`인 FAILED로 바뀌고 외부 부작용을 자동 재실행하지 않는다. PENDING·WAITING_APPROVAL run은 원래 bundle로 명시적으로 resume한다. Terminal snapshot은 조회 가능 상태로 남으며 active-run 용량을 차지하지 않는다. 운영자가 `RunControlService.prune(tenant_id=..., before=...)`를 호출해야 오래된 terminal snapshot이 삭제된다. 재개용 데이터에 도구 입출력이 들어가므로 SQLite 파일과 backup을 보호한다.
+
+PostgreSQL Ledger는 이벤트 증거를 별도로 영속화한다. Gateway 호출 승인과 멱등 결과는 process-local이므로 Ledger 영속성이 재시작을 넘는 exactly-once 실행을 뜻하지 않는다. Workflow timeout은 임의의 in-process Python adapter를 강제 종료하거나 외부 부작용을 취소하지 못한다. 취소는 협력적이며 후속 dispatch·재시도를 막지만 이미 보낸 동작은 회수하지 못한다. Control Plane owner는 단일 host다. 원격 실행은 `--dispatch remote`와 `interlock worker`로 지원하며, 아래 분산 운영 계약을 따른다. Control Plane HA와 tenant별 독립 배포는 포함하지 않는다.
+
+## 원격 worker와 충돌 처리 (2026-09-12)
+
+중앙 SQLite run store의 v2 migration은 기존 실행·승인을 보존하고 revision과 lease 배정을 추가한다. `distributed.py`는 프로젝트별 worker 인증, 서버 시간 기준 lease·generation, 원자적 선점과 승인 wakeup을 제공한다. `remote_worker.py`는 target·tenant·bundle을 고정하고 credential을 worker 로컬에 둔다. 시작 전 만료만 재배정하며, 시작 후 결과가 불확실한 작업은 `FAILED / RUN-EFFECT-UNCERTAIN`으로 종료한다. 정상 승인 대기는 다른 worker가 정확한 pending call을 이어받는다. [운영 가이드](distributed-workers.ko.md)에 설정과 복구 범위를 기록했다.

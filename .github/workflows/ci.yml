@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  studio:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run lint
+      - run: npx tsc --noEmit
+
   # Reference core is zero-dependency: the base suite must pass on stdlib alone.
   unit:
     runs-on: ubuntu-latest

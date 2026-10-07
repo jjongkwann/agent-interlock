@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .analytics import summarize_security_statistics
+from .analytics import reduce_interactions, summarize_security_statistics
+from .canonical import canonical_digest
 from .ledger import (
     Ledger,
     LedgerError,
@@ -38,6 +40,14 @@ _EVENT_TYPES = frozenset(
         "CONTROL_HEALTH_CHANGED",
         "POLICY_CHANGED",
         "TEST_EXECUTED",
+        "WORKFLOW_RUN_CREATED",
+        "WORKFLOW_RUN_STARTED",
+        "WORKFLOW_RUN_WAITING_APPROVAL",
+        "WORKFLOW_RUN_COMPLETED",
+        "WORKFLOW_RUN_FAILED",
+        "WORKFLOW_RUN_CANCELED",
+        "WORKFLOW_TASK_STATUS_UPDATED",
+        "WORKFLOW_TASK_APPROVED",
     }
 )
 _SEVERITIES = frozenset({"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"})
@@ -193,6 +203,10 @@ class LedgerHTTPAPI:
             if handler.command == "GET" and parts.path == "/v1/statistics":
                 self._require_scope(principal, "statistics:read")
                 self._get_statistics(handler, principal, parts.query)
+                return
+            if handler.command == "GET" and parts.path == "/v1/interactions":
+                self._require_scope(principal, "events:read")
+                self._get_interactions(handler, principal, parts.query)
                 return
             raise LedgerAPIError(404, "LEDGER-ROUTE-NOT-FOUND", "route not found")
         except LedgerAPIError as error:
@@ -457,6 +471,118 @@ class LedgerHTTPAPI:
             {"from": start, "to": end, "statistics": summarize_security_statistics(values)},
         )
 
+    def _get_interactions(self, handler: BaseHTTPRequestHandler, principal: LedgerAPIPrincipal, query: str) -> None:
+        if _single_header(handler, "Content-Length", required=False) not in {None, "", "0"}:
+            raise LedgerAPIError(400, "LEDGER-GET-BODY-DENIED", "GET request body is not allowed")
+        parameters = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=15)
+        filters = {
+            "sourceActorId",
+            "targetActorId",
+            "traceId",
+            "reasonCode",
+            "outcome",
+            "relationshipId",
+            "policyId",
+            "mode",
+            "dataSource",
+        }
+        if set(parameters) - (filters | {"start", "end", "limit", "cursor"}) or any(
+            len(values) != 1 or not values[0] or len(values[0]) > 2048 for values in parameters.values()
+        ):
+            raise LedgerAPIError(400, "LEDGER-QUERY-INVALID", "query parameters are invalid")
+        if not {"start", "end"} <= set(parameters):
+            raise LedgerAPIError(400, "LEDGER-RANGE-REQUIRED", "start and end timestamps are required")
+        values = {key: entries[0] for key, entries in parameters.items()}
+        start, end = values["start"], values["end"]
+        if parse_event_time(start) >= parse_event_time(end):
+            raise LedgerAPIError(400, "LEDGER-RANGE-INVALID", "start must be before end")
+        limit_value = values.get("limit", str(self.config.default_page_size))
+        if (
+            not limit_value.isascii()
+            or not limit_value.isdigit()
+            or not 1 <= int(limit_value) <= self.config.max_page_size
+        ):
+            raise LedgerAPIError(400, "LEDGER-LIMIT-INVALID", "limit is invalid")
+        limit = int(limit_value)
+        fingerprint = canonical_digest(
+            {
+                "tenant": principal.tenant_id,
+                **{key: value for key, value in values.items() if key not in {"cursor", "limit"}},
+            }
+        )
+        boundary = None
+        if "cursor" in values:
+            try:
+                cursor = json.loads(base64.b64decode(values["cursor"], altchars=b"-_", validate=True))
+                if (
+                    not isinstance(cursor, dict)
+                    or cursor.get("query") != fingerprint
+                    or not isinstance(cursor.get("at"), str)
+                    or not isinstance(cursor.get("id"), str)
+                ):
+                    raise ValueError("cursor belongs to a different query")
+                boundary = (parse_event_time(cursor["at"]), cursor["id"])
+            except (ValueError, TypeError, UnicodeError) as error:
+                raise LedgerAPIError(400, "LEDGER-CURSOR-INVALID", "cursor is invalid for this query") from error
+        ledger = self._resolver(principal.tenant_id)
+        try:
+            events = ledger.interaction_lifecycles_started_between(
+                principal.tenant_id,
+                start,
+                end,
+                data_source=values.get("dataSource"),
+                limit=self.config.max_statistics_events,
+            )
+        except LedgerRangeTooLarge as error:
+            raise LedgerAPIError(422, "LEDGER-RANGE-TOO-LARGE", "too many events; narrow the time range") from error
+        traces = {
+            event.interaction_id: event.trace_id for event in events if event.event_type == "INTERACTION_REQUESTED"
+        }
+        bundles = {
+            event.interaction_id: event.payload["bundleDigest"] for event in events if event.payload.get("bundleDigest")
+        }
+        records = []
+        # ponytail: bounded lifecycle reduction shared with statistics; indexed search if this cap is insufficient.
+        for record in reduce_interactions(event.to_dict() for event in events):
+            value = {}
+            for key, item in asdict(record).items():
+                first, *rest = key.split("_")
+                value[first + "".join(word.title() for word in rest)] = item
+            value["coverage"] = {key: sorted(items) for key, items in value["coverage"].items()}
+            value["traceId"] = traces.get(record.interaction_id)
+            value["bundleDigest"] = bundles.get(record.interaction_id)
+            if any(
+                (
+                    expected not in record.reason_codes
+                    if key == "reasonCode"
+                    else value.get("securityOutcome" if key == "outcome" else key) != expected
+                )
+                for key, expected in values.items()
+                if key in filters
+            ):
+                continue
+            if boundary is None or (parse_event_time(record.first_occurred_at), record.interaction_id) > boundary:
+                records.append(value)
+        records.sort(key=lambda value: (parse_event_time(value["firstOccurredAt"]), value["interactionId"]))
+        page = records[:limit]
+        next_cursor = None
+        if len(records) > limit:
+            next_cursor = base64.urlsafe_b64encode(
+                json.dumps(
+                    {"query": fingerprint, "at": page[-1]["firstOccurredAt"], "id": page[-1]["interactionId"]}
+                ).encode()
+            ).decode()
+        self._send_json(
+            handler,
+            200,
+            {
+                "interactions": page,
+                "nextCursor": next_cursor,
+                "window": {"start": start, "end": end},
+                "observation": {"source": "LEDGER", "eventCount": len(events)},
+            },
+        )
+
     def _read_json(self, handler: BaseHTTPRequestHandler) -> Any:
         if _single_header(handler, "Transfer-Encoding", required=False):
             raise LedgerAPIError(
@@ -591,7 +717,7 @@ class LedgerHTTPAPI:
 
 class _LedgerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    allow_reuse_address = True
 
     def __init__(self, server_address: tuple[str, int], api: LedgerHTTPAPI):
         self.api = api

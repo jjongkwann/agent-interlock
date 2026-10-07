@@ -5,7 +5,7 @@ import json
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,6 +38,32 @@ def run_cli(*argv: str) -> tuple[int, dict]:
     "git and the jwt extra are required for the Studio CLI workflow",
 )
 class StudioCLITests(unittest.TestCase):
+    def test_explicit_tenant_initializes_store_and_reopen_preserves_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "deployment"
+            code, compiled = run_cli("architecture", "compile", str(MANIFEST), "--shadow")
+            self.assertEqual(code, 0)
+            bundle = Path(tmp) / "bundle.json"
+            bundle.write_text(json.dumps(compiled))
+            code, _ = run_cli("studio", "propose", str(bundle), "--repo", str(repo), "--tenant", "tenant-acme")
+            self.assertEqual(code, 0)
+            target_path = repo / "deploy/target.json"
+            target = target_path.read_bytes()
+            self.assertEqual(json.loads(target)["tenantId"], "tenant-acme")
+            self.assertEqual(run_cli("studio", "status", "--repo", str(repo))[0], 0)
+            with patch.dict("os.environ", {"INTERLOCK_APPROVAL_KEY": KEY_ONE}):
+                code, approval = run_cli("studio", "approve", str(bundle), "--repo", str(repo),
+                                         "--approver", "alice", "--key-id", "key-one")
+            self.assertEqual(code, 0)
+            self.assertEqual(approval["statement"]["tenantId"], "tenant-acme")
+            self.assertEqual(approval["statement"]["targetId"], json.loads(target)["targetId"])
+            error = io.StringIO()
+            with redirect_stderr(error):
+                code, _ = run_cli("studio", "status", "--repo", str(repo), "--tenant", "tenant-other")
+            self.assertEqual(code, 2)
+            self.assertIn("different tenant", error.getvalue())
+            self.assertEqual(target_path.read_bytes(), target)
+
     def test_full_promotion_and_rollback_flow(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

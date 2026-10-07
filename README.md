@@ -32,56 +32,41 @@ Verdicts are promoted in stages — observe (OBSERVE) → shadow enforcement (SH
 
 ## Quick start
 
+From the repository root, create a Python 3.11+ environment and install the adapter before running examples:
+
 ```bash
-# Run the tests with no installation (zero-dependency reference core)
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-
-# Customer-support agent: the Claude Tool Runner with both tools guarded
-PYTHONPATH=src python3 -m examples.support_agent.run "Where is order 1001? Email the customer."
-
-# Refund agent: a second project, its own manifest, same adapter — all three tools guarded
-PYTHONPATH=src python3 -m examples.refund_agent.run "Refund order 2001 and let the customer know."
-
-# Secure email tool-call example
-PYTHONPATH=src python3 examples/secure_email.py
-
-# Architecture → MCP transport → Ledger vertical slice
-PYTHONPATH=src python3 examples/mcp_transport_vertical_slice.py
-
-# Trust Boundary → A2A Broker → Task orchestration → Ledger vertical slice
-PYTHONPATH=src python3 examples/a2a_orchestration_vertical_slice.py
-
-# Fake-data platform E2E with no external side effects
-.venv/bin/python -m pytest -q tests/test_platform_e2e.py
-
-# Real Run Control HTTP create/approve/cancel E2E via a test-only adapter
-.venv/bin/python -m pytest -q tests/test_run_control.py
-
-# Lint and compile a security architecture
-PYTHONPATH=src python3 -m agent_interlock architecture lint examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture compile examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture compile --shadow examples/secure_multi_agent_architecture.json
-PYTHONPATH=src python3 -m agent_interlock architecture runtime-diff examples/secure_multi_agent_architecture.json examples/runtime_drift_otlp.json
-
-# Box-based Security Architecture Studio
-cd studio
-npm install
-npm run dev
-
-# Editable install
-python3 -m pip install -e .
-
-# With the PostgreSQL adapter
-python3 -m pip install -e '.[postgres]'
-
-# With the Anthropic Tool Runner adapter, which the support-agent example needs
-python3 -m pip install -e '.[anthropic]'
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[anthropic,jwt]'
+python examples/secure_email.py
+interlock architecture lint examples/secure_multi_agent_architecture.json
+interlock architecture compile examples/secure_multi_agent_architecture.json --shadow > bundle.json
 ```
 
-The support-agent example calls the Claude API and takes its credentials from the Anthropic SDK
-(`ANTHROPIC_API_KEY`). With no credentials, `tests/test_example_support_agent.py` drives the same
-`build()` and the same guarded tools by replaying the recorded turns in
-`examples/support_agent/recorded/`.
+The local email example has no external side effects. For a live Claude Tool Runner run, configure `ANTHROPIC_API_KEY` and then run:
+
+```bash
+python -m examples.support_agent.run "Where is order 1001? Email the customer."
+```
+
+The live example calls the Anthropic API. For recorded replay without an API key, install the test runner and run the reference tests from the same repository root:
+
+```bash
+python -m pip install pytest
+python -m pytest -q tests/test_example_support_agent.py tests/test_platform_e2e.py tests/test_run_control.py
+```
+
+Open a separate terminal at the repository root for Studio (Node 22.13+):
+
+```bash
+cd studio
+npm ci
+npm run dev
+```
+
+For configuration-based authoring and execution, follow the [Studio builder guide (Korean)](docs/studio-builder.ko.md). Start a local host with `interlock serve --data-dir PATH --origin http://localhost:3102`, then configure JSON transforms, fixed HTTPS JSON requests, or Anthropic tool-using agents in Studio. Compile, review, sign in browser memory, promote, and run from the UI. Model tasks can use multiple explicitly selected reviewed tools; custom business logic and other protocols still need an adapter. Connect multiple execution servers with `--dispatch remote` and `interlock worker`, following the [remote worker guide (Korean)](docs/distributed-workers.ko.md).
+
+Use [SDK adoption](docs/16-adding-interlock-to-an-agent.md) for an existing Python agent, or the [managed support host](docs/managed-support-host.md) for custom business tools and PostgreSQL.
 
 ## Product components
 
@@ -142,7 +127,7 @@ Design docs are English-first; each has a Korean original alongside it (`*.ko.md
 
 ## Current implementation
 
-The repository includes a Python 3.11 reference core following the docs' original implementation order. The core has zero external runtime dependencies; only the PostgreSQL adapter uses the optional `postgres` extra.
+The repository includes a Python 3.11 reference core following the docs' original implementation order. The core has zero external runtime dependencies; adapters use optional `postgres`, `anthropic` and `jwt` extras.
 
 **SDK / Gateway policy core**
 
@@ -150,7 +135,7 @@ The repository includes a Python 3.11 reference core following the docs' origina
 - Canonical/raw digests for MCP tool definitions with `DISCOVERED` → `APPROVED` → `ACTIVE` state transitions
 - Isolation of definition drift, metadata instructions, cross-server references
 - Call-argument schema, data classification, secret, destination, token-binding, declared-side-effect policy
-- Approvals bound to hashes and destinations; hash-bound connector execution — **gateway only**: `MCPToolGateway.grant_approval` is the sole approval API, so a `wrap()`ped Tool cannot perform an `EXTERNAL_WRITE` under a stock `LinkPolicy` (`external_write_requires_approval` defaults `True` and the SDK never sets `approval_valid`). It fails closed, but the approval path is unreachable from the SDK; see [docs/02 §4.2](docs/02-developer-framework-design.md)
+- One-use invocation approvals in gateway and SDK: tenant, source/target, definition revision, installed policy, intent and exact arguments are bound together; consumed atomically before execution. See [docs/02 §4.2](docs/02-developer-framework-design.md).
 - One `Check` table (29 checks) behind all three enforcement points, each selecting a `Profile`: MCP gateway 21, SDK 19, A2A broker 17. **The mechanism is shared; the coverage is not** — the broker shares only 9 checks with the gateway and has no egress, volume or taint control
 - `OBSERVE`, `SHADOW`, `ENFORCE` modes
 - Tool-result secret sanitization, `UNTRUSTED_TOOL_RESULT` taint, schema isolation
@@ -201,13 +186,13 @@ The repository includes a Python 3.11 reference core following the docs' origina
 
 **Adoption layer**
 
-- Anthropic Tool Runner adapter (`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`), with an `approve=` hook reaching the shared approval store
+- Anthropic Tool Runner adapter (`GuardedTool`/`GuardedAsyncTool`, `guard_tools`, `bind_architecture`), with an `approve=` hook reaching the shared approval implementation
 - Intent derived from arguments and MCP tool annotations, judged against the declaration (`INTERLOCK-INTENT-ARGUMENT-MISMATCH`)
 - `interlock verify`: nine L1 scenarios run against a project's own guarded tools, not a framework fixture
 - Project-module contract (`MANIFEST`/`TENANT_ID`/`SOURCE_ACTOR_ID`/`APPROVER`/`BINDINGS`/`build()`) emitted by `interlock architecture skeleton`
 - Acceptance-criteria grammar and three recorded outcomes per task (`executed`/`goalMet`/`securityMet`)
 - One deployment mode: the deployment record's mode, not the authored manifest, governs a run
-- SDK sharing the gateway's post-execution handling and approval store
+- SDK sharing the gateway's post-execution handling and approval implementation
 - Unsupported JSON Schema keywords rejected at definition time
 - Studio projects: new/open/save, editable id/version, manifest import
 
@@ -252,4 +237,10 @@ The current implementation covers the policy core of the [04 MCP Tool Gateway sp
 
 Production-integration additions: a persistent PostgreSQL DefinitionRegistry and distributed Session/OAuth/Config stores (RLS, migrations 0002/0003), macOS Seatbelt and Linux bwrap+seccomp sandboxes (live-enforced in tests), a real-socket egress backend with DNS/IP pinning, Ed25519 publisher and Studio approval signatures, Langfuse/LangSmith trace adapters, an append-only WORM audit store, and PostgreSQL live CI on GitHub Actions. The product closed loop includes tenant+interaction full-lifecycle security statistics (Python/Studio Unicode golden parity), `GET /v1/statistics`, manifest→SDK skeleton and security-test generation, a public-key-verified two-person promotion/rollback Control Plane, and Studio statistics/deploy views with read-only Live Attach.
 
-What remains is not shipped, and is not external-integration work: a LangGraph adapter, a Claude Agent SDK adapter, a sidecar proxy, server-side MCP connector interception (the API's `mcp_servers` executes tools on Anthropic's side and cannot be intercepted, so it stays out of scope), an LLM-judge acceptance evaluator (the grammar is structural only), `BYPASSED` semantics (the open question in [Control Coverage Statistics](docs/specs/2026-07-27-control-coverage-statistics.md)), PyPI upload, and a manifest parser that still drops `maxExportRecords`/`maxExportBytes`/`secretAction` and side-effect actions (`architecture._parse_edge`). Beyond that, what remains is genuine external-integration work (Sigstore/Rekor, KMS/HSM, IdP/Secret Store, a real egress sidecar and S3 Object-Lock, OTLP gRPC/Collector/Incident services, PostgreSQL HA, distributed rate limiting, TLS, remote Git-host PR review/deploy, DPoP/mTLS, JWKS rotation, operational consent/refresh tokens). Detailed contract tracing and classification follow [06 Implementation Status](docs/06-implementation-status.md).
+What remains is not shipped, and is not external-integration work: a LangGraph adapter, a Claude Agent SDK adapter, a sidecar proxy, server-side MCP connector interception (the API's `mcp_servers` executes tools on Anthropic's side and cannot be intercepted, so it stays out of scope), an LLM-judge acceptance evaluator (the grammar is structural only), `BYPASSED` semantics (the open question in [Control Coverage Statistics](docs/specs/2026-07-27-control-coverage-statistics.md)), PyPI upload. Beyond that, what remains is genuine external-integration work (Sigstore/Rekor, KMS/HSM, IdP/Secret Store, a real egress sidecar and S3 Object-Lock, OTLP gRPC/Collector/Incident services, PostgreSQL HA, distributed rate limiting, TLS, remote Git-host PR review/deploy, DPoP/mTLS, JWKS rotation, operational consent/refresh tokens). Detailed contract tracing and classification follow [06 Implementation Status](docs/06-implementation-status.md).
+
+## Operating contract
+
+The managed host has one deployment owner and one scheduler. Tenant-scoped run/ledger APIs do not provide independent shared-SaaS tenant deployments. SQLite run snapshots retain their original bundle and workflow approvals; restart marks interrupted RUNNING work `RUN-INTERRUPTED` without replaying side effects, while waiting/pending work resumes explicitly. Terminal runs remain queryable until explicit pruning.
+
+PostgreSQL Ledger makes event evidence durable. Gateway invocation approvals and result/idempotency caches stay process-local. An arbitrary in-process adapter's timeout cannot stop or undo an external effect; cancellation is cooperative. Authored controls, installed classification/export/provenance hooks and observed evaluations are separate evidence. See [implementation status](docs/06-implementation-status.md) and the [managed host](docs/managed-support-host.md) for the full boundaries.

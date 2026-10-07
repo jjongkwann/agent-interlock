@@ -6,7 +6,9 @@ prunes partitions, and pools real connections against a DSN-gated database.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import tempfile
 import unittest
 from datetime import date
@@ -65,6 +67,23 @@ class ScriptedConnection:
 
 
 class MigrationRunnerTests(unittest.TestCase):
+    def test_packaged_migrations_match_repository_sql(self):
+        packaged = PostgreSQLMigrationRunner(None, lambda: ScriptedConnection()).discover()
+        repository = PostgreSQLMigrationRunner(ROOT / "migrations/postgresql", lambda: ScriptedConnection()).discover()
+        self.assertEqual(packaged, repository)
+        self.assertTrue(packaged)
+        self.assertEqual([version for version, _ in packaged][:4], ["0001", "0002", "0003", "0004"])
+
+    def test_workflow_event_vocabulary_matches_database_and_http_contracts(self):
+        from agent_interlock.ledger_http import _EVENT_TYPES
+        migration = (ROOT / "src/agent_interlock/migrations/postgresql/0005_workflow_events.sql").read_text()
+        envelope = json.loads((ROOT / "schemas/event-envelope.schema.json").read_text())
+        schema_types = set(envelope["properties"]["event_type"]["enum"])
+        sql_types = set(re.findall(r"'([A-Z_]+)'", migration))
+        self.assertEqual(sql_types, _EVENT_TYPES)
+        self.assertEqual(sql_types, schema_types)
+        self.assertIn("WORKFLOW_TASK_APPROVED", sql_types)
+
     def test_discover_orders_and_ignores_legacy_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)

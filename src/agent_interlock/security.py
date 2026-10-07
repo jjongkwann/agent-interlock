@@ -134,7 +134,7 @@ def validate_schema(value: Any, schema: Mapping[str, Any], path: str = "$") -> t
         not isinstance(value, type_map[expected]) or (expected in {"integer", "number"} and isinstance(value, bool))
     ):
         return (f"{path}: expected {expected}",)
-    if expected == "object" and isinstance(value, Mapping):
+    if isinstance(value, Mapping):
         required = schema.get("required", [])
         errors.extend(f"{path}.{name}: required" for name in required if name not in value)
         properties = schema.get("properties", {})
@@ -148,7 +148,7 @@ def validate_schema(value: Any, schema: Mapping[str, Any], path: str = "$") -> t
             for name in value:
                 if name not in properties:
                     errors.extend(validate_schema(value[name], additional_properties, f"{path}.{name}"))
-    if expected == "array" and isinstance(value, list) and "items" in schema:
+    if isinstance(value, list) and "items" in schema:
         for index, item in enumerate(value):
             errors.extend(validate_schema(item, schema["items"], f"{path}[{index}]"))
     if "enum" in schema and value not in schema["enum"]:

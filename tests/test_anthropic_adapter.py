@@ -338,13 +338,13 @@ class AdapterCases:
         self.assertTrue(record.enforced_block)
 
     def test_an_approval_granted_ahead_of_the_call_is_found_by_its_exact_arguments(self):
-        from agent_interlock.security import canonical_destination
-
         gateway, tool, mailer = build_requiring_approval()
         gateway.grant_approval(
             tenant_id="tenant-a",
             arguments={"to": "a@customer.example", "body": "hi"},
-            canonical_destinations=(canonical_destination("a@customer.example"),),
+            source_actor_id="agent.support",
+            revision_id=tool._revision.revision_id,
+            intent=tool._declared_intent({"to": "a@customer.example", "body": "hi"}),
             approver="support-operator",
         )
         self.assertEqual(tool.call({"to": "a@customer.example", "body": "hi"}), '{"status":"sent"}')

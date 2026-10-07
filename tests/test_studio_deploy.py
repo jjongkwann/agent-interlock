@@ -9,11 +9,14 @@ from __future__ import annotations
 import copy
 import io
 import json
+import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_interlock import (
     DeploymentBundle,
@@ -27,6 +30,9 @@ from agent_interlock import (
     sign_deployment_approval,
 )
 from agent_interlock.__main__ import main
+from agent_interlock.canonical import canonical_digest
+from agent_interlock.signing import sign_canonical_ed25519
+from agent_interlock.studio_deploy import DeploymentApproval
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "examples" / "secure_multi_agent_architecture.json"
@@ -69,6 +75,7 @@ class StudioDeploymentTests(unittest.TestCase):
                 self.bundle,
                 from_digest=from_digest,
                 to_mode="ENFORCE",
+                target_id=self.store.target_id, tenant_id=self.store.tenant_id,
                 approver_id=approver,
                 key_id=key_id,
                 key={"key-a": KEY_A, "key-b": KEY_B}[key_id],
@@ -78,6 +85,99 @@ class StudioDeploymentTests(unittest.TestCase):
 
     def test_empty_store_history_is_empty(self):
         self.assertEqual(self.store.history(), ())
+
+    def test_target_is_persistent_tenant_bound_and_rejects_replayed_or_unbound_approvals(self):
+        self.store.propose(self.bundle)
+        approvals = self._approvals(None, ("alice", "key-a"), ("bob", "key-b"))
+        reopened = GitBundleStore(self.dir)
+        self.assertEqual(reopened.target_id, self.store.target_id)
+        with self.assertRaisesRegex(ValueError, "different tenant"):
+            GitBundleStore(self.dir, tenant_id="other")
+        with tempfile.TemporaryDirectory() as other_dir:
+            other = GitBundleStore(other_dir)
+            other.propose(self.bundle)
+            self.assertNotEqual(other.target_id, self.store.target_id)
+            with self.assertRaises(StudioDeploymentError):
+                other.promote(self.bundle.bundle_digest, approvals, trusted_approvers=TRUSTED_APPROVERS)
+            own_approvals = tuple(sign_deployment_approval(
+                self.bundle, from_digest=None, to_mode="ENFORCE", target_id=other.target_id,
+                tenant_id=other.tenant_id, approver_id=name, key_id=key_id, key=key,
+            ) for name, key_id, key in (("alice", "key-a", KEY_A), ("bob", "key-b", KEY_B)))
+            other.promote(self.bundle.bundle_digest, own_approvals, trusted_approvers=TRUSTED_APPROVERS)
+            with self.assertRaises(StudioDeploymentError):
+                other.rollback(self.bundle.bundle_digest,
+                               self._approvals(self.bundle.bundle_digest, ("alice", "key-a"), ("bob", "key-b")),
+                               trusted_approvers=TRUSTED_APPROVERS)
+        wrong_tenant = tuple(sign_deployment_approval(
+            self.bundle, from_digest=None, to_mode="ENFORCE", target_id=self.store.target_id,
+            tenant_id="other-tenant", approver_id=name, key_id=key_id, key=key,
+        ) for name, key_id, key in (("alice", "key-a", KEY_A), ("bob", "key-b", KEY_B)))
+        with self.assertRaises(StudioDeploymentError):
+            self.store.promote(self.bundle.bundle_digest, wrong_tenant, trusted_approvers=TRUSTED_APPROVERS)
+        for omitted in (("targetId", "tenantId"), ("tenantId",)):
+            statement = self.store.approval_statement(self.bundle, from_digest=None)
+            for key in omitted:
+                statement.pop(key)
+            unsigned = tuple(DeploymentApproval(name, key_id, sign_canonical_ed25519(
+                {**statement, "approverId": name, "keyId": key_id}, key,
+            )) for name, key_id, key in (("alice", "key-a", KEY_A), ("bob", "key-b", KEY_B)))
+            with self.assertRaises(StudioDeploymentError):
+                self.store.promote(self.bundle.bundle_digest, unsigned, trusted_approvers=TRUSTED_APPROVERS)
+        reopened.promote(self.bundle.bundle_digest, approvals, trusted_approvers=TRUSTED_APPROVERS)
+
+    def test_existing_store_migration_preserves_deployment_and_unrelated_staged_files(self):
+        self.store.propose(self.bundle)
+        self.store.promote(self.bundle.bundle_digest, self._approvals(None, ("alice", "key-a"), ("bob", "key-b")),
+                           trusted_approvers=TRUSTED_APPROVERS)
+        active, history = self.store.active(), self.store.history()
+        (Path(self.dir) / "deploy/target.json").unlink()
+        migrated = GitBundleStore(self.dir, tenant_id="existing-tenant")
+        self.assertEqual(migrated.active(), active)
+        self.assertEqual(migrated.history(), history)
+        self.assertEqual(migrated.bundle(self.bundle.bundle_digest), self.bundle)
+        self.assertEqual(GitBundleStore(self.dir).tenant_id, "existing-tenant")
+        unrelated = Path(self.dir) / "unrelated.txt"
+        unrelated.write_text("keep staged")
+        subprocess.run(["git", "-C", self.dir, "add", "unrelated.txt"], check=True)
+        migrated._commit("studio: persist target migration")
+        files = subprocess.check_output(["git", "-C", self.dir, "ls-tree", "--name-only", "HEAD"], text=True)
+        self.assertNotIn("unrelated.txt", files)
+        staged = subprocess.check_output(["git", "-C", self.dir, "diff", "--cached", "--name-only"], text=True)
+        self.assertIn("unrelated.txt", staged)
+
+    def test_diff_reports_added_and_removed_null_fields(self):
+        self.store.propose(self.bundle)
+        self.store.promote(self.bundle.bundle_digest, self._approvals(None, ("alice", "key-a"), ("bob", "key-b")),
+                           trusted_approvers=TRUSTED_APPROVERS)
+        body = copy.deepcopy(self.bundle.body)
+        body["architecture"]["metadata"]["nullable"] = None
+        candidate = DeploymentBundle(self.bundle.architecture_id, self.bundle.version, canonical_digest(body), body)
+        self.store.propose(candidate)
+        self.assertEqual(self.store.diff(candidate.bundle_digest)["changes"], [
+            {"path": "/metadata/nullable", "op": "add", "before": None, "after": None},
+        ])
+        self.bundle = candidate
+        approvals = self._approvals(self.store.active()["bundleDigest"], ("alice", "key-a"), ("bob", "key-b"))
+        self.store.promote(candidate.bundle_digest, approvals, trusted_approvers=TRUSTED_APPROVERS)
+        previous = self.store.active()["promotedFrom"]
+        self.assertEqual(self.store.diff(previous)["changes"], [
+            {"path": "/metadata/nullable", "op": "remove", "before": None, "after": None},
+        ])
+
+    def test_cli_approval_signs_the_existing_target_and_tenant(self):
+        self.store.propose(self.bundle)
+        value = {**self.bundle.body, "bundleDigest": self.bundle.bundle_digest, "deployable": True}
+        bundle_path = Path(self.dir) / "compile-output.json"
+        bundle_path.write_text(json.dumps(value))
+        output = io.StringIO()
+        with patch.dict(os.environ, {"INTERLOCK_APPROVAL_KEY": KEY_A.hex()}), redirect_stdout(output):
+            code = main(["studio", "approve", str(bundle_path), "--repo", self.dir,
+                         "--approver", "alice", "--key-id", "key-a"])
+        self.assertEqual(code, 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["statement"]["targetId"], self.store.target_id)
+        self.assertEqual(result["statement"]["tenantId"], self.store.tenant_id)
+        self.assertEqual(result["signature"], self._approvals(None, ("alice", "key-a"))[0].signature)
 
     def test_propose_then_two_person_promote(self):
         self.store.propose(self.bundle)
@@ -118,6 +218,7 @@ class StudioDeploymentTests(unittest.TestCase):
                 self.bundle,
                 from_digest=None,
                 to_mode="ENFORCE",
+                target_id=self.store.target_id, tenant_id=self.store.tenant_id,
                 approver_id=approver,
                 key_id=key_id,
                 key=KEY_A,
@@ -156,6 +257,7 @@ class StudioDeploymentTests(unittest.TestCase):
                     second,
                     from_digest=first_digest,
                     to_mode="ENFORCE",
+                    target_id=self.store.target_id, tenant_id=self.store.tenant_id,
                     approver_id=approver,
                     key_id=key_id,
                     key={"key-a": KEY_A, "key-b": KEY_B}[key_id],

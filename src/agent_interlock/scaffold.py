@@ -1,12 +1,14 @@
 """Generate a runnable project skeleton and its security tests from an Architecture manifest.
 
-``interlock architecture skeleton <manifest> --out-dir DIR`` writes two files:
+``interlock architecture skeleton <manifest> --out-dir DIR`` writes a module, tests and an edge coverage JSON artifact:
 
 - ``<architecture>_skeleton.py`` — the project module contract every Interlock project has:
   ``MANIFEST``, ``TENANT_ID``, ``SOURCE_ACTOR_ID``, one ``ToolDefinition`` and one TODO handler per
   invoked TOOL node, ``BINDINGS``, and ``build()`` returning the gateway and the guarded tools that
   go straight into ``client.beta.messages.tool_runner``. ``examples/support_agent`` is the same
   contract written by hand, and ``interlock verify`` imports it.
+- ``<architecture>_edge_coverage.json`` — every edge with its generated binding status and reason.
+  ``WIRED`` means a binding was generated; handlers remain TODOs and enforcement is not yet verified.
 - ``test_<architecture>_security.py`` — per guarded tool, a denied-data-class test whose
   expectation is asserted through the security-statistics reducer, and, when the manifest admits
   one, a declared-flow test that actually runs the tool through the guard.
@@ -255,16 +257,46 @@ def _wirings(graph: ArchitectureGraph) -> tuple[str, tuple[_Wiring, ...]]:
     return source, tuple(wirings)
 
 
-def _uncovered_edges(graph: ArchitectureGraph, wirings: Sequence[_Wiring]) -> list[str]:
-    """Comment lines for every static edge no guarded tool covers."""
+def edge_coverage(graph: ArchitectureGraph) -> list[dict[str, str | None]]:
+    """Report generated bindings, not runtime enforcement or executed test coverage."""
+    source, wirings = _wirings(graph)
     covered = {wiring.edge.id for wiring in wirings}
-    lines = []
+    nodes = {node.id: node for node in graph.nodes}
+    result = []
     for edge in graph.edges:
-        if edge.id in covered:
-            continue
-        reason = "dynamic: connect concrete targets at runtime" if edge.dynamic else "not an invoked TOOL edge"
-        lines.append(f"# edge {edge.id!r} ({edge.source!r} {edge.relationship} {edge.target!r}) is {reason}")
-    return lines
+        wired = edge.id in covered
+        if wired:
+            reason = "Static TOOL binding for the first invocation source; implement the TODO handler."
+        elif edge.dynamic:
+            reason = "Dynamic selector: bind concrete targets at runtime."
+        elif (
+            edge.relationship_id != "REL-05"
+            or nodes.get(edge.target) is None
+            or nodes[edge.target].actor.type != ActorType.TOOL
+        ):
+            reason = "Not a static REL-05 invocation of a TOOL; provide a runtime adapter."
+        elif edge.source != source:
+            reason = f"Different invocation source; generated guard_tools binds only {source!r}."
+        else:
+            reason = "Target already has a generated binding; resolve the additional edge explicitly."
+        result.append({
+            "edgeId": edge.id,
+            "sourceActorId": edge.source,
+            "targetActorId": edge.target,
+            "relationshipId": edge.relationship_id,
+            "profile": "MCP_GATEWAY" if wired else None,
+            "bindingStatus": "WIRED" if wired else "MANUAL",
+            "reason": reason,
+        })
+    return result
+
+
+def _uncovered_edges(graph: ArchitectureGraph) -> list[str]:
+    return [
+        f"# edge {item['edgeId']!r}: {item['reason']}"
+        for item in edge_coverage(graph)
+        if item["bindingStatus"] == "MANUAL"
+    ]
 
 
 def generate_skeleton(graph: ArchitectureGraph, manifest_path: str | Path) -> str:
@@ -298,10 +330,11 @@ def generate_skeleton(graph: ArchitectureGraph, manifest_path: str | Path) -> st
         f"MANIFEST = Path({str(Path(manifest_path))!r})",
         'TENANT_ID = "tenant-dev"  # TODO: your tenant',
         f"SOURCE_ACTOR_ID = {source!r}",
+        f"EDGE_COVERAGE = {edge_coverage(graph)!r}",
         'APPROVER = "TODO: the reviewer who signed off these tool definitions"',
         "",
     ]
-    lines += _uncovered_edges(graph, wirings)
+    lines += _uncovered_edges(graph)
     for wiring in wirings:
         lines += [
             "",
@@ -401,7 +434,7 @@ def generate_security_tests(graph: ArchitectureGraph, skeleton_module: str) -> s
         "    return reduce_interactions([event.to_dict() for event in gateway.ledger.all()])",
         "",
     ]
-    lines += _uncovered_edges(graph, wirings)
+    lines += _uncovered_edges(graph)
     for index, wiring in enumerate(wirings):
         class_name = f"Tool_{python_identifier(wiring.edge.target)}_Tests"
         lines += [

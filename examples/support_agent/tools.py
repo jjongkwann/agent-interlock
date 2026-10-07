@@ -98,3 +98,18 @@ SEND_EMAIL = ToolDefinition(
     output_schema=SEND_EMAIL_OUTPUT_SCHEMA,
     annotations={"readOnlyHint": False},
 )
+
+
+def classify_support_data(_arguments: dict[str, Any]) -> frozenset[str]:
+    """This example's order identifiers and customer replies are customer data (D3)."""
+    return frozenset({"D3"})
+
+
+def estimate_support_export(arguments: dict[str, Any]) -> tuple[int, int]:
+    from agent_interlock.canonical import canonical_json
+
+    return 1, len(canonical_json(arguments))
+
+
+def support_result_provenance(_result: Any) -> dict[str, Any]:
+    return {"dataClasses": ["D3"], "source": "support-example-local-data", "simulatedBusinessData": True}

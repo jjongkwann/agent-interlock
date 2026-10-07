@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .approvals import Approval, ApprovalStore
+from .approvals import Approval, ApprovalStore, approval_binding
 from .canonical import canonical_digest
 from .config_guard import ConfigDecision, ConfigGuard, ConfigPrincipal, ConfigRole, RuntimeConfigProbe
+from .intent import side_effect_rank
 from .ledger import InMemoryLedger, Ledger, declare_coverage
 from .models import (
     ActionResult,
@@ -64,6 +67,7 @@ class _Pending:
     decision: PolicyDecisionRecord
     environment: Environment
     data_source: DataSource
+    policy: LinkPolicy
 
 
 class MCPToolGateway:
@@ -75,7 +79,11 @@ class MCPToolGateway:
         config_guard: ConfigGuard | None = None,
         config_probe: RuntimeConfigProbe | None = None,
         agent_config_ids: Mapping[str, str] | None = None,
+        bundle_digest: str | None = None,
     ) -> None:
+        self.bundle_digest = bundle_digest
+        self._tool_hooks: dict[str, dict[str, Any]] = {}
+        self._result_provenance: dict[str, Callable[[Any], Mapping[str, Any]]] = {}
         self.registry = registry or DefinitionRegistry()
         self.ledger = ledger or InMemoryLedger()
         self._config_guard = config_guard
@@ -88,8 +96,23 @@ class MCPToolGateway:
         # Coverage digests already declared to the ledger by this instance; see ledger.declare_coverage.
         self._declared_coverage: set[tuple[str, ...]] = set()
         self._approvals = ApprovalStore()
-        self._idempotency: dict[tuple[str, str], tuple[str, InvocationResult]] = {}
+        self._idempotency: dict[tuple[str, str], tuple[str, Future[InvocationResult]]] = {}
+        self._idempotency_lock = threading.Lock()
         self._execution_decisions: dict[str, str] = {}
+
+    def set_tool_hooks(
+        self, actor_id: str, *, classification_installed: bool, volume_estimator_installed: bool,
+        result_provenance: Callable[[Any], Mapping[str, Any]] | None = None,
+    ) -> None:
+        self._tool_hooks[actor_id] = {
+            "classification": classification_installed,
+            "exportEstimation": volume_estimator_installed,
+            "resultProvenance": result_provenance is not None,
+        }
+        if result_provenance is not None:
+            self._result_provenance[actor_id] = result_provenance
+        else:
+            self._result_provenance.pop(actor_id, None)
 
     def register_actor(self, actor: ActorSpec, *, tool_id: str | None = None) -> None:
         self._actors[actor.id] = actor
@@ -129,6 +152,7 @@ class MCPToolGateway:
             source_actor_id=definition.server_id,
             target_actor_id=definition.tool_id,
             payload={
+                "bundleDigest": self.bundle_digest,
                 "toolDefinition": {
                     "toolId": definition.tool_id,
                     "revisionId": revision.revision_id,
@@ -141,28 +165,42 @@ class MCPToolGateway:
         )
         return revision
 
+    def _approval_binding(
+        self, *, tenant_id: str, source_actor_id: str, revision_id: str,
+        intent: InvocationIntent, arguments: Mapping[str, Any],
+    ) -> str:
+        revision = self.registry.get(revision_id)
+        target = self._tool_actors[revision.tool_id]
+        return approval_binding(
+            tenant_id=tenant_id, source_actor_id=source_actor_id, target_actor_id=target.id,
+            revision_id=revision_id, policy=self._policies[(source_actor_id, target.id)],
+            intent=intent, arguments=arguments,
+        )
+
     def grant_approval(
-        self,
-        *,
-        tenant_id: str,
-        arguments: Mapping[str, Any],
-        canonical_destinations: tuple[str, ...],
-        approver: str,
-        ttl_seconds: int = 300,
+        self, *, tenant_id: str, source_actor_id: str, revision_id: str,
+        intent: InvocationIntent, arguments: Mapping[str, Any], approver: str, ttl_seconds: int = 300,
     ) -> Approval:
         return self._approvals.grant(
-            tenant_id=tenant_id,
-            arguments=arguments,
-            canonical_destinations=canonical_destinations,
-            approver=approver,
-            ttl_seconds=ttl_seconds,
+            binding_hash=self._approval_binding(
+                tenant_id=tenant_id, source_actor_id=source_actor_id, revision_id=revision_id,
+                intent=intent, arguments=arguments,
+            ),
+            approver=approver, ttl_seconds=ttl_seconds,
         )
 
     def find_approval(
-        self, *, tenant_id: str, arguments: Mapping[str, Any], destinations: tuple[str, ...]
+        self, *, tenant_id: str, source_actor_id: str, revision_id: str,
+        intent: InvocationIntent, arguments: Mapping[str, Any],
     ) -> Approval | None:
-        """The unexpired approval bound to exactly these arguments and destinations, if any."""
-        return self._approvals.find(tenant_id, arguments, destinations)
+        try:
+            binding = self._approval_binding(
+                tenant_id=tenant_id, source_actor_id=source_actor_id, revision_id=revision_id,
+                intent=intent, arguments=arguments,
+            )
+        except ValueError:
+            return None
+        return self._approvals.find(binding)
 
     def evaluate_invocation(
         self,
@@ -185,7 +223,14 @@ class MCPToolGateway:
         interaction_id = str(uuid.uuid4())
         trace = trace_id or f"trace-{uuid.uuid4()}"
         span = span_id or f"span-{uuid.uuid4()}"
-        approval_valid = self._approvals.valid(intent, tenant_id, arguments)
+        try:
+            binding = self._approval_binding(
+                tenant_id=tenant_id, source_actor_id=source_actor_id, revision_id=revision_id,
+                intent=intent, arguments=arguments,
+            )
+        except ValueError:
+            binding = ""
+        approval_valid = self._approvals.valid(intent.approval_id, binding)
 
         self.ledger.append(
             "INTERACTION_REQUESTED",
@@ -197,6 +242,7 @@ class MCPToolGateway:
             target_actor_id=target.id,
             payload={
                 "mcp": {"serverId": revision.definition.server_id, "method": "tools/call"},
+                "bundleDigest": self.bundle_digest,
                 "toolDefinition": {"toolId": revision.tool_id, "revisionId": revision.revision_id},
                 "invocation": {
                     "purpose": intent.purpose,
@@ -260,7 +306,7 @@ class MCPToolGateway:
                 ),
             )
         self._decisions[decision.decision_id] = _Pending(
-            tenant_id, source, target, revision, intent, decision, environment, data_source
+            tenant_id, source, target, revision, intent, decision, environment, data_source, policy
         )
         self._append_control(decision, credential)
         return decision
@@ -290,16 +336,41 @@ class MCPToolGateway:
         pending = self._decisions.get(decision_id)
         if not pending:
             raise GatewayError("unknown decision")
-        decision = pending.decision
-        cache_key = (pending.tenant_id, idempotency_key)
-        request_fingerprint = self._request_fingerprint(
-            pending.source.id, pending.revision.revision_id, pending.intent, arguments
+        return self._execute_once(
+            pending.tenant_id, idempotency_key,
+            self._request_fingerprint(pending.source.id, pending.revision.revision_id, pending.intent, arguments),
+            lambda: self._execute_pending(pending, arguments, connector),
         )
-        if cache_key in self._idempotency:
-            previous_fingerprint, previous_result = self._idempotency[cache_key]
-            if previous_fingerprint != request_fingerprint:
-                raise GatewayError("idempotency key was already used for a different invocation")
-            return previous_result
+
+    def _execute_once(
+        self, tenant_id: str, key: str, fingerprint: str, execute: Callable[[], InvocationResult],
+    ) -> InvocationResult:
+        if not isinstance(key, str) or not key or len(key) > 200:
+            raise GatewayError("idempotency key must be between 1 and 200 characters")
+        # Process-local cache: use a durable execution store before sharing keys across workers.
+        with self._idempotency_lock:
+            existing = self._idempotency.get((tenant_id, key))
+            if existing:
+                previous_fingerprint, future = existing
+                if previous_fingerprint != fingerprint:
+                    raise GatewayError("idempotency key was already used for a different invocation")
+            else:
+                future = Future()
+                self._idempotency[(tenant_id, key)] = (fingerprint, future)
+        if existing:
+            return future.result()
+        try:
+            result = execute()
+        except BaseException as error:
+            future.set_exception(error)
+            raise
+        future.set_result(result)
+        return result
+
+    def _execute_pending(
+        self, pending: _Pending, arguments: Mapping[str, Any], connector: ConnectorLike,
+    ) -> InvocationResult:
+        decision = pending.decision
         if time.time() > decision.expires_at_epoch:
             raise GatewayError("decision expired")
         if canonical_digest(arguments) != decision.arguments_hash:
@@ -308,6 +379,22 @@ class MCPToolGateway:
             self._append_action(pending, ActionResult.COMPLETED, None)
             self._append_outcome(pending, SecurityOutcome.BLOCKED, None)
             raise InvocationBlocked(decision)
+
+        policy = self._policies[(pending.source.id, pending.target.id)]
+        if policy != pending.policy:
+            raise GatewayError("policy changed after evaluation; evaluate again")
+        if (
+            decision.enforced and policy.external_write_requires_approval
+            and side_effect_rank(pending.intent.estimated_side_effect) >= side_effect_rank(SideEffect.EXTERNAL_WRITE)
+        ):
+            binding = self._approval_binding(
+                tenant_id=pending.tenant_id, source_actor_id=pending.source.id,
+                revision_id=pending.revision.revision_id, intent=pending.intent, arguments=arguments,
+            )
+            if not self._approvals.valid(pending.intent.approval_id, binding, consume=True):
+                self._append_action(pending, ActionResult.COMPLETED, None)
+                self._append_outcome(pending, SecurityOutcome.BLOCKED, None)
+                raise GatewayError("approval expired, changed, or already consumed")
 
         execution_id = str(uuid.uuid4())
         self._execution_decisions[execution_id] = decision.decision_id
@@ -336,30 +423,35 @@ class MCPToolGateway:
         outcome = SecurityOutcome.SUCCEEDED if decision.decision != ControlDecision.ALLOW else SecurityOutcome.UNKNOWN
         self._append_outcome(pending, outcome, execution_id)
         result = InvocationResult(clean_result, decision, execution_id, labels)
-        self._idempotency[cache_key] = (request_fingerprint, result)
         return result
 
     def invoke(self, *, connector: ConnectorLike, idempotency_key: str, **evaluation: Any) -> InvocationResult:
-        cache_key = (evaluation["tenant_id"], idempotency_key)
-        request_fingerprint = self._request_fingerprint(
-            evaluation["source_actor_id"],
-            evaluation["revision_id"],
-            evaluation["intent"],
-            evaluation["arguments"],
+        def execute() -> InvocationResult:
+            decision = self.evaluate_invocation(**evaluation)
+            return self._execute_pending(self._decisions[decision.decision_id], evaluation["arguments"], connector)
+
+        return self._execute_once(
+            evaluation["tenant_id"], idempotency_key,
+            self._request_fingerprint(
+                evaluation["source_actor_id"], evaluation["revision_id"], evaluation["intent"], evaluation["arguments"],
+            ),
+            execute,
         )
-        if cache_key in self._idempotency:
-            previous_fingerprint, previous_result = self._idempotency[cache_key]
-            if previous_fingerprint != request_fingerprint:
-                raise GatewayError("idempotency key was already used for a different invocation")
-            return previous_result
-        arguments = evaluation["arguments"]
-        decision = self.evaluate_invocation(**evaluation)
-        return self.execute_approved_call(decision.decision_id, arguments, connector, idempotency_key=idempotency_key)
 
     def inspect_result(
         self, pending: _Pending, connector_execution_id: str, raw_result: Any
     ) -> tuple[Any, tuple[str, ...]]:
         inspection = inspect_tool_result(raw_result, pending.revision.definition.output_schema)
+        provenance_hook = self._result_provenance.get(pending.target.id)
+        provenance = dict(provenance_hook(raw_result)) if provenance_hook else {"classificationStatus": "UNCLASSIFIED"}
+        if provenance_hook:
+            classes = provenance.get("dataClasses")
+            if (not isinstance(classes, (list, tuple, set, frozenset)) or not classes
+                    or not set(classes) <= {f"D{i}" for i in range(1, 9)}):
+                raise ValueError("result provenance must include nonempty D1..D8 dataClasses")
+            provenance["dataClasses"] = sorted(classes)
+            provenance["classificationStatus"] = "CLASSIFIED"
+        return_value = inspection.clean if pending.decision.enforced else inspection.sanitized
         self.ledger.append(
             "INTERACTION_COMPLETED",
             tenant_id=pending.tenant_id,
@@ -370,15 +462,17 @@ class MCPToolGateway:
             target_actor_id=pending.target.id,
             payload={
                 "connectorExecutionId": connector_execution_id,
-                "resultHash": canonical_digest(inspection.clean),
+                "resultHash": canonical_digest(return_value),
                 "labels": list(inspection.labels),
                 "secretDetected": inspection.secret_detected,
                 "schemaErrors": list(inspection.schema_errors),
+                "provenance": provenance,
+                "bundleDigest": self.bundle_digest,
             },
             environment=pending.environment,
             data_source=pending.data_source,
         )
-        return inspection.clean, inspection.labels
+        return return_value, inspection.labels
 
     def reconcile_transaction(
         self,
@@ -493,6 +587,8 @@ class MCPToolGateway:
                 "dataClasses": sorted(intent.data_classes),
                 "destinations": list(intent.destinations),
                 "estimatedSideEffect": intent.estimated_side_effect.value,
+                "estimatedRecordCount": intent.estimated_record_count,
+                "estimatedByteCount": intent.estimated_byte_count,
                 "taintLabels": sorted(intent.taint_labels),
                 "approvalId": intent.approval_id,
                 "expectedAudience": intent.expected_audience,
@@ -519,6 +615,8 @@ class MCPToolGateway:
             if decision.decision != ControlDecision.ALLOW or not decision.execution_permitted
             else "INFO",
             payload={
+                "bundleDigest": self.bundle_digest,
+                "installedHooks": self._tool_hooks.get(pending.target.id, {}),
                 "toolDefinition": {
                     "toolId": pending.revision.tool_id,
                     "revisionId": pending.revision.revision_id,

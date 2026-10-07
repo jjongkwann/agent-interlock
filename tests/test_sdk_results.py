@@ -16,7 +16,6 @@ from agent_interlock import ActorSpec, ActorType, InvocationIntent, LinkPolicy, 
 from agent_interlock.gateway import GatewayError
 from agent_interlock.results import inspect_tool_result
 from agent_interlock.sdk import Interlock
-from agent_interlock.security import canonical_destination
 
 
 def wired(
@@ -57,7 +56,10 @@ class SDKApprovalTests(unittest.TestCase):
         approval = interlock.grant_approval(
             tenant_id="tenant-a",
             arguments=arguments,
-            canonical_destinations=(canonical_destination("user@good.example"),),
+            source_actor_id=source.spec.id,
+            target_actor_id=target.spec.id,
+            intent=InvocationIntent(purpose="reply", destinations=("user@good.example",),
+                                    estimated_side_effect=SideEffect.EXTERNAL_WRITE),
             approver="operator",
         )
         result = guarded(
@@ -99,7 +101,10 @@ class SDKApprovalTests(unittest.TestCase):
         approval = interlock.grant_approval(
             tenant_id="tenant-a",
             arguments={"to": "user@good.example"},
-            canonical_destinations=(canonical_destination("user@good.example"),),
+            source_actor_id=source.spec.id,
+            target_actor_id=target.spec.id,
+            intent=InvocationIntent(purpose="reply", destinations=("user@good.example",),
+                                    estimated_side_effect=SideEffect.EXTERNAL_WRITE),
             approver="operator",
         )
         with self.assertRaises(GatewayError) as raised:

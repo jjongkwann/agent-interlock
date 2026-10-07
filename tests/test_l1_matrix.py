@@ -73,7 +73,7 @@ from agent_interlock import (
     run_consent,
     sign_artifact_provenance,
 )
-from agent_interlock.security import canonical_destination, validate_authorization_url
+from agent_interlock.security import validate_authorization_url
 
 BENIGN_ARGS = {"to": "user@customer.example", "body": "Your ticket is resolved."}
 M4_PUBLISHER_KEY = b"l1-m4-platform-publisher-key-v1"
@@ -302,7 +302,10 @@ class M3ToolShadowingTests(unittest.TestCase):
         approval = gateway.grant_approval(
             tenant_id=TENANT,
             arguments=BENIGN_ARGS,
-            canonical_destinations=(canonical_destination(BENIGN_ARGS["to"]),),
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="reply", destinations=(BENIGN_ARGS["to"],),
+                                    estimated_side_effect=SideEffect.EXTERNAL_WRITE),
             approver="operator",
         )
         # A silently added BCC recipient is not covered by the hash-bound approval.
@@ -358,7 +361,11 @@ class M5ConfusedDeputyTests(unittest.TestCase):
         approval = gateway.grant_approval(
             tenant_id=TENANT,
             arguments=BENIGN_ARGS,
-            canonical_destinations=(canonical_destination(BENIGN_ARGS["to"]),),
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="reply", destinations=(BENIGN_ARGS["to"],),
+                                    estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+                                    expected_audience="https://mail-api.example", expected_resource="mail"),
             approver="operator",
         )
         credential = CredentialClaims(
@@ -676,7 +683,10 @@ class M9DataExfiltrationTests(unittest.TestCase):
         approval = gateway.grant_approval(
             tenant_id=TENANT,
             arguments=BENIGN_ARGS,
-            canonical_destinations=(canonical_destination(BENIGN_ARGS["to"]),),
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="reply", destinations=(BENIGN_ARGS["to"],),
+                                    estimated_side_effect=SideEffect.EXTERNAL_WRITE),
             approver="operator",
         )
         result = gateway.invoke(

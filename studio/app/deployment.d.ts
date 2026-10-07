@@ -1,0 +1,2 @@
+export function compileDraftRequest(call: (path: string, init: RequestInit) => Promise<Record<string, unknown>>, rawArchitecture: string): Promise<Record<string, unknown>>;
+export function compareBundleRequest(call: (path: string, init: RequestInit) => Promise<Record<string, unknown>>, bundleDigest: string, baseDigest: string | null, inputText: string, targetId: unknown, tenantId: unknown): Promise<Record<string, unknown>>;

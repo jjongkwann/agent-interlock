@@ -214,7 +214,7 @@ The JSON contract is authoritative in `schemas/architecture.schema.json`, and th
 - Switching between `Actor topology`/`Task workflow` within Design, and an A2A/MCP/LOCAL/HUMAN task palette
 - Editing per-Task source/target, dependency, data, acceptance, retry, timeout, on-failure, and approval, plus workflow budget configuration
 
-**Projects.** The Canvas now works on a named project (`ProjectIdentity`: an `id` slug and a `version`, both editable) rather than one anonymous manifest. New/open/save round-trip through `studio/app/manifest.ts`: `buildManifestPayload` writes the project's `id`/`version` into the manifest's `metadata`, and importing a manifest reads them back — including one authored outside the Studio — so the id and version an export carries are exactly what the Canvas will show on re-import.
+**Projects.** The Canvas now works on a named project (`ProjectIdentity`: an `id` slug and a `version`, both editable) rather than one anonymous manifest. New/open/save round-trip through `studio/app/architecture-model.ts`: `buildManifestPayload` writes the project's `id`/`version` into the manifest's `metadata`, and importing a manifest reads them back — including one authored outside the Studio — so the id and version an export carries are exactly what the Canvas will show on re-import.
 
 ```bash
 cd studio

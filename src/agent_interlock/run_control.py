@@ -9,8 +9,9 @@ adapters.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .architecture import (
@@ -19,6 +20,7 @@ from .architecture import (
     OrchestrationTask,
     TaskTransport,
 )
+from .canonical import canonical_digest
 from .ledger import InMemoryLedger, Ledger, redact_payload
 from .orchestration import (
     AcceptanceEvaluator,
@@ -30,6 +32,7 @@ from .orchestration import (
     WorkflowRunState,
     WorkflowRunStore,
     WorkflowTaskState,
+    _now,
 )
 from .studio_deploy import GitBundleStore, deployed_architecture
 
@@ -63,6 +66,7 @@ class RunControlService:
         run_store: WorkflowRunStore | None = None,
         acceptance_evaluator: AcceptanceEvaluator | None = None,
         max_runs: int = 1024,
+        dispatcher: Any = None,
     ) -> None:
         if max_runs < 1:
             raise ValueError("max_runs must be positive")
@@ -72,13 +76,41 @@ class RunControlService:
         self.run_store = run_store or InMemoryWorkflowRunStore(max_runs=max_runs)
         self.acceptance_evaluator = acceptance_evaluator
         self.max_runs = max_runs
+        self.dispatcher = dispatcher
         self._engines: dict[str, OrchestrationEngine] = {}
-        self._bindings: dict[tuple[str, str], RunBinding] = {}
-        self._run_order: list[tuple[str, str]] = []
-        self._approvals: set[tuple[str, str, str]] = set()
         self._workers: dict[tuple[str, str], threading.Thread] = {}
         self._pending_resumes: set[tuple[str, str]] = set()
         self._lock = threading.RLock()
+        self._closed = False
+        if self.dispatcher is not None:
+            # Remote ownership survives coordinator restart until its durable lease expires.
+            self.dispatcher.recover()
+            return
+        # One host owns dispatch. Never replay an interrupted side effect on restart.
+        for run in self.run_store.list():
+            if run.state == WorkflowRunState.RUNNING:
+                interrupted = replace(
+                    run,
+                    state=WorkflowRunState.FAILED,
+                    error_code="RUN-INTERRUPTED",
+                    updated_at=_now(),
+                    tasks={
+                        key: replace(task, state=WorkflowTaskState.FAILED, error_code="RUN-INTERRUPTED")
+                        if task.state == WorkflowTaskState.RUNNING
+                        else task
+                        for key, task in run.tasks.items()
+                    },
+                )
+                self.ledger.append(
+                    "WORKFLOW_RUN_FAILED",
+                    tenant_id=run.tenant_id,
+                    trace_id=run.trace_id,
+                    span_id=f"workflow-{run.id}-recovery",
+                    source_actor_id="interlock.run-control",
+                    payload={"runId": run.id, "bundleDigest": run.bundle_digest, "reasonCode": "RUN-INTERRUPTED"},
+                    idempotency_key=f"workflow-recovery:{run.id}",
+                )
+                self.run_store.save(interrupted)
 
     def create(
         self,
@@ -91,7 +123,17 @@ class RunControlService:
         if not isinstance(workflow_input, Mapping):
             raise RunControlError(400, "RUN-INPUT-INVALID", "input must be a JSON object")
         with self._lock:
-            if len(self._bindings) >= self.max_runs:
+            if self._closed:
+                raise RunControlError(503, "RUN-HOST-CLOSED", "run control host is closing")
+            if self.dispatcher is not None:
+                self.dispatcher.recover()
+            if (
+                sum(
+                    run.state not in {WorkflowRunState.COMPLETED, WorkflowRunState.FAILED, WorkflowRunState.CANCELED}
+                    for run in self.run_store.list()
+                )
+                >= self.max_runs
+            ):
                 raise RunControlError(503, "RUN-CAPACITY", "run control is at capacity")
             digest, engine = self._engine_for_active_bundle()
             try:
@@ -104,29 +146,40 @@ class RunControlService:
             except OrchestrationError as error:
                 status = 409 if error.reason_code == "ORCH-RUN-DUPLICATE" else 503
                 raise RunControlError(status, error.reason_code, str(error)) from error
-            key = (tenant_id, run.id)
-            self._bindings[key] = RunBinding(tenant_id, digest, engine)
-            self._run_order.append(key)
             value = self._public_run(run, digest)
             self._resume_async_locked(tenant_id, run.id)
             return value
 
     def get(self, *, tenant_id: str, run_id: str) -> dict[str, Any]:
         with self._lock:
-            binding = self._binding(tenant_id, run_id)
-            run = binding.engine.get(tenant_id=tenant_id, run_id=run_id)
-            return self._public_run(run, binding.bundle_digest)
+            if self.dispatcher is not None:
+                self.dispatcher.recover()
+            run = self._get_run(tenant_id, run_id)
+            return self._public_run(run, run.bundle_digest)
 
     def list(self, *, tenant_id: str) -> tuple[dict[str, Any], ...]:
         with self._lock:
-            result: list[dict[str, Any]] = []
-            for run_tenant_id, run_id in reversed(self._run_order):
-                if run_tenant_id != tenant_id:
-                    continue
-                binding = self._bindings[(run_tenant_id, run_id)]
-                run = binding.engine.get(tenant_id=tenant_id, run_id=run_id)
-                result.append(self._public_run(run, binding.bundle_digest))
-            return tuple(result)
+            if self.dispatcher is not None:
+                self.dispatcher.recover()
+            return tuple(self._public_run(run, run.bundle_digest) for run in self.run_store.list(tenant_id=tenant_id))
+
+    def prune(self, *, tenant_id: str, before: str) -> int:
+        """Explicitly remove terminal snapshots; Ledger evidence and bundles are retained."""
+        with self._lock:
+            removed = self.run_store.prune(tenant_id=tenant_id, before=before)
+            digests = {run.bundle_digest for run in self.run_store.list()}
+            self._engines = {key: engine for key, engine in self._engines.items() if key in digests}
+            return removed
+
+    def close(self, *, timeout: float = 10) -> bool:
+        """Stop accepting work and wait briefly; interrupted adapters recover as FAILED."""
+        with self._lock:
+            self._closed = True
+            workers = tuple(self._workers.values())
+        deadline = time.monotonic() + max(0, timeout)
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        return all(not worker.is_alive() for worker in workers)
 
     def edge_modes(self, *, tenant_id: str, run_id: str) -> dict[str, str]:
         """Read-only view of the compiled edge policy modes bound to one run.
@@ -147,7 +200,9 @@ class RunControlService:
             self._resume_async_locked(tenant_id, run_id)
             return self._public_run(run, binding.bundle_digest)
 
-    def approve(self, *, tenant_id: str, run_id: str, task_id: str, approved_by: str) -> dict[str, Any]:
+    def approve(
+        self, *, tenant_id: str, run_id: str, task_id: str, approved_by: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         with self._lock:
             binding = self._binding(tenant_id, run_id)
             run = binding.engine.get(tenant_id=tenant_id, run_id=run_id)
@@ -155,13 +210,27 @@ class RunControlService:
             spec = next((item for item in binding.engine.definition.tasks if item.id == task_id), None)
             if task is None or spec is None:
                 raise RunControlError(404, "RUN-TASK-NOT-FOUND", "workflow task was not found")
-            if not spec.approval_required:
+            if not spec.approval_required and not task.pending_call:
                 raise RunControlError(409, "RUN-TASK-APPROVAL-NOT-REQUIRED", "task does not require approval")
             if task.state != WorkflowTaskState.WAITING_APPROVAL:
                 raise RunControlError(409, "RUN-TASK-NOT-WAITING", "task is not waiting for approval")
-            approval_key = (tenant_id, run_id, task_id)
-            if approval_key not in self._approvals:
-                self._approvals.add(approval_key)
+            approval_key = task_id
+            if task.pending_call:
+                expected = canonical_digest({k: v for k, v in task.pending_call.items() if k != "requestId"})
+                if request_id != expected or task.pending_call.get("requestId") != expected:
+                    raise RunControlError(
+                        409, "RUN-APPROVAL-STALE", "approval must match the pending invocation requestId"
+                    )
+                approval_key = f"{task_id}:{expected}"
+                if approval_key in run.tasks:
+                    raise RunControlError(
+                        409,
+                        "RUN-APPROVAL-SCOPE-COLLISION",
+                        "a task ID overlaps this invocation approval; rename the conflicting task",
+                    )
+            elif request_id is not None:
+                raise RunControlError(409, "RUN-APPROVAL-STALE", "task has no matching pending invocation")
+            if approval_key not in run.approvals:
                 self.ledger.append(
                     "WORKFLOW_TASK_APPROVED",
                     tenant_id=tenant_id,
@@ -171,7 +240,17 @@ class RunControlService:
                     target_actor_id=binding.engine.definition.coordinator_actor_id,
                     relationship_type="ROUTES",
                     relationship_id="REL-02",
-                    payload={"runId": run.id, "taskId": task_id, "approvedBy": approved_by},
+                    payload={
+                        "runId": run.id,
+                        "taskId": task_id,
+                        "approvedBy": approved_by,
+                        "bundleDigest": run.bundle_digest,
+                        "requestId": request_id,
+                    },
+                    idempotency_key="workflow-approval:" + canonical_digest([tenant_id, run_id, approval_key]),
+                )
+                run = self.run_store.approve(
+                    tenant_id=tenant_id, run_id=run_id, task_id=approval_key, approved_by=approved_by
                 )
             self._resume_async_locked(tenant_id, run_id)
             return self._public_run(run, binding.bundle_digest)
@@ -184,8 +263,7 @@ class RunControlService:
 
     def events(self, *, tenant_id: str, run_id: str) -> tuple[dict[str, Any], ...]:
         with self._lock:
-            binding = self._binding(tenant_id, run_id)
-            run = binding.engine.get(tenant_id=tenant_id, run_id=run_id)
+            run = self._get_run(tenant_id, run_id)
             return tuple(event.to_dict() for event in self.ledger.trace(tenant_id, run.trace_id))
 
     def _engine_for_active_bundle(self) -> tuple[str, OrchestrationEngine]:
@@ -195,11 +273,14 @@ class RunControlService:
         digest = active.get("bundleDigest")
         if not isinstance(digest, str) or not digest:
             raise RunControlError(422, "RUN-ACTIVE-DEPLOYMENT-INVALID", "active deployment digest is invalid")
+        return digest, self._engine_for_bundle(digest)
+
+    def _engine_for_bundle(self, digest: str) -> OrchestrationEngine:
         cached = self._engines.get(digest)
         if cached is not None:
-            return digest, cached
+            return cached
         bundle = self.deployment_store.bundle(digest)
-        active_mode = active["mode"]
+        active_mode = "ENFORCE"
         architecture = bundle.body.get("architecture")
         if not isinstance(architecture, Mapping):
             raise RunControlError(
@@ -209,8 +290,8 @@ class RunControlService:
             )
         try:
             graph = deployed_architecture(bundle.body, active_mode)
-            compiled = ArchitectureCompiler().compile(graph)
-            adapters = dict(self.adapter_provider(compiled))
+            compiled = replace(ArchitectureCompiler().compile(graph), bundle_digest=digest)
+            adapters = dict(self.adapter_provider(compiled)) if self.dispatcher is None else {}
         except RunControlError:
             raise
         except Exception as error:
@@ -225,7 +306,7 @@ class RunControlService:
             raise RunControlError(422, "RUN-WORKFLOW-MISSING", "active architecture has no workflow")
         required = {task.transport for task in definition.tasks}
         missing = sorted(item.value for item in required if item not in adapters)
-        if missing:
+        if missing and self.dispatcher is None:
             raise RunControlError(
                 503,
                 "RUN-ADAPTER-MISSING",
@@ -238,23 +319,35 @@ class RunControlService:
             approval_provider=self._is_approved,
             acceptance_evaluator=self.acceptance_evaluator,
             ledger=self.ledger,
+            bundle_digest=digest,
         )
         self._engines[digest] = engine
-        return digest, engine
+        return engine
+
+    def _get_run(self, tenant_id: str, run_id: str) -> WorkflowRun:
+        try:
+            return self.run_store.get(tenant_id=tenant_id, run_id=run_id)
+        except OrchestrationError as error:
+            raise RunControlError(404, "RUN-NOT-FOUND", "run is not visible to this tenant") from error
 
     def _binding(self, tenant_id: str, run_id: str) -> RunBinding:
-        binding = self._bindings.get((tenant_id, run_id))
-        if binding is None:
-            raise RunControlError(404, "RUN-NOT-FOUND", "run is not visible to this tenant")
-        return binding
+        run = self._get_run(tenant_id, run_id)
+        if not run.bundle_digest:
+            raise RunControlError(409, "RUN-BUNDLE-MISSING", "run has no deployment binding")
+        return RunBinding(tenant_id, run.bundle_digest, self._engine_for_bundle(run.bundle_digest))
 
     def _resume_async_locked(self, tenant_id: str, run_id: str) -> None:
+        if self._closed:
+            raise RunControlError(503, "RUN-HOST-CLOSED", "run control host is closing")
+        if self.dispatcher is not None:
+            self.dispatcher.enqueue(tenant_id, run_id)
+            return
         key = (tenant_id, run_id)
         worker = self._workers.get(key)
         if worker is not None and worker.is_alive():
             self._pending_resumes.add(key)
             return
-        binding = self._bindings[key]
+        binding = self._binding(tenant_id, run_id)
         worker = threading.Thread(
             target=self._resume_worker,
             args=(key, binding),
@@ -276,7 +369,7 @@ class RunControlService:
                     reason_code="RUN-WORKER-FAILED",
                 )
             with self._lock:
-                if key in self._pending_resumes:
+                if key in self._pending_resumes and not self._closed:
                     self._pending_resumes.remove(key)
                     continue
                 self._workers.pop(key, None)
@@ -290,10 +383,10 @@ class RunControlService:
         _context: Mapping[str, Any],
     ) -> bool:
         with self._lock:
-            return (tenant_id, run_id, task.id) in self._approvals
+            return task.id in self._get_run(tenant_id, run_id).approvals
 
     @staticmethod
-    def _public_run(run: WorkflowRun, bundle_digest: str) -> dict[str, Any]:
+    def _public_run(run: WorkflowRun, bundle_digest: str | None) -> dict[str, Any]:
         value = redact_payload(run.to_dict())
         value["bundleDigest"] = bundle_digest
         return value

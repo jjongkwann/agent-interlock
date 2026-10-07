@@ -13,6 +13,17 @@ status: active
 경로입니다. Anthropic Python SDK의 Tool Runner를 씁니다. agent 루프는 SDK의 것이고, 도구는 여러분의
 것이며, Agent Interlock은 그 사이에 섭니다.
 
+먼저 저장소 루트에서 Python 3.11+ 가상환경을 만들고 설치합니다.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[anthropic,jwt]'
+python examples/secure_email.py
+```
+
+이 페이지의 `build()`는 로컬 manifest를 읽는 SDK 도입 경로이며, 승격된 배포를 검증하지 않습니다. 검토된 배포를 실행하려면 [managed support host](managed-support-host.md)의 `load_promoted_architecture`, `build_managed_tools` 경로를 사용합니다.
+
 ## 1. 선언하는 것
 
 세 가지뿐입니다.
@@ -76,12 +87,15 @@ def build(bindings=BINDINGS, *, ledger=None):
 
 ## 3. agent 루프
 
+사용할 API 계정과 모델에 맞춰 `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`을 설정합니다.
+
 ```python
+import os
 import anthropic
 gateway, tools = build()
 client = anthropic.Anthropic()
 runner = client.beta.messages.tool_runner(
-    model="claude-opus-5", max_tokens=16000, tools=list(tools),
+    model=os.environ["ANTHROPIC_MODEL"], max_tokens=16000, tools=list(tools),
     messages=[{"role": "user", "content": "Where is order 1001? Email the customer."}],
 )
 final = runner.until_done()
@@ -92,12 +106,7 @@ final = runner.until_done()
 사유 코드를 담은 `is_error` tool result로 모델에 전달되어 모델이 정책 안에서 설명하거나 재시도할 수
 있습니다. 루프 밖으로 예외가 던져지지 않습니다.
 
-**승인.** `externalWriteRequiresApproval: true`인 edge는 첫 호출을 `INTERLOCK-APPROVAL-REQUIRED`로
-보류합니다. `guard_tools(..., approve=...)`에 모델이 고른 정확한 인자를 받아 승인자 신원을 돌려주거나
-`None`으로 거부하는 함수를 넘기면, 그 인자와 목적지에 묶인 승인이 발급되고 호출이 다시 판정됩니다.
-그래서 승인이 거부된 목적지를 통과시킬 수 없습니다. `gateway.grant_approval`로 미리 발급한 승인도
-같은 정확 인자 일치로 찾아집니다. 보류는 ledger에 행동 없는 판정으로 남아, 통계가 "사람을 기다림"과
-"차단됨"을 구분합니다.
+**승인.** `externalWriteRequiresApproval: true`인 edge는 외부 쓰기를 `INTERLOCK-APPROVAL-REQUIRED`로 보류합니다. `guard_tools(..., approve=...)`에 reviewer 신원을 반환하거나 `None`으로 거부하는 callback을 넘깁니다. Adapter는 tenant, source·target, active revision, 설치된 policy, 전체 derived intent, 정확한 인자에 승인을 결합하고 다시 판정합니다. `gateway.grant_approval`은 `tenant_id`, `source_actor_id`, `revision_id`, `intent`, `arguments`, `approver`를 받고 revision에서 target과 설치된 policy를 찾습니다. 인자만으로 승인할 수 없습니다. 승인은 실행 직전에 원자적으로 소비되어, 실행이 실패해도 다른 동작에 재사용할 수 없습니다. 거부된 목적지는 승인으로 우회되지 않습니다. 판정만으로는 승인을 소비하지 않으며 보류는 사람을 기다렸다는 증거로 ledger에 남습니다.
 
 모든 단계가 `gateway.ledger`에 남습니다. `INTERACTION_REQUESTED`, `DATA_FLOW_OBSERVED`,
 `CONTROL_EVALUATED`(모든 체크의 coverage 포함), `ACTION_EXECUTED`, `INTERACTION_COMPLETED`,
@@ -132,3 +141,11 @@ NOT-APPLICABLE도 실패로 셉니다. CI에서 여러분의 테스트 옆에 �
 
 도구 함수, 프롬프트, 루프. Interlock이 맡는 것은 각 호출에 대한 판정과 그 증거입니다. manifest가
 바뀌면 `lint`를 다시 돌리고, 바인딩을 다시 생성하거나 고치고, `verify`를 다시 돌립니다.
+
+## 연결과 운영 경계
+
+`ToolBinding`은 `classify`, `estimate_export`, `result_provenance` hook을 받습니다. Application이 신뢰 가능한 데이터로 구현하고 설치 여부를 기록합니다. Manifest에 그린 control은 저작된 의도이며, 설치된 hook과 관측된 `CONTROL_EVALUATED` 이벤트는 별도의 증거입니다. Managed helper는 세 hook을 모두 요구하고 tool definition digest를 승격된 bundle과 비교합니다. 로컬 binding에 classification이 없으면 보수적인 D3 입력 기본값을 쓰고, 결과 provenance가 없으면 `UNCLASSIFIED`로 남깁니다.
+
+Skeleton은 `<architecture>_edge_coverage.json`도 생성합니다. 첫 source의 정적 TOOL 호출은 `WIRED`, 다른 source·동적 selector·다른 관계는 이유와 함께 `MANUAL`입니다. 실제 runtime coverage를 주장하려면 handler를 구현해야 합니다.
+
+이벤트 증거를 영속화하려면 PostgreSQL Ledger를 사용합니다. Gateway 호출 승인과 멱등 결과는 process-local이며, ledger 저장만으로 재시작을 넘는 exactly-once tool 실행이 보장되지는 않습니다. Workflow 취소는 협력적이고, in-process adapter timeout은 외부 부작용을 되돌리거나 강제로 중단하지 못합니다. [Managed host](managed-support-host.md)는 전용 배포 owner, 재시작 복구와 명시적 resume을 설명하며 공유 multi-tenant 배포 서비스가 아닙니다.

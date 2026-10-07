@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any
@@ -268,6 +268,8 @@ class ArchitectureNode:
     position: tuple[float, float] | None = None
     trust_zone: TrustZone | None = None
     trust_zone_id: str | None = None
+    label: str | None = None
+    annotations: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -501,6 +503,7 @@ class CompiledArchitecture:
     links: Mapping[str, LinkPolicy]
     boundaries: Mapping[str, ArchitectureBoundary]
     findings: tuple[ArchitectureFinding, ...]
+    bundle_digest: str | None = None
 
     def build_interlock(self, ledger: Ledger | None = None) -> Interlock:
         runtime = Interlock(ledger)
@@ -552,7 +555,17 @@ class ArchitectureLinter:
     def lint(self, graph: ArchitectureGraph) -> tuple[ArchitectureFinding, ...]:
         findings: list[ArchitectureFinding] = []
         nodes = graph.node_map
+        pairs: set[tuple[str, str]] = set()
         for edge in graph.edges:
+            pair = (edge.source, edge.target)
+            if pair in pairs:
+                findings.append(ArchitectureFinding(
+                    "EDGE_PAIR_AMBIGUOUS", FindingSeverity.CRITICAL,
+                    "runtime supports only one policy for each source/target pair",
+                    edge_id=edge.id,
+                    remediation="Keep one edge per source/target pair.",
+                ))
+            pairs.add(pair)
             findings.extend(self._lint_edge(edge, nodes))
         findings.extend(self._lint_boundaries(graph))
         findings.extend(self._lint_orchestration(graph))
@@ -1091,7 +1104,9 @@ class ArchitectureCompiler:
 
     def compile(self, graph: ArchitectureGraph, *, reject_critical: bool = True) -> CompiledArchitecture:
         findings = self.linter.lint(graph)
-        if reject_critical and any(item.severity == FindingSeverity.CRITICAL for item in findings):
+        if any(item.code == "EDGE_PAIR_AMBIGUOUS" for item in findings) or (
+            reject_critical and any(item.severity == FindingSeverity.CRITICAL for item in findings)
+        ):
             raise ArchitectureCompileError(findings)
         actors = {node.id: node.actor for node in graph.nodes}
         links = {
@@ -1212,6 +1227,8 @@ def _parse_node(value: Any) -> ArchitectureNode:
         raise ValueError(f"node {node_id}: {error}") from error
     return ArchitectureNode(
         actor=actor,
+        label=str(item["label"]) if item.get("label") is not None else None,
+        annotations=dict(_mapping(item.get("annotations", {}), "node.annotations")),
         controls=tuple(_parse_control(control) for control in _sequence(item.get("controls", []), "controls")),
         position=position,
         trust_zone=TrustZone(str(item["trustZone"])) if item.get("trustZone") is not None else None,
@@ -1328,6 +1345,7 @@ def _parse_edge(value: Any, node_types: Mapping[str, ActorType]) -> Architecture
         ),
         require_active_definition=bool(policy_value.get("requireActiveDefinition", True)),
         require_digest_pin=bool(policy_value.get("requireDigestPin", True)),
+        allow_cross_server_references=bool(policy_value.get("allowCrossServerReferences", False)),
         require_explicit_destination=bool(policy_value.get("requireExplicitDestination", True)),
         new_destination_action=ControlDecision(str(policy_value.get("newDestinationAction", "HOLD"))),
         token_passthrough=bool(policy_value.get("tokenPassthrough", False)),
@@ -1419,6 +1437,8 @@ def _node_value(node: ArchitectureNode) -> dict[str, Any]:
     actor = node.actor
     return {
         "id": actor.id,
+        **({"label": node.label} if node.label is not None else {}),
+        **({"annotations": dict(node.annotations)} if node.annotations else {}),
         "type": actor.type.value,
         "owner": actor.owner,
         "identity": actor.identity,
@@ -1449,6 +1469,7 @@ def _policy_value(policy: LinkPolicy) -> dict[str, Any]:
         "deniedDataClasses": sorted(policy.denied_data_classes),
         "requireActiveDefinition": policy.require_active_definition,
         "requireDigestPin": policy.require_digest_pin,
+        "allowCrossServerReferences": policy.allow_cross_server_references,
         "requireExplicitDestination": policy.require_explicit_destination,
         "newDestinationAction": policy.new_destination_action.value,
         "tokenPassthrough": policy.token_passthrough,
@@ -1456,6 +1477,12 @@ def _policy_value(policy: LinkPolicy) -> dict[str, Any]:
         "requireResource": policy.require_resource,
         "requireActorBinding": policy.require_actor_binding,
         "maxDelegationDepth": policy.max_delegation_depth,
+        "maxExportRecords": policy.max_export_records,
+        "maxExportBytes": policy.max_export_bytes,
+        "volumeAction": policy.volume_action.value,
+        "secretAction": policy.secret_action.value,
+        "destructiveWriteAction": policy.destructive_write_action.value,
+        "undeclaredSideEffectAction": policy.undeclared_side_effect_action.value,
         "externalWriteRequiresApproval": policy.external_write_requires_approval,
         "failureMode": policy.failure_mode.value,
         "decisionTtlSeconds": policy.decision_ttl_seconds,

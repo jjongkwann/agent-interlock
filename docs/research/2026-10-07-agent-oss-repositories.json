@@ -1,0 +1,123 @@
+{
+  "observed_at": "2026-10-07 KST",
+  "method": "Read-only official GitHub REST API repository metadata, redirects followed; pushed_at is not release date",
+  "repositories": [
+    {
+      "full_name": "google/adk-python",
+      "html_url": "https://github.com/google/adk-python",
+      "archived": false,
+      "pushed_at": "2026-10-07T01:51:53Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "google-gemini/gemini-cli",
+      "html_url": "https://github.com/google-gemini/gemini-cli",
+      "archived": false,
+      "pushed_at": "2026-10-07T01:31:40Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "google/ax",
+      "html_url": "https://github.com/google/ax",
+      "archived": false,
+      "pushed_at": "2026-09-27T23:54:26Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "microsoft/agent-framework",
+      "html_url": "https://github.com/microsoft/agent-framework",
+      "archived": false,
+      "pushed_at": "2026-10-06T18:46:37Z",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      }
+    },
+    {
+      "full_name": "strands-agents/harness-sdk",
+      "html_url": "https://github.com/strands-agents/harness-sdk",
+      "archived": false,
+      "pushed_at": "2026-10-06T22:50:22Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "NVIDIA/NeMo-Agent-Toolkit",
+      "html_url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit",
+      "archived": false,
+      "pushed_at": "2026-10-06T19:22:54Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "NVIDIA/OpenShell",
+      "html_url": "https://github.com/NVIDIA/OpenShell",
+      "archived": false,
+      "pushed_at": "2026-10-07T00:59:54Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "openai/symphony",
+      "html_url": "https://github.com/openai/symphony",
+      "archived": false,
+      "pushed_at": "2026-09-15T22:14:59Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      }
+    },
+    {
+      "full_name": "ogx-ai/ogx",
+      "html_url": "https://github.com/ogx-ai/ogx",
+      "archived": false,
+      "pushed_at": "2026-10-06T20:54:57Z",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      }
+    }
+  ]
+}

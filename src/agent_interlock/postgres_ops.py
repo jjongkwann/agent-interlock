@@ -14,6 +14,7 @@ import hashlib
 import re
 import threading
 from datetime import date
+from importlib.resources import files
 from pathlib import Path
 
 from .postgres_ledger import Connection, ConnectionFactory, PostgreSQLDriverUnavailable
@@ -39,17 +40,20 @@ class PostgreSQLMigrationRunner:
     Applied versions are recorded in ``public.interlock_schema_migrations`` with
     the file checksum; a version whose file changed after being applied is a
     drift error (a committed migration must never be edited in place). Legacy
-    3-digit files are ignored — only the 4-digit series is managed.
+    3-digit files are ignored — only the 4-digit series is managed. Pass
+    ``migrations_dir=None`` to use the SQL bundled in the installed package.
     """
 
-    def __init__(self, migrations_dir: str | Path, connection_factory: ConnectionFactory) -> None:
-        self._dir = Path(migrations_dir)
+    def __init__(self, migrations_dir: str | Path | None, connection_factory: ConnectionFactory) -> None:
+        self._dir = Path(migrations_dir) if migrations_dir is not None else files("agent_interlock").joinpath(
+            "migrations", "postgresql"
+        )
         self._factory = connection_factory
 
     def discover(self) -> list[tuple[str, str]]:
         """Return ``(version, sql)`` for every managed migration, ordered."""
         found: list[tuple[str, str]] = []
-        for path in sorted(self._dir.iterdir()):
+        for path in sorted(self._dir.iterdir(), key=lambda item: item.name):
             match = _MIGRATION_NAME.match(path.name)
             if match:
                 found.append((match.group(1), path.read_text(encoding="utf-8")))
@@ -99,7 +103,7 @@ class PostgreSQLMigrationRunner:
             connection.close()
 
     @classmethod
-    def from_dsn(cls, migrations_dir: str | Path, dsn: str) -> PostgreSQLMigrationRunner:
+    def from_dsn(cls, migrations_dir: str | Path | None, dsn: str) -> PostgreSQLMigrationRunner:
         return cls(migrations_dir, _dsn_factory(dsn, "agent-interlock-migrate"))
 
 

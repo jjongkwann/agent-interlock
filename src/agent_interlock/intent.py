@@ -148,11 +148,15 @@ def derive_intent(
     found: list[str] = []
     marks: list[bool] = []
     _walk(input_schema, arguments, found, marks)
+    fixed = annotations.get("interlock.fixedDestinations", ())
+    if not isinstance(fixed, (list, tuple)) or any(not isinstance(item, str) or not item for item in fixed):
+        raise ValueError("interlock.fixedDestinations must contain destination strings")
+    found.extend(fixed)
     side_effect = _derive_side_effect(annotations)
     return DerivedIntent(
         # Deduplicated, order preserved: one property can be reached twice when an array schema and
         # its `items` are both marked, and the check emits one finding per destination.
         destinations=tuple(dict.fromkeys(found)),
         side_effect=side_effect,
-        derivable=bool(marks) or side_effect is not None,
+        derivable=bool(marks) or bool(fixed) or side_effect is not None,
     )

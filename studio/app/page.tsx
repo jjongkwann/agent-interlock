@@ -1,5 +1,8 @@
 "use client";
 
+import { useLanguage } from "./language";
+import { message, type Message } from "./i18n";
+
 import { ChangeEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   computeRuntimeDiff,
@@ -7,10 +10,13 @@ import {
   parseRuntimeTelemetry,
   type RuntimeImport,
 } from "./runtime";
-import { DeployPanel, RunsPanel, StatsPanel } from "./panels";
+import { RuntimeEditor } from "./builder";
+import { SharedProjects } from "./shared-projects";
+import { DeployPanel, RunsPanel, StatsPanel, type LifecycleContext, type LedgerConnection } from "./panels";
 import { ledgerEventsForStatistics } from "./analytics.mjs";
 import {
   buildManifestPayload,
+  localTransformStarter,
   emptyOrchestration,
   EMPTY_PROJECT,
   isValidProjectId,
@@ -33,7 +39,7 @@ import {
   type TrustZone,
   type TrustZoneDefinition,
   type WorkflowTask,
-} from "./manifest";
+} from "./architecture-model";
 
 type GraphView = "design" | "runtime" | "drift" | "stats" | "deploy" | "runs";
 type DesignSurface = "topology" | "workflow";
@@ -68,7 +74,7 @@ const initialNodes: ArchitectureNode[] = [
   { id: "user.customer", label: "Customer", type: "USER", owner: "Customer Platform", identity: "oidc://customer", capabilities: ["SUPPORT_REQUEST"], dataAccess: ["D2", "D3"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-input", x: 42, y: 255 },
   { id: "agent.support", label: "Support Agent", type: "AGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/support", capabilities: ["SUPPORT_REPLY", "DELEGATE_RESEARCH", "EMAIL_SEND"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 2, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 255 },
   { id: "agent.research", label: "Research Sub-Agent", type: "SUBAGENT", owner: "Customer Platform", identity: "spiffe://prod.example/agent/research", capabilities: ["KNOWLEDGE_SEARCH"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 88 },
-  { id: "rag.support-knowledge", label: "Support Knowledge", type: "RAG", owner: "Knowledge Platform", identity: "spiffe://prod.example/rag/support", capabilities: ["TENANT_RETRIEVAL"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 350 },
+  { id: "rag.support-knowledge", label: "Support Knowledge", type: "RAG", owner: "Knowledge Platform", identity: "spiffe://prod.example/rag/support", capabilities: ["TENANT_RETRIEVAL"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.worker", x: 536, y: 220 },
   { id: "tool.send-email", label: "Send Email", type: "TOOL", owner: "Messaging Platform", identity: "spiffe://prod.example/tool/send-email", capabilities: ["EMAIL_SEND"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", definitionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", x: 286, y: 350 },
   { id: "external.customer-email", label: "Customer Email", type: "EXTERNAL", owner: "Messaging Platform", identity: "dns://customer.example", capabilities: [], dataAccess: ["D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "EXTERNAL", trustZoneId: "zone.external-output", allowedDomains: ["customer.example"], x: 788, y: 350 },
   { id: "external.audit-ledger", label: "Interlock Ledger", type: "EXTERNAL", owner: "Security Platform", identity: "spiffe://prod.example/interlock/ledger", capabilities: ["APPEND_ONLY_AUDIT"], dataAccess: ["D2", "D3", "D7"], tenantMode: "REQUIRED", maxDelegationDepth: 0, trustZone: "INTERNAL", trustZoneId: "zone.control", x: 286, y: 520 },
@@ -106,6 +112,8 @@ const initialOrchestration: OrchestrationDesign = {
   ],
 };
 
+const DATA_CLASS_HELP: Record<string, string> = { D2: "User request and task context", D3: "Tool call arguments", D5: "Credentials and identity claims", D7: "Sensitive business and personal data", D8: "Host files, environment, and process data" };
+
 const nodeTone: Record<NodeType, string> = {
   USER: "slate", AGENT: "violet", SUBAGENT: "indigo", RAG: "cyan", TOOL: "amber", MEMORY: "emerald", SCHEDULER: "blue", EXTERNAL: "rose",
 };
@@ -129,7 +137,7 @@ const HISTORY_LIMIT = 40;
 
 const graphViewOptions: ReadonlyArray<{ id: GraphView; label: string; phase: string; description: string }> = [
   { id: "design", label: "Design graph", phase: "Declare intent", description: "Edit intended actors, trust zones, relationships, and security controls." },
-  { id: "deploy", label: "Deploy", phase: "Compile & promote", description: "Compile outside the browser, then approve and promote a signed SHADOW bundle." },
+  { id: "deploy", label: "Deploy", phase: "Compile & promote", description: "Compile the draft, review changes, sign approvals locally, and promote." },
   { id: "runs", label: "Runs", phase: "Execute workflow", description: "Start and operate the workflow from the exact active ENFORCE deployment bundle." },
   { id: "runtime", label: "Runtime graph", phase: "Observe reality", description: "Render actors and calls observed in imported Ledger or OTLP telemetry." },
   { id: "drift", label: "Drift", phase: "Reconcile", description: "Compare design with runtime to find undeclared, bypassed, or unobserved relationships." },
@@ -152,7 +160,7 @@ function clampNodeToZone(node: Pick<ArchitectureNode, "x" | "y">, zone: TrustZon
   return { x: Math.max(minX, Math.min(maxX, node.x)), y: Math.max(minY, Math.min(maxY, node.y)) };
 }
 
-function edgeDefaults(source: ArchitectureNode, target: ArchitectureNode, index: number): ArchitectureEdge {
+function edgeDefaults(source: ArchitectureNode, target: ArchitectureNode, index: string): ArchitectureEdge {
   let relationshipId = "REL-10";
   let relationship = "ROUTES";
   let point: EnforcementPoint = "INPUT_GATEWAY";
@@ -199,7 +207,7 @@ function enforcementPointForRelationship(relationshipId: string): EnforcementPoi
             : "AUDIT_SINK";
 }
 
-function boundaryDefaults(edge: ArchitectureEdge, source: ArchitectureNode, target: ArchitectureNode, index: number): TrustBoundaryDefinition {
+function boundaryDefaults(edge: ArchitectureEdge, source: ArchitectureNode, target: ArchitectureNode, index: string): TrustBoundaryDefinition {
   return {
     id: `boundary.${source.trustZoneId}.${target.trustZoneId}.${index}`.replace(/[^a-zA-Z0-9._-]/g, "-"),
     label: `${source.trustZoneId} → ${target.trustZoneId}`,
@@ -249,6 +257,9 @@ function workflowDependencyCreatesCycle(tasks: WorkflowTask[], taskId: string, d
 }
 
 export default function Home() {
+  const { t, language, setLanguage } = useLanguage();
+  const [starterName, setStarterName] = useState("local-transform");
+  const [starterField, setStarterField] = useState("message");
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
   const [zones, setZones] = useState(initialZones);
@@ -261,7 +272,7 @@ export default function Home() {
   const [taskDragging, setTaskDragging] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [zoneGesture, setZoneGesture] = useState<ZoneGesture | null>(null);
   const [zoneAssignmentActor, setZoneAssignmentActor] = useState("");
-  const [notice, setNotice] = useState("All changes are local drafts · use Projects to save or open a manifest");
+  const [notice, setNotice] = useState<Message>("All changes are local drafts · use Projects to save or open a manifest");
   const [activeGraph, setActiveGraph] = useState<GraphView>("design");
   const [controlPlaneUrl, setControlPlaneUrl] = useState("http://127.0.0.1:8792");
   const [controlPlaneToken, setControlPlaneToken] = useState("");
@@ -283,6 +294,14 @@ export default function Home() {
     }
   });
   const [showProjectMenu, setShowProjectMenu] = useState(false);
+  const [showSharedProjects, setShowSharedProjects] = useState(false);
+  const [graphSearch, setGraphSearch] = useState("");
+  const [lifecycleContext, setLifecycleContext] = useState<LifecycleContext>({});
+  const [investigationTrace, setInvestigationTrace] = useState("");
+  const [ledgerConnection, setLedgerConnection] = useState<LedgerConnection>(() => ({ apiUrl: "http://127.0.0.1:8791", token: "", tenantId: "", rangeFrom: new Date(Date.now() - 86400000).toISOString(), rangeTo: new Date().toISOString() }));
+  const updateLedgerConnection = useCallback((patch: Partial<LedgerConnection>) => setLedgerConnection((current) => ({ ...current, ...patch })), []);
+  const updateLifecycleContext = useCallback((patch: LifecycleContext) => setLifecycleContext((current) => ({ ...current, ...patch })), []);
+  const [telemetrySource, setTelemetrySource] = useState("");
   const telemetryInput = useRef<HTMLInputElement>(null);
   const manifestInput = useRef<HTMLInputElement>(null);
   const canvasScroll = useRef<HTMLDivElement>(null);
@@ -364,10 +383,10 @@ export default function Home() {
   }, [activeGraph, edges, runtimeImport, runtimeDiff.unobservedEdgeIds]);
 
   const findings = useMemo(() => {
-    const result: { severity: "critical" | "warning"; text: string; target: string }[] = [];
+    const result: { severity: "critical" | "warning"; text: Message; target: string }[] = [];
     nodes.forEach((node) => {
       if (!edges.some((edge) => edge.source === node.id || edge.target === node.id)) result.push({ severity: "warning", text: "Unconnected actor has no security boundary", target: node.id });
-      if (node.type === "TOOL" && !node.definitionDigest) result.push({ severity: "critical", text: "Tool definition digest is not pinned", target: node.id });
+      if (node.type === "TOOL" && !node.definitionDigest && !node.annotations?.["interlock.runtime"]) result.push({ severity: "critical", text: "Tool definition digest is not pinned", target: node.id });
       if (node.type === "EXTERNAL" && edges.some((edge) => edge.target === node.id && edge.relationshipId === "REL-07") && !node.allowedDomains?.length) result.push({ severity: "critical", text: "External destination has no allowed domain boundary", target: node.id });
     });
     edges.forEach((edge) => {
@@ -393,11 +412,11 @@ export default function Home() {
     });
     orchestration.tasks.forEach((task) => {
       const relationshipId = task.transport === "A2A" ? "REL-06" : task.transport === "MCP" ? "REL-05" : null;
-      if (relationshipId && !edges.some((edge) => edge.source === task.sourceActorId && edge.target === task.targetActorId && edge.relationshipId === relationshipId)) result.push({ severity: "critical", text: `${task.transport} task has no declared transport edge`, target: task.id });
+      if (relationshipId && !edges.some((edge) => edge.source === task.sourceActorId && edge.target === task.targetActorId && edge.relationshipId === relationshipId)) result.push({ severity: "critical", text: message("{0} task has no declared transport edge", task.transport), target: task.id });
       if (!task.acceptanceCriteria.length) result.push({ severity: "warning", text: "Workflow task has no acceptance criteria", target: task.id });
       if (task.maxAttempts < 1 || task.timeoutSeconds < 1) result.push({ severity: "critical", text: "Workflow task retry or timeout budget is invalid", target: task.id });
       const target = nodeMap[task.targetActorId];
-      if ((target?.type === "TOOL" || target?.type === "EXTERNAL") && !task.approvalRequired) result.push({ severity: "critical", text: "High-impact workflow task has no approval gate", target: task.id });
+      if ((target?.type === "TOOL" || target?.type === "EXTERNAL") && (target?.annotations?.["interlock.runtime"] as {kind?: string} | undefined)?.kind !== "JSON_TRANSFORM" && !task.approvalRequired) result.push({ severity: "critical", text: "High-impact workflow task has no approval gate", target: task.id });
     });
     const cycleTask = workflowCycleTask(orchestration.tasks);
     if (cycleTask) result.push({ severity: "critical", text: "Workflow dependency cycle must be removed", target: cycleTask });
@@ -408,7 +427,6 @@ export default function Home() {
   const assuredControls = allControls.filter((control) => control.assurance === "ENFORCED" || control.assurance === "RECONCILED").length;
   const criticalCount = findings.filter((finding) => finding.severity === "critical").length;
   const warningCount = findings.length - criticalCount;
-  const score = Math.max(0, 100 - criticalCount * 18 - warningCount * 6);
   const coverage = allControls.length ? Math.round((assuredControls / allControls.length) * 100) : 0;
 
   function checkpoint() {
@@ -541,7 +559,7 @@ export default function Home() {
     zoomRef.current = nextZoom;
     setZoom(nextZoom);
     requestAnimationFrame(() => viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" }));
-    if (announce) setNotice(`Graph fitted to viewport · ${Math.round(nextZoom * 100)}%`);
+    if (announce) setNotice(message("Graph fitted to viewport · {0}%", String(Math.round(nextZoom * 100))));
   }, [boardSize.height, boardSize.width]);
 
   useEffect(() => {
@@ -561,7 +579,7 @@ export default function Home() {
       top: Math.max(0, (node.y + ACTOR_NODE_HEIGHT / 2) * zoom - viewport.clientHeight / 2),
       behavior: "smooth",
     });
-    if (announce) setNotice(`${node.label} centered in the graph`);
+    if (announce) setNotice(message("{0} centered in the graph", String(node.label)));
   }
 
   function focusZone(zoneId: string, announce = true) {
@@ -573,7 +591,7 @@ export default function Home() {
       top: Math.max(0, (zone.y + zone.height / 2) * zoom - viewport.clientHeight / 2),
       behavior: "smooth",
     });
-    if (announce) setNotice(`${zone.label} centered in the graph`);
+    if (announce) setNotice(message("{0} centered in the graph", String(zone.label)));
   }
 
   function focusCurrentContext() {
@@ -628,10 +646,10 @@ export default function Home() {
     }
     checkpoint();
     const existing = boundaries.find((boundary) => boundary.sourceZoneId === source.trustZoneId && boundary.targetZoneId === target.trustZoneId && boundary.allowedRelationships.includes(selectedEdge.relationship));
-    const boundary = existing ?? boundaryDefaults(selectedEdge, source, target, boundaries.length + 1);
+    const boundary = existing ?? boundaryDefaults(selectedEdge, source, target, crypto.randomUUID());
     if (!existing) setBoundaries((items) => [...items, boundary]);
     setEdges((items) => items.map((edge) => edge.id === selectedEdge.id ? { ...edge, boundaryId: boundary.id } : edge));
-    setNotice(`${boundary.label} bound to ${selectedEdge.relationship}`);
+    setNotice(message("{0} bound to {1}", String(boundary.label), String(selectedEdge.relationship)));
   }
 
   function updateOrchestration(patch: Partial<Omit<OrchestrationDesign, "tasks">>) {
@@ -657,11 +675,11 @@ export default function Home() {
           ? nodes.find((node) => node.type === "USER")
           : coordinator;
     if (!coordinator || !target) {
-      setNotice(`Add a compatible actor before creating a ${transport} task`);
+      setNotice(message("Add a compatible actor before creating a {0} task", String(transport)));
       return;
     }
     const task: WorkflowTask = {
-      id: `task.new-${index}`,
+      id: `task.new-${crypto.randomUUID()}`,
       label: `New ${transport} task`,
       sourceActorId: coordinator.id,
       targetActorId: target.id,
@@ -680,7 +698,7 @@ export default function Home() {
     setOrchestration((value) => ({ ...value, tasks: [...value.tasks, task] }));
     setSelected({ kind: "task", id: task.id });
     setMobilePanel("inspector");
-    setNotice(`${transport} workflow task added · define its actor edge and acceptance criteria`);
+    setNotice(message("{0} workflow task added · define its actor edge and acceptance criteria", String(transport)));
   }
 
   function removeSelectedTask() {
@@ -695,13 +713,12 @@ export default function Home() {
     const remaining = orchestration.tasks.filter((task) => task.id !== selectedTask.id);
     if (remaining[0]) setSelected({ kind: "task", id: remaining[0].id });
     else if (edges[0]) setSelected({ kind: "edge", id: edges[0].id });
-    setNotice(`${selectedTask.label} removed from the task graph`);
+    setNotice(message("{0} removed from the task graph", String(selectedTask.label)));
   }
 
   function addNode(type: NodeType) {
     checkpoint();
-    const count = nodes.filter((node) => node.type === type).length + 1;
-    const id = `${type.toLowerCase()}.new-${count}`;
+    const id = `${type.toLowerCase()}.new-${crypto.randomUUID()}`;
     const preferredZone = type === "USER"
       ? zones.find((zone) => zone.kind === "EXTERNAL")
       : type === "EXTERNAL"
@@ -716,12 +733,12 @@ export default function Home() {
       y: zone.y + ZONE_HEADER_HEIGHT + Math.floor(memberCount / columns) * (ACTOR_NODE_HEIGHT + 14),
     };
     const position = clampNodeToZone(tentative, zone);
-    const node: ArchitectureNode = { id, label: `New ${type.replace("SUBAGENT", "Sub-Agent")}`, type, owner: "Unassigned", identity: `unbound://${id}`, capabilities: [], tenantMode: "REQUIRED", maxDelegationDepth: type === "AGENT" || type === "SUBAGENT" ? 1 : 0, trustZone: zone.kind, trustZoneId: zone.id, allowedDomains: type === "EXTERNAL" ? [] : undefined, ...position };
+    const node: ArchitectureNode = { id, label: `New ${type.replace("SUBAGENT", "Sub-Agent")}`, type, owner: "Unassigned", identity: `unbound://${id}`, capabilities: [], dataAccess: [], tenantMode: "REQUIRED", maxDelegationDepth: type === "AGENT" || type === "SUBAGENT" ? 1 : 0, trustZone: zone.kind, trustZoneId: zone.id, allowedDomains: type === "EXTERNAL" ? [] : undefined, ...position };
     setNodes((items) => [...items, node]);
     setSelected({ kind: "node", id });
     setFocusedNodeId(id);
     setMobilePanel("inspector");
-    setNotice(`${node.label} added · connect it to define a security boundary`);
+    setNotice(message("{0} added · connect it to define a security boundary", String(node.label)));
   }
 
   function addZone() {
@@ -730,11 +747,11 @@ export default function Home() {
     const viewport = canvasScroll.current;
     const x = Math.max(GRAPH_BOARD_PADDING, ((viewport?.scrollLeft ?? 0) + 60) / zoom);
     const y = Math.max(GRAPH_BOARD_PADDING, ((viewport?.scrollTop ?? 0) + 70) / zoom);
-    const zone: TrustZoneDefinition = { id: `zone.custom-${index}`, label: `New trust zone ${index}`, kind: "INTERNAL", description: "Managed security boundary", x, y, width: 320, height: 300 };
+    const zone: TrustZoneDefinition = { id: `zone.custom-${crypto.randomUUID()}`, label: `New trust zone ${index}`, kind: "INTERNAL", description: "Managed security boundary", x, y, width: 320, height: 300 };
     setZones((items) => [...items, zone]);
     setSelected({ kind: "zone", id: zone.id });
     setMobilePanel("inspector");
-    setNotice(`${zone.label} added · resize it and assign actors in the inspector`);
+    setNotice(message("{0} added · resize it and assign actors in the inspector", String(zone.label)));
   }
 
   function assignSelectedNodeToZone(zoneId: string) {
@@ -743,7 +760,7 @@ export default function Home() {
     checkpoint();
     const position = clampNodeToZone(selectedNode, zone);
     setNodes((items) => items.map((item) => item.id === selectedNode.id ? { ...item, trustZone: zone.kind, trustZoneId: zone.id, ...position } : item));
-    setNotice(`${selectedNode.label} assigned to ${zone.label}`);
+    setNotice(message("{0} assigned to {1}", String(selectedNode.label), String(zone.label)));
   }
 
   function updateSelectedZone(patch: Partial<TrustZoneDefinition>, shiftMembers = false) {
@@ -768,7 +785,7 @@ export default function Home() {
     const position = clampNodeToZone(actor, selectedZone);
     setNodes((items) => items.map((node) => node.id === actorId ? { ...node, trustZone: selectedZone.kind, trustZoneId: selectedZone.id, ...position } : node));
     setZoneAssignmentActor("");
-    setNotice(`${actor.label} assigned to ${selectedZone.label}`);
+    setNotice(message("{0} assigned to {1}", String(actor.label), String(selectedZone.label)));
   }
 
   function fitSelectedZoneAroundActors() {
@@ -782,7 +799,7 @@ export default function Home() {
     const right = Math.max(...selectedZoneMembers.map((node) => node.x + ACTOR_NODE_WIDTH)) + ZONE_INSET;
     const bottom = Math.max(...selectedZoneMembers.map((node) => node.y + ACTOR_NODE_HEIGHT)) + ZONE_INSET;
     setZones((items) => items.map((zone) => zone.id === selectedZone.id ? { ...zone, x: left, y: top, width: Math.max(ZONE_MIN_WIDTH, right - left), height: Math.max(ZONE_MIN_HEIGHT, bottom - top) } : zone));
-    setNotice(`${selectedZone.label} fitted around ${selectedZoneMembers.length} actors`);
+    setNotice(message("{0} fitted around {1} actors", String(selectedZone.label), String(selectedZoneMembers.length)));
   }
 
   function removeSelectedZone() {
@@ -794,7 +811,7 @@ export default function Home() {
     setEdges((items) => items.map((edge) => edge.boundaryId && removedBoundaryIds.has(edge.boundaryId) ? { ...edge, boundaryId: undefined } : edge));
     if (nodes[0]) setSelected({ kind: "node", id: nodes[0].id });
     else if (edges[0]) setSelected({ kind: "edge", id: edges[0].id });
-    setNotice(`${selectedZone.label} removed`);
+    setNotice(message("{0} removed", String(selectedZone.label)));
   }
 
   function removeSelectedNode() {
@@ -817,7 +834,7 @@ export default function Home() {
     if (remainingNodes[0]) setSelected({ kind: "node", id: remainingNodes[0].id });
     else if (remainingEdges[0]) setSelected({ kind: "edge", id: remainingEdges[0].id });
     else setSelected({ kind: "node", id: "" });
-    setNotice(`${selectedNode.label} removed · ${removedEdges.length} connected relationship${removedEdges.length === 1 ? "" : "s"} removed`);
+    setNotice(message("{0} removed · {1} connected relationship{2} removed", String(selectedNode.label), String(removedEdges.length), String(removedEdges.length === 1 ? "" : "s")));
   }
 
   function removeSelectedEdge() {
@@ -829,16 +846,16 @@ export default function Home() {
     if (remainingEdges[0]) setSelected({ kind: "edge", id: remainingEdges[0].id });
     else if (nodes[0]) setSelected({ kind: "node", id: nodes[0].id });
     else setSelected({ kind: "node", id: "" });
-    setNotice(`${selectedEdge.relationship} relationship removed`);
+    setNotice(message("{0} relationship removed", String(selectedEdge.relationship)));
   }
 
   function selectNode(node: ArchitectureNode) {
     if (connectFrom && connectFrom !== node.id) {
       const source = nodeMap[connectFrom];
-      const edge = edgeDefaults(source, node, edges.length + 1);
+      const edge = edgeDefaults(source, node, crypto.randomUUID());
       const crossesZone = source.trustZoneId !== node.trustZoneId;
       const existingBoundary = crossesZone ? boundaries.find((boundary) => boundary.sourceZoneId === source.trustZoneId && boundary.targetZoneId === node.trustZoneId && boundary.allowedRelationships.includes(edge.relationship)) : undefined;
-      const boundary = crossesZone ? existingBoundary ?? boundaryDefaults(edge, source, node, boundaries.length + 1) : undefined;
+      const boundary = crossesZone ? existingBoundary ?? boundaryDefaults(edge, source, node, crypto.randomUUID()) : undefined;
       const nextEdge = boundary ? { ...edge, boundaryId: boundary.id } : edge;
       checkpoint();
       if (boundary && !existingBoundary) setBoundaries((items) => [...items, boundary]);
@@ -860,7 +877,7 @@ export default function Home() {
       return;
     }
     setConnectFrom(selectedNode.id);
-    setNotice(`Connecting from ${selectedNode.label} · select a target box`);
+    setNotice(message("Connecting from {0} · select a target box", String(selectedNode.label)));
   }
 
   function onNodePointerDown(event: ReactPointerEvent<HTMLButtonElement>, node: ArchitectureNode) {
@@ -970,6 +987,7 @@ export default function Home() {
     try {
       const imported = parseRuntimeTelemetry(value);
       setRuntimeImport(imported);
+      setTelemetrySource(source);
       setRawLedgerEvents(
         imported.format === "INTERLOCK_LEDGER" ? ledgerEventsForStatistics(value) : null,
       );
@@ -977,9 +995,9 @@ export default function Home() {
       setConnectFrom(null);
       setMobilePanel(null);
       const diff = computeRuntimeDiff(edges, imported.observations);
-      setNotice(`${source} imported · ${imported.observations.length} relationships · ${diff.undeclared.length} undeclared · ${diff.controlBypassInteractionIds.length} bypass`);
+      setNotice(message("{0} imported · {1} relationships · {2} undeclared · {3} bypass", String(source), String(imported.observations.length), String(diff.undeclared.length), String(diff.controlBypassInteractionIds.length)));
     } catch (error) {
-      setNotice(`Telemetry import rejected · ${error instanceof Error ? error.message : "invalid JSON"}`);
+      setNotice(message("Telemetry import rejected · {0}", String(error instanceof Error ? error.message : "invalid JSON")));
     }
   }
 
@@ -1005,7 +1023,8 @@ export default function Home() {
     setMobilePanel(null);
     if ((view === "runtime" || view === "drift") && !runtimeImport) setNotice("Import Ledger or OTLP JSON telemetry to build the runtime graph");
     else if (view === "runs") setNotice("Connect to Run Control to operate the exact active ENFORCE deployment");
-    else if (view === "deploy") setNotice("Compile and sign outside the browser, then promote through the Control Plane");
+    else if (view === "deploy") setNotice("Compile your draft, review the comparison, sign locally, and promote");
+    else setNotice(view === "design" ? "Editing local draft · save or export to preserve your work" : runtimeImport ? message("Telemetry: {0}", String(telemetrySource)) : "Import Ledger events or connect the statistics API");
   }
 
   function reviseDesignFromDrift() {
@@ -1025,7 +1044,7 @@ export default function Home() {
     const focusId = target?.target ?? sourceTemplate?.id ?? nodes[0]?.id;
     requestAnimationFrame(() => { if (focusId) focusNode(focusId, false); });
     setNotice(undeclared
-      ? `Design revision started · decide whether to declare ${undeclared.source} → ${undeclared.target} or block it at runtime`
+      ? message("Design revision started · decide whether to declare {0} → {1} or block it at runtime", String(undeclared.source), String(undeclared.target))
       : "Design revision started · review the selected drift finding before exporting a new version");
   }
 
@@ -1058,14 +1077,15 @@ export default function Home() {
   function applyManifestImport(value: unknown, source: string) {
     const result = parseManifestPayload(value);
     if (!result.ok) {
-      setNotice(`Manifest import rejected · ${result.error}`);
-      return;
+      setNotice(message("Manifest import rejected · {0}", String(result.error)));
+      return false;
     }
     checkpoint();
     restoreSnapshot({ ...result.snapshot, projectId: result.project.id, projectVersion: result.project.version });
     setActiveGraph("design");
     setDesignSurface("topology");
-    setNotice(`${source} opened · ${result.snapshot.nodes.length} actor${result.snapshot.nodes.length === 1 ? "" : "s"}, ${result.snapshot.edges.length} relationship${result.snapshot.edges.length === 1 ? "" : "s"}`);
+    setNotice(message("{0} opened · {1} actor{2}, {3} relationship{4}", String(source), String(result.snapshot.nodes.length), String(result.snapshot.nodes.length === 1 ? "" : "s"), String(result.snapshot.edges.length), String(result.snapshot.edges.length === 1 ? "" : "s")));
+    return true;
   }
 
   async function importManifestFile(event: ChangeEvent<HTMLInputElement>) {
@@ -1080,12 +1100,13 @@ export default function Home() {
   }
 
   function persistSavedProjects(next: SavedProjectsIndex) {
-    setSavedProjects(next);
     try {
       window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+      setSavedProjects(next);
+      return true;
     } catch {
-      // localStorage unavailable (private browsing, quota, disabled storage) · the project list
-      // still works for this session, it just will not survive a reload.
+      setNotice("Save failed · browser storage is unavailable or full. Export the manifest to preserve your work.");
+      return false;
     }
   }
 
@@ -1095,8 +1116,8 @@ export default function Home() {
       return;
     }
     const manifest = buildManifestPayload({ nodes, edges, zones, boundaries, orchestration }, currentProject());
-    persistSavedProjects({ ...savedProjects, [projectId]: { savedAt: new Date().toISOString(), manifest } });
-    setNotice(`${projectId} saved locally · v${projectVersion}`);
+    if (!persistSavedProjects({ ...savedProjects, [projectId]: { savedAt: new Date().toISOString(), manifest } })) return;
+    setNotice(message("{0} saved locally · v{1}", String(projectId), String(projectVersion)));
   }
 
   function openSavedProject(id: string) {
@@ -1109,244 +1130,256 @@ export default function Home() {
   function deleteSavedProject(id: string) {
     const next = { ...savedProjects };
     delete next[id];
-    persistSavedProjects(next);
-    setNotice(`${id} removed from saved projects`);
+    if (!persistSavedProjects(next)) return;
+    setNotice(message("{0} removed from saved projects", String(id)));
   }
 
   return (
     <main className="studio-shell">
       <header className="topbar">
-        <div className="brand-lockup"><span className="brand-mark">AI</span><div><strong>Agent Interlock</strong><span>Security Architecture Studio</span></div></div>
+        <div className="brand-lockup"><span className="brand-mark">AI</span><div><strong>Agent Interlock</strong><span>{t("Security Architecture Studio")}</span></div></div>
         <div className="architecture-title project-identity">
           <span className="draft-dot" />
-          <input className={`project-id-input ${isValidProjectId(projectId) ? "" : "invalid"}`} aria-label="Project id" title="Project id · lowercase slug" value={projectId} onChange={(event) => setProjectId(event.target.value)} />
-          <small><input className="project-version-input" aria-label="Project version" title="Project version" value={projectVersion} onChange={(event) => setProjectVersion(event.target.value)} /></small>
+          <input className={`project-id-input ${isValidProjectId(projectId) ? "" : "invalid"}`} aria-label={t("Project id")} title={t("Project id · lowercase slug")} value={projectId} onChange={(event) => setProjectId(event.target.value)} />
+          <small><input className="project-version-input" aria-label={t("Project version")} title={t("Project version")} value={projectVersion} onChange={(event) => setProjectVersion(event.target.value)} /></small>
         </div>
         <div className="top-actions">
+          <select className="language-select" aria-label={t("Language")} value={language} onChange={(event) => setLanguage(event.target.value === "ko" ? "ko" : "en")}>
+            <option value="en" lang="en">English</option><option value="ko" lang="ko">한국어</option>
+          </select>
           <div className="project-menu">
-            <button className="quiet-button" aria-haspopup="menu" aria-expanded={showProjectMenu} onClick={() => setShowProjectMenu((value) => !value)}>Projects</button>
+            <button className="quiet-button" aria-haspopup="menu" aria-expanded={showProjectMenu} onClick={() => setShowProjectMenu((value) => !value)}>{t("Projects")}</button>
             {showProjectMenu && <div className="project-menu-panel" role="menu">
-              <button role="menuitem" onClick={() => { newProject(); setShowProjectMenu(false); }}>New project</button>
-              <button role="menuitem" onClick={() => { manifestInput.current?.click(); setShowProjectMenu(false); }}>Open manifest…</button>
-              <button role="menuitem" onClick={() => { saveProject(); setShowProjectMenu(false); }}>Save “{projectId || "untitled"}”</button>
+              <div className="starter-form"><strong>{t("Working local starter")}</strong><label>{t("Project name")}<input value={starterName} onChange={e=>setStarterName(e.target.value)}/></label><label>{t("Input field")}<input value={starterField} onChange={e=>setStarterField(e.target.value)}/></label><button disabled={!isValidProjectId(starterName) || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(starterField)} onClick={()=>{applyManifestImport(localTransformStarter(starterName,starterField),"Local transform starter");setShowProjectMenu(false);setNotice("Local starter ready. Deploy → compile → review and sign twice → promote → Runs. Enter your input and start.");}}>{t("Create working starter")}</button><small>{t("No external calls or credentials. Replaces this draft; Undo is available.")}</small></div>
+              <button role="menuitem" onClick={() => { newProject(); setShowProjectMenu(false); }}>{t("New project")}</button>
+              <button role="menuitem" onClick={() => { manifestInput.current?.click(); setShowProjectMenu(false); }}>{t("Open manifest…")}</button>
+              <button role="menuitem" onClick={() => { saveProject(); setShowProjectMenu(false); }}>{t("Save “")}{projectId || t("untitled")}”</button>
+              {activeGraph === "design" && <button role="menuitem" onClick={() => { setShowProjectMenu(false); setMobilePanel("inspector"); setNotice(message("{0} static design findings · {1} critical. Compile in Deploy to validate runtime readiness.", String(findings.length), String(criticalCount))); requestAnimationFrame(() => document.getElementById("design-findings")?.scrollIntoView({ block: "nearest" })); }}>{t("Review static checks")}</button>}
+              <button role="menuitem" onClick={() => { setShowSharedProjects(true); setShowProjectMenu(false); }}>{language === "ko" ? "공동 프로젝트…" : "Shared projects…"}</button>
               <div className="project-menu-rule" />
-              <div className="project-menu-heading">Saved projects</div>
-              {Object.keys(savedProjects).length === 0 && <p className="project-menu-empty">None saved in this browser yet.</p>}
+              <div className="project-menu-heading">{t("Saved projects")}</div>
+              {Object.keys(savedProjects).length === 0 && <p className="project-menu-empty">{t("None saved in this browser yet.")}</p>}
               {Object.entries(savedProjects).sort(([, a], [, b]) => b.savedAt.localeCompare(a.savedAt)).map(([id, saved]) => (
                 <div className="project-list-item" key={id}>
-                  <button role="menuitem" onClick={() => openSavedProject(id)}><strong>{id}</strong><small>saved {new Date(saved.savedAt).toLocaleString()}</small></button>
-                  <button className="project-delete" aria-label={`Delete saved project ${id}`} onClick={() => deleteSavedProject(id)}>×</button>
+                  <button role="menuitem" onClick={() => openSavedProject(id)}><strong>{id}</strong><small>{t("saved")} {new Date(saved.savedAt).toLocaleString(language === "ko" ? "ko-KR" : "en-US")}</small></button>
+                  <button className="project-delete" aria-label={t(message("Delete saved project {0}", String(id)))} onClick={() => deleteSavedProject(id)}>×</button>
                 </div>
               ))}
             </div>}
           </div>
           <input ref={manifestInput} className="file-input" type="file" accept="application/json,.json" onChange={importManifestFile} />
-          {activeGraph === "design" && <><button className="quiet-button" onClick={() => setNotice(`${findings.length} findings · ${criticalCount} require attention`)}>Run security check</button><button className="primary-button" onClick={exportManifest}>Export manifest</button></>}
-          {activeGraph === "deploy" && <button className="primary-button" onClick={() => selectGraph("design")}>Back to design</button>}
-          {activeGraph === "runtime" && <><button className="quiet-button" onClick={() => telemetryInput.current?.click()}>Import telemetry</button><button className="primary-button" disabled={!runtimeImport} onClick={() => selectGraph("drift")}>Review drift</button></>}
-          {activeGraph === "drift" && <><button className="quiet-button" onClick={() => telemetryInput.current?.click()}>Replace telemetry</button><button className="primary-button" onClick={reviseDesignFromDrift}>Revise design</button></>}
-          {activeGraph === "stats" && <><button className="quiet-button" onClick={() => runtimeImport && selectGraph("drift")} disabled={!runtimeImport}>Review drift</button><button className="primary-button" onClick={() => telemetryInput.current?.click()}>Import telemetry</button></>}
+          {activeGraph === "design" && <><button className="quiet-button" onClick={() => { setMobilePanel("inspector"); setNotice(message("{0} static design findings · {1} critical. Compile in Deploy to validate runtime readiness.", String(findings.length), String(criticalCount))); document.getElementById("design-findings")?.scrollIntoView({ block: "nearest" }); }}>{t("Run security check")}</button><button className="primary-button" onClick={exportManifest}>{t("Export manifest")}</button></>}
+          {activeGraph === "deploy" && <button className="primary-button" onClick={() => selectGraph("design")}>{t("Back to design")}</button>}
+          {activeGraph === "runtime" && <><button className="quiet-button" onClick={() => telemetryInput.current?.click()}>{t("Import telemetry")}</button><button className="primary-button" disabled={!runtimeImport} onClick={() => selectGraph("drift")}>{t("Review drift")}</button></>}
+          {activeGraph === "drift" && <><button className="quiet-button" onClick={() => telemetryInput.current?.click()}>{t("Replace telemetry")}</button><button className="primary-button" onClick={reviseDesignFromDrift}>{t("Revise design")}</button></>}
+          {activeGraph === "stats" && <><button className="quiet-button" onClick={() => runtimeImport && selectGraph("drift")} disabled={!runtimeImport}>{t("Review drift")}</button><button className="primary-button" onClick={() => telemetryInput.current?.click()}>{t("Import telemetry")}</button></>}
         </div>
       </header>
 
       <section className={`workspace workspace-${activeGraph} ${isGraphView ? "" : "focus-workspace"}`}>
-        {mobilePanel && <button className="mobile-scrim" aria-label="Close side panel" onClick={() => setMobilePanel(null)} />}
-        <aside className={`toolbox ${mobilePanel === "palette" ? "mobile-open" : ""}`} aria-label={activeGraph === "design" ? designSurface === "topology" ? "Actor palette" : "Task palette" : "Runtime telemetry"}>
-          <button className="panel-close" aria-label={activeGraph === "design" ? designSurface === "topology" ? "Close actor palette" : "Close task palette" : "Close runtime telemetry"} onClick={() => setMobilePanel(null)}>×</button>
+        {mobilePanel && <button className="mobile-scrim" aria-label={t("Close side panel")} onClick={() => setMobilePanel(null)} />}
+        <aside className={`toolbox ${mobilePanel === "palette" ? "mobile-open" : ""}`} aria-label={activeGraph === "design" ? designSurface === "topology" ? t("Actor palette") : t("Task palette") : t("Runtime telemetry")}>
+          <button className="panel-close" aria-label={activeGraph === "design" ? designSurface === "topology" ? t("Close actor palette") : t("Close task palette") : t("Close runtime telemetry")} onClick={() => setMobilePanel(null)}>×</button>
           {activeGraph === "design" ? designSurface === "topology" ? <>
-            <div className="panel-heading"><span>BUILD</span><strong>Actor palette</strong></div>
-            <p className="panel-note">Add an actor. Its trust zone is persisted and updates when you move it across a zone boundary.</p>
+            <div className="panel-heading"><span>{t("BUILD")}</span><strong>{t("Actor palette")}</strong></div>
+            <p className="panel-note">{t("Add an actor. Its trust zone is persisted and updates when you move it across a zone boundary.")}</p>
             <div className="palette-grid">
-              {(["USER", "AGENT", "SUBAGENT", "RAG", "TOOL", "MEMORY", "SCHEDULER", "EXTERNAL"] as NodeType[]).map((type) => <button key={type} className={`palette-item tone-${nodeTone[type]}`} onClick={() => addNode(type)}><span>{type === "SUBAGENT" ? "SA" : type.slice(0, 2)}</span>{type === "SUBAGENT" ? "Sub-Agent" : type[0] + type.slice(1).toLowerCase()}</button>)}
+              {(["USER", "AGENT", "SUBAGENT", "RAG", "TOOL", "MEMORY", "SCHEDULER", "EXTERNAL"] as NodeType[]).map((type) => <button key={type} className={`palette-item tone-${nodeTone[type]}`} onClick={() => addNode(type)}><span>{type === "SUBAGENT" ? "SA" : type.slice(0, 2)}</span>{t(type === "SUBAGENT" ? "Sub-Agent" : type[0] + type.slice(1).toLowerCase())}</button>)}
             </div>
-            <button className="add-zone-button" onClick={addZone}><span>＋</span>Add trust zone</button>
+            <button className="add-zone-button" onClick={addZone}><span>＋</span>{t("Add trust zone")}</button>
             <div className="toolbox-rule" />
-            <button className={`connect-button ${connectFrom ? "active" : ""}`} onClick={beginConnection}><span>↗</span>{connectFrom ? "Choose target box" : "Connect selected box"}</button>
+            <button className={`connect-button ${connectFrom ? "active" : ""}`} onClick={beginConnection}><span>↗</span>{connectFrom ? t("Choose target box") : t("Connect selected box")}</button>
             <div className="legend">
-              <strong>Assurance</strong>
-              <span><i className="dot declared" />Declared</span><span><i className="dot observed" />Observed</span><span><i className="dot enforced" />Enforced</span><span><i className="dot reconciled" />Reconciled</span>
+              <strong>{t("Authored assurance")}</strong>
+              <span><i className="dot declared" />{t("Declared")}</span><span><i className="dot observed" />{t("Observed")}</span><span><i className="dot enforced" />{t("Enforced")}</span><span><i className="dot reconciled" />{t("Reconciled")}</span>
             </div>
             <div className="zone-guide">
-              <strong>Trust zones</strong>
-              <span><b>Internal</b><small>Managed identities and controlled services</small></span>
-              <span><b>External</b><small>Third-party or untrusted destinations</small></span>
-              <p>Cross-zone edges must bind a directional Trust Boundary. The boundary is compiled and enforced by the matching gateway.</p>
+              <strong>{t("Trust zones")}</strong>
+              <span><b>{t("Internal")}</b><small>{t("Managed identities and controlled services")}</small></span>
+              <span><b>{t("External")}</b><small>{t("Third-party or untrusted destinations")}</small></span>
+              <p>{t("Cross-zone edges must bind a directional Trust Boundary. The boundary is compiled and enforced by the matching gateway.")}</p>
             </div>
           </> : <>
-            <div className="panel-heading"><span>ORCHESTRATE</span><strong>Task palette</strong></div>
-            <p className="panel-note">Tasks reference actors from the topology. A2A and MCP tasks must have matching declared edges.</p>
+            <div className="panel-heading"><span>{t("ORCHESTRATE")}</span><strong>{t("Task palette")}</strong></div>
+            <p className="panel-note">{t("Tasks reference actors from the topology. A2A and MCP tasks must have matching declared edges.")}</p>
             <div className="task-palette">
-              {(["A2A", "MCP", "LOCAL", "HUMAN"] as WorkflowTask["transport"][]).map((transport) => <button key={transport} onClick={() => addWorkflowTask(transport)}><span>{transport === "HUMAN" ? "H" : transport}</span><div><strong>{transport} task</strong><small>{transport === "A2A" ? "Delegate to another agent" : transport === "MCP" ? "Invoke a governed tool" : transport === "HUMAN" ? "Pause for a person" : "Run a host adapter"}</small></div></button>)}
+              {(["A2A", "MCP", "LOCAL", "HUMAN"] as WorkflowTask["transport"][]).map((transport) => <button key={transport} onClick={() => addWorkflowTask(transport)}><span>{transport === "HUMAN" ? "H" : transport}</span><div><strong>{transport} {t("task")}</strong><small>{transport === "A2A" ? t("Delegate to another agent") : transport === "MCP" ? t("Invoke a governed tool") : transport === "HUMAN" ? t("Pause for a person") : t("Run a host adapter")}</small></div></button>)}
             </div>
             <div className="toolbox-rule" />
-            <label className="toolbox-field">Coordinator<select value={orchestration.coordinatorActorId} onChange={(event) => updateOrchestration({ coordinatorActorId: event.target.value })}>{nodes.filter((node) => ["AGENT", "SUBAGENT", "SCHEDULER"].includes(node.type)).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select></label>
-            <label className="toolbox-field">Pattern<select value={orchestration.pattern} onChange={(event) => updateOrchestration({ pattern: event.target.value as OrchestrationDesign["pattern"] })}><option>STATE_GRAPH</option><option>HIERARCHICAL</option><option>CONVERSATIONAL</option><option>HYBRID</option></select></label>
-            <div className="run-budget-card"><strong>Run limits</strong><span><b>{orchestration.maxParallelism}</b> parallel</span><span><b>{orchestration.maxMessages}</b> messages</span><span><b>{Math.round(orchestration.maxDurationSeconds / 60)}</b> minutes</span></div>
+            <label className="toolbox-field">{t("Coordinator")}<select value={orchestration.coordinatorActorId} onChange={(event) => updateOrchestration({ coordinatorActorId: event.target.value })}>{nodes.filter((node) => ["AGENT", "SUBAGENT", "SCHEDULER"].includes(node.type)).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select></label>
+            <label className="toolbox-field">{t("Pattern")}<select value={orchestration.pattern} onChange={(event) => updateOrchestration({ pattern: event.target.value as OrchestrationDesign["pattern"] })}><option value="STATE_GRAPH">{t("STATE_GRAPH")}</option><option value="HIERARCHICAL">{t("HIERARCHICAL")}</option><option value="CONVERSATIONAL">{t("CONVERSATIONAL")}</option><option value="HYBRID">{t("HYBRID")}</option></select></label>
+            <div className="run-budget-card"><strong>{t("Run limits")}</strong><span><b>{orchestration.maxParallelism}</b> {t("parallel")}</span><span><b>{orchestration.maxMessages}</b> {t("messages")}</span><span><b>{Math.round(orchestration.maxDurationSeconds / 60)}</b> {t("minutes")}</span></div>
           </> : <>
-            <div className="panel-heading"><span>OBSERVE</span><strong>Runtime telemetry</strong></div>
-            <p className="panel-note">Import Interlock Ledger events or OTLP/HTTP JSON. Files stay in this browser session.</p>
+            <div className="panel-heading"><span>{t("OBSERVE")}</span><strong>{t("Runtime telemetry")}</strong></div>
+            <p className="panel-note">{t("Import Interlock Ledger events or OTLP/HTTP JSON. Files stay in this browser session.")}</p>
             <input ref={telemetryInput} className="file-input" type="file" accept="application/json,.json" onChange={importTelemetryFile} />
-            <button className="telemetry-button primary" onClick={() => telemetryInput.current?.click()}><span>↑</span>Import telemetry</button>
-            <div className="runtime-source-card"><span>FORMAT</span><strong>{runtimeImport?.format ?? "No telemetry"}</strong><small>{runtimeImport ? `${runtimeImport.observations.length} observed relationships` : "JSON · maximum 5 MB"}</small></div>
+            <button className="telemetry-button primary" onClick={() => telemetryInput.current?.click()}><span>↑</span>{t("Import telemetry")}</button>
+            <div className="runtime-source-card"><span>{t("FORMAT")}</span><strong>{runtimeImport?.format ?? t("No telemetry")}</strong><small>{runtimeImport ? t(message("{0} observed relationships", String(runtimeImport.observations.length))) : t("JSON · maximum 5 MB")}</small></div>
             <div className="toolbox-rule" />
-            <div className="runtime-contract"><strong>Security context</strong><code>interlock.source.actor.id</code><code>interlock.target.actor.id</code><code>interlock.relationship.id</code><code>interlock.control.evaluated</code></div>
-            <div className="legend runtime-legend"><strong>Runtime state</strong><span><i className="dot observed" />Observed</span><span><i className="dot reconciled" />Controlled</span><span><i className="dot critical" />Drift / bypass</span></div>
+            <div className="runtime-contract"><strong>{t("Security context")}</strong><code>interlock.source.actor.id</code><code>interlock.target.actor.id</code><code>interlock.relationship.id</code><code>interlock.control.evaluated</code></div>
+            <div className="legend runtime-legend"><strong>{t("Runtime state")}</strong><span><i className="dot observed" />{t("Observed")}</span><span><i className="dot reconciled" />{t("Controlled")}</span><span><i className="dot critical" />{t("Drift / bypass")}</span></div>
           </>}
+          {activeGraph === "design" && designSurface === "topology" && <details className="graph-search"><summary>{t("Find actor or relationship")}</summary><label>{t("Search graph")}<input type="search" value={graphSearch} onChange={(event) => setGraphSearch(event.target.value)} placeholder={t("Name, ID, or relationship")} /></label><div className="graph-search-results">{nodes.filter((node) => `${node.label} ${node.id} ${node.type}`.toLowerCase().includes(graphSearch.toLowerCase())).map((node) => <button key={node.id} onClick={() => { setSelected({ kind: "node", id: node.id }); focusNode(node.id); setMobilePanel(null); }}>{node.label}<small>{node.id}</small></button>)}{edges.filter((edge) => `${edge.relationship} ${edge.id} ${nodeMap[edge.source]?.label} ${nodeMap[edge.target]?.label}`.toLowerCase().includes(graphSearch.toLowerCase())).map((edge) => <button key={edge.id} onClick={() => { setSelected({ kind: "edge", id: edge.id }); focusNode(edge.target); setMobilePanel(null); }}>{nodeMap[edge.source]?.label} → {nodeMap[edge.target]?.label}<small>{t(edge.relationship)} · {edge.id}</small></button>)}</div></details>}
         </aside>
 
         <section className="canvas-region">
+          <div className="lifecycle-context"><strong>{t("Draft:")} {projectId} · v{projectVersion}</strong><span>{t("Telemetry:")} {runtimeImport ? telemetrySource : t("Not loaded")}</span><details><summary>{t("Deployment and evidence context")}</summary><span>{t("Last loaded bundle:")} {t(lifecycleContext.bundle ?? "Not loaded")}</span><span>{t("Last checked active deployment:")} {t(lifecycleContext.activeDeployment ?? "Not checked")}</span><span>{t("Last selected run:")} {t(lifecycleContext.run ?? "None")}</span><span>{t("Trace:")} {t(lifecycleContext.trace ?? "None")}</span><span>{t("Observation:")} {t(lifecycleContext.observation ?? "Not loaded")}</span><small>{t("Draft edits are local; compare compiled policy changes before approval. Runtime evidence describes only its source and observation window.")}</small></details></div>
           <div className="canvas-toolbar">
-            <nav className="workflow-nav" aria-label="Security lifecycle">
-              {graphViewOptions.map((view, index) => <button key={view.id} aria-label={`${index + 1}. ${view.label}: ${view.phase}`} aria-current={activeGraph === view.id ? "step" : undefined} aria-pressed={activeGraph === view.id} className={activeGraph === view.id ? "active" : ""} title={view.description} onClick={() => selectGraph(view.id)}><span className="workflow-number">{index + 1}</span><span className="workflow-copy"><strong>{view.label}</strong><small>{view.phase}</small></span>{view.id === "runtime" && runtimeImport && <i aria-label="Telemetry loaded">✓</i>}</button>)}
+            <nav className="workflow-nav" aria-label={t("Security lifecycle")}>
+              {graphViewOptions.map((view, index) => <button key={view.id} aria-label={`${index + 1}. ${t(view.label)}: ${t(view.phase)}`} aria-current={activeGraph === view.id ? "step" : undefined} aria-pressed={activeGraph === view.id} className={activeGraph === view.id ? "active" : ""} title={t(view.description)} onClick={() => selectGraph(view.id)}><span className="workflow-number">{index + 1}</span><span className="workflow-copy"><strong>{t(view.label)}</strong><small>{t(view.phase)}</small></span>{view.id === "runtime" && runtimeImport && <i aria-label={t("Telemetry loaded")}>✓</i>}</button>)}
             </nav>
             <div className="context-toolbar">
-              <div className="view-intro"><strong>{activeView.phase}</strong><span>{activeView.description}</span></div>
-              {activeGraph === "design" && <div className="design-surface-switch" aria-label="Design graph surface"><button className={designSurface === "topology" ? "active" : ""} aria-pressed={designSurface === "topology"} onClick={() => { setDesignSurface("topology"); setSelected({ kind: "edge", id: edges[0]?.id ?? "" }); }}>Actor topology</button><button className={designSurface === "workflow" ? "active" : ""} aria-pressed={designSurface === "workflow"} onClick={() => { setDesignSurface("workflow"); setSelected({ kind: "task", id: orchestration.tasks[0]?.id ?? "" }); }}>Task workflow</button></div>}
-              {isGraphView && <div className="mobile-panel-actions"><button onClick={() => setMobilePanel("palette")}>{activeGraph === "design" ? designSurface === "topology" ? "Actors" : "Tasks" : "Telemetry"}</button><button onClick={() => setMobilePanel("inspector")}>Inspect</button></div>}
+              <div className="view-intro"><strong>{t(activeView.phase)}</strong><span>{t(activeView.description)}</span></div>
+              {activeGraph === "design" && <div className="design-surface-switch" aria-label={t("Design graph surface")}><button className={designSurface === "topology" ? "active" : ""} aria-pressed={designSurface === "topology"} onClick={() => { setDesignSurface("topology"); setSelected({ kind: "edge", id: edges[0]?.id ?? "" }); }}>{t("Actor topology")}</button><button className={designSurface === "workflow" ? "active" : ""} aria-pressed={designSurface === "workflow"} onClick={() => { setDesignSurface("workflow"); setSelected({ kind: "task", id: orchestration.tasks[0]?.id ?? "" }); }}>{t("Task workflow")}</button></div>}
+              {isGraphView && <div className="mobile-panel-actions"><button onClick={() => setMobilePanel("palette")}>{activeGraph === "design" ? designSurface === "topology" ? t("Actors") : t("Tasks") : t("Telemetry")}</button><button onClick={() => setMobilePanel("inspector")}>{t("Inspect")}</button></div>}
               {isGraphView && <div className="canvas-toolbar-right">
-                <div className="canvas-stats">{activeGraph === "design" ? designSurface === "topology" ? <><span>{nodes.length} actors</span><span>{edges.length} relationships</span><span>{boundaries.length} boundaries</span><span>{coverage}% enforced</span></> : <><span>{orchestration.tasks.length} tasks</span><span>{orchestration.tasks.filter((task) => task.transport === "A2A").length} A2A</span><span>{orchestration.maxParallelism} parallel</span></> : activeGraph === "runtime" ? <><span>{runtimeNodes.length} runtime actors</span><span>{runtimeImport?.observations.length ?? 0} calls</span><span>{runtimeImport?.observations.filter((item) => item.controlEvaluated).length ?? 0} controlled</span></> : runtimeImport ? <><span>{runtimeDiff.undeclared.length} undeclared</span><span>{runtimeDiff.unobservedEdgeIds.length} unobserved</span><span>{runtimeDiff.controlBypassInteractionIds.length} bypass</span></> : <><span>— undeclared</span><span>— unobserved</span><span>— bypass</span></>}</div>
-                <div className="view-controls" aria-label="Graph view controls" title="Mouse wheel or Command/Ctrl + wheel zooms · Shift + wheel pans · Keyboard shortcuts work while the graph is focused"><button aria-label="Zoom out" aria-keyshortcuts="Meta+- Control+-" title="Zoom out · Command− on Mac · Ctrl− on Windows" onClick={() => changeZoom(zoom - ZOOM_STEP)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" aria-keyshortcuts="Meta+= Control+=" title="Zoom in · Command+ on Mac · Ctrl+ on Windows" onClick={() => changeZoom(zoom + ZOOM_STEP)}>+</button><button onClick={() => fitGraph()}>Fit</button><button onClick={focusCurrentContext}>Focus</button></div>
+                <div className="canvas-stats">{activeGraph === "design" ? designSurface === "topology" ? <><span>{nodes.length} {t("actors")}</span><span>{edges.length} {t("relationships")}</span><span>{boundaries.length} {t("boundaries")}</span><span>{coverage}{t("% authored assurance")}</span></> : <><span>{orchestration.tasks.length} {t("tasks")}</span><span>{orchestration.tasks.filter((task) => task.transport === "A2A").length} A2A</span><span>{orchestration.maxParallelism} {t("parallel")}</span></> : activeGraph === "runtime" ? <><span>{runtimeNodes.length} {t("runtime actors")}</span><span>{runtimeImport?.observations.length ?? 0} {t("calls")}</span><span>{runtimeImport?.observations.filter((item) => item.controlEvaluated).length ?? 0} {t("controlled")}</span></> : runtimeImport ? <><span>{runtimeDiff.undeclared.length} {t("undeclared")}</span><span>{runtimeDiff.unobservedEdgeIds.length} {t("unobserved")}</span><span>{runtimeDiff.controlBypassInteractionIds.length} {t("bypass")}</span></> : <><span>{t("— undeclared")}</span><span>{t("— unobserved")}</span><span>{t("— bypass")}</span></>}</div>
+                <div className="view-controls" aria-label={t("Graph view controls")} title={t("Mouse wheel or Command/Ctrl + wheel zooms · Shift + wheel pans · Keyboard shortcuts work while the graph is focused")}><button aria-label={t("Zoom out")} aria-keyshortcuts="Meta+- Control+-" title={t("Zoom out · Command− on Mac · Ctrl− on Windows")} onClick={() => changeZoom(zoom - ZOOM_STEP)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label={t("Zoom in")} aria-keyshortcuts="Meta+= Control+=" title={t("Zoom in · Command+ on Mac · Ctrl+ on Windows")} onClick={() => changeZoom(zoom + ZOOM_STEP)}>+</button><button onClick={() => fitGraph()}>{t("Fit")}</button><button onClick={focusCurrentContext}>{t("Focus")}</button></div>
               </div>}
             </div>
           </div>
-          {activeGraph === "stats" ? <StatsPanel rawLedgerEvents={rawLedgerEvents} importedFormat={runtimeImport?.format ?? null} notify={setNotice} onImportTelemetry={() => telemetryInput.current?.click()} />
-          : activeGraph === "deploy" ? <DeployPanel notify={setNotice} onBackToDesign={() => selectGraph("design")} apiUrl={controlPlaneUrl} token={controlPlaneToken} onApiUrlChange={setControlPlaneUrl} onTokenChange={setControlPlaneToken} />
-          : activeGraph === "runs" ? <RunsPanel notify={setNotice} apiUrl={controlPlaneUrl} token={controlPlaneToken} onApiUrlChange={setControlPlaneUrl} onTokenChange={setControlPlaneToken} onOpenRuntimeTelemetry={(events, source) => applyTelemetry(events, source, "runtime")} />
-          : <div ref={canvasScroll} tabIndex={0} aria-label={`${activeView.label} canvas`} className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerEnter={() => { pointerOverGraph.current = true; }} onPointerLeave={() => { pointerOverGraph.current = false; }} onPointerMove={onCanvasMove} onPointerUp={finishPointerInteraction} onPointerCancel={finishPointerInteraction}>
+          {activeGraph === "stats" ? <StatsPanel ledgerConnection={ledgerConnection} onLedgerConnection={updateLedgerConnection} initialTraceId={investigationTrace} onContext={updateLifecycleContext} rawLedgerEvents={rawLedgerEvents} importedFormat={runtimeImport?.format ?? null} notify={setNotice} onImportTelemetry={() => telemetryInput.current?.click()} />
+          : activeGraph === "deploy" ? <DeployPanel key={JSON.stringify(buildManifestPayload({nodes,edges,zones,boundaries,orchestration}, currentProject()))} onContext={updateLifecycleContext} rawArchitecture={JSON.stringify(buildManifestPayload({nodes,edges,zones,boundaries,orchestration}, currentProject()))} draftProject={{ id: projectId, version: projectVersion }} notify={setNotice} onBackToDesign={() => selectGraph("design")} apiUrl={controlPlaneUrl} token={controlPlaneToken} onApiUrlChange={setControlPlaneUrl} onTokenChange={setControlPlaneToken} />
+          : activeGraph === "runs" ? <RunsPanel onContext={updateLifecycleContext} onOpenStatisticsTrace={(traceId, createdAt) => { setInvestigationTrace(traceId); updateLedgerConnection({ rangeFrom: createdAt, rangeTo: new Date().toISOString() }); updateLifecycleContext({ trace: traceId }); selectGraph("stats"); }} notify={setNotice} apiUrl={controlPlaneUrl} token={controlPlaneToken} onApiUrlChange={setControlPlaneUrl} onTokenChange={setControlPlaneToken} onOpenRuntimeTelemetry={(events, source) => applyTelemetry(events, source, "runtime")} />
+          : <div ref={canvasScroll} tabIndex={0} aria-label={t(message("{0} canvas", t(activeView.label)))} className={`canvas-scroll ${connectFrom ? "connecting" : ""}`} onPointerEnter={() => { pointerOverGraph.current = true; }} onPointerLeave={() => { pointerOverGraph.current = false; }} onPointerMove={onCanvasMove} onPointerUp={finishPointerInteraction} onPointerCancel={finishPointerInteraction}>
+            {activeGraph === "design" && designSurface === "topology" && nodes.length === 0 && <div className="canvas-empty"><strong>{t("Start your architecture")}</strong><p>{t("1. Add an Agent and a Tool.")}<br />{t("2. Select the Agent, choose Connect, then select the Tool.")}<br />{t("3. Review the relationship policy and add a workflow task.")}</p><button onClick={() => addNode("AGENT")}>{t("Add first Agent")}</button></div>}
             <div className="graph-surface" style={{ width: boardSize.width * zoom, height: boardSize.height * zoom }}>
             <div className={`graph-board ${dragging ? `drag-zone-${nodeMap[dragging.id]?.trustZone.toLowerCase()}` : ""} ${zoneGesture ? "editing-zone" : ""}`} style={{ width: boardSize.width, height: boardSize.height, transform: `scale(${zoom})` }}>
               {activeGraph === "design" && designSurface === "workflow" ? <>
-              <div className="workflow-board-header"><div><span>ORCHESTRATION</span><strong>{orchestration.pattern.replaceAll("_", " ")}</strong><small>Coordinator · {nodeMap[orchestration.coordinatorActorId]?.label ?? "Not assigned"}</small></div><div className="workflow-budget"><span><b>{orchestration.maxParallelism}</b> parallel</span><span><b>{orchestration.maxMessages}</b> messages</span><span><b>{Math.round(orchestration.maxDurationSeconds / 60)}</b> min</span></div></div>
-              <svg className="workflow-edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label="Workflow task dependencies">
+              <div className="workflow-board-header"><div><span>{t("ORCHESTRATION")}</span><strong>{t(orchestration.pattern).replaceAll("_", " ")}</strong><small>{t("Coordinator ·")} {nodeMap[orchestration.coordinatorActorId]?.label ?? t("Not assigned")}</small></div><div className="workflow-budget"><span><b>{orchestration.maxParallelism}</b> {t("parallel")}</span><span><b>{orchestration.maxMessages}</b> {t("messages")}</span><span><b>{Math.round(orchestration.maxDurationSeconds / 60)}</b> {t("min")}</span></div></div>
+              <svg className="workflow-edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label={t("Workflow task dependencies")}>
                 <defs><marker id="workflow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" /></marker></defs>
                 {orchestration.tasks.flatMap((task) => task.dependsOn.map((dependencyId) => { const dependency = orchestration.tasks.find((item) => item.id === dependencyId); if (!dependency) return null; const x1 = dependency.x + TASK_NODE_WIDTH, y1 = dependency.y + TASK_NODE_HEIGHT / 2, x2 = task.x, y2 = task.y + TASK_NODE_HEIGHT / 2, bend = Math.max(55, Math.abs(x2 - x1) * .45); return <path key={`${dependencyId}-${task.id}`} d={`M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`} markerEnd="url(#workflow-arrow)" />; }))}
               </svg>
-              {orchestration.tasks.map((task) => <button key={task.id} className={`workflow-task transport-${task.transport.toLowerCase()} ${selected.kind === "task" && selected.id === task.id ? "selected" : ""} ${taskDragging?.id === task.id ? "dragging" : ""}`} style={{ left: task.x, top: task.y }} onPointerDown={(event) => onTaskPointerDown(event, task)} onLostPointerCapture={() => { setTaskDragging(null); dragCheckpointed.current = false; }} onClick={() => { setSelected({ kind: "task", id: task.id }); setMobilePanel("inspector"); }} aria-label={`${task.label}, ${task.transport} task`}><span className="task-transport">{task.transport}</span><span className="task-copy"><strong>{task.label}</strong><small>{nodeMap[task.sourceActorId]?.label ?? task.sourceActorId} → {nodeMap[task.targetActorId]?.label ?? task.targetActorId}</small><em>{task.purpose}</em></span><i className={task.approvalRequired ? "approval" : ""}>{task.approvalRequired ? "H" : task.maxAttempts}</i></button>)}
-              {orchestration.tasks.length === 0 && <div className="canvas-empty workflow-empty"><span>WF</span><strong>No workflow tasks</strong><p>Add A2A, MCP, Local, or Human tasks from the palette.</p></div>}
+              {orchestration.tasks.map((task) => <button key={task.id} className={`workflow-task transport-${task.transport.toLowerCase()} ${selected.kind === "task" && selected.id === task.id ? "selected" : ""} ${taskDragging?.id === task.id ? "dragging" : ""}`} style={{ left: task.x, top: task.y }} onPointerDown={(event) => onTaskPointerDown(event, task)} onLostPointerCapture={() => { setTaskDragging(null); dragCheckpointed.current = false; }} onClick={() => { setSelected({ kind: "task", id: task.id }); setMobilePanel("inspector"); }} aria-label={t(message("{0}, {1} task", String(task.label), task.transport))}><span className="task-transport">{t(task.transport)}</span><span className="task-copy"><strong>{task.label}</strong><small>{nodeMap[task.sourceActorId]?.label ?? task.sourceActorId} → {nodeMap[task.targetActorId]?.label ?? task.targetActorId}</small><em>{task.purpose}</em></span><i className={task.approvalRequired ? "approval" : ""}>{task.approvalRequired ? "H" : task.maxAttempts}</i></button>)}
+              {orchestration.tasks.length === 0 && <div className="canvas-empty workflow-empty"><span>WF</span><strong>{t("No workflow tasks")}</strong><p>{t("Add A2A, MCP, Local, or Human tasks from the palette.")}</p></div>}
               </> : <>
-              {zones.map((zone) => <div key={zone.id} className={`trust-zone zone-${zone.kind.toLowerCase()} ${activeGraph === "design" && selected.kind === "zone" && selected.id === zone.id ? "selected" : ""}`} role="group" aria-label={`${zone.label}, ${zone.kind} trust zone`} style={{ left: zone.x, top: zone.y, width: zone.width, height: zone.height }}>
+              {zones.map((zone) => <div key={zone.id} className={`trust-zone zone-${zone.kind.toLowerCase()} ${activeGraph === "design" && selected.kind === "zone" && selected.id === zone.id ? "selected" : ""}`} role="group" aria-label={t(message("{0}, {1} trust zone", String(zone.label), t(zone.kind)))} style={{ left: zone.x, top: zone.y, width: zone.width, height: zone.height }}>
                 {activeGraph === "design"
-                  ? <button className="zone-label" title={`${zone.description} · drag to move the zone and its actors`} aria-label={`Move zone: ${zone.label}`} onPointerDown={(event) => onZonePointerDown(event, zone, "move")} onClick={() => { setSelected({ kind: "zone", id: zone.id }); setMobilePanel("inspector"); }}><b>{zone.kind}</b><small>{zone.label}</small><i>{nodes.filter((node) => node.trustZoneId === zone.id).length}</i></button>
-                  : <span className="zone-label static"><b>{zone.kind}</b><small>{zone.label}</small></span>}
-                {activeGraph === "design" && <button className="zone-resize-handle" aria-label={`Resize zone: ${zone.label}`} title="Drag to resize" onPointerDown={(event) => onZonePointerDown(event, zone, "resize")}>↘</button>}
+                  ? <button className="zone-label" title={t(message("{0} · drag to move the zone and its actors", String(zone.description)))} aria-label={t(message("Move zone: {0}", String(zone.label)))} onPointerDown={(event) => onZonePointerDown(event, zone, "move")} onClick={() => { setSelected({ kind: "zone", id: zone.id }); setMobilePanel("inspector"); }}><b>{t(zone.kind)}</b><small>{zone.label}</small><i>{nodes.filter((node) => node.trustZoneId === zone.id).length}</i></button>
+                  : <span className="zone-label static"><b>{t(zone.kind)}</b><small>{zone.label}</small></span>}
+                {activeGraph === "design" && <button className="zone-resize-handle" aria-label={t(message("Resize zone: {0}", String(zone.label)))} title={t("Drag to resize")} onPointerDown={(event) => onZonePointerDown(event, zone, "resize")}>↘</button>}
               </div>)}
-              {(activeGraph === "runtime" || activeGraph === "drift") && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>No runtime telemetry</strong><p>Import Ledger events or OTLP JSON emitted by a real run to reconcile actual calls with this architecture.</p><button onClick={() => telemetryInput.current?.click()}>Import telemetry</button></div>}
-              <svg className="edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label="Architecture relationships">
+
+              {(activeGraph === "runtime" || activeGraph === "drift") && !runtimeImport && <div className="canvas-empty"><span>RT</span><strong>{t("No runtime telemetry")}</strong><p>{t("Import Ledger events or OTLP JSON emitted by a real run to reconcile actual calls with this architecture.")}</p><button onClick={() => telemetryInput.current?.click()}>{t("Import telemetry")}</button></div>}
+              <svg className="edge-layer" viewBox={`0 0 ${boardSize.width} ${boardSize.height}`} aria-label={t("Architecture relationships")}>
                 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" /></marker></defs>
                 {visualEdges.map((edge) => {
                   const source = visualNodeMap[edge.source]; const target = visualNodeMap[edge.target]; if (!source || !target) return null;
                   const x1 = source.x + ACTOR_NODE_WIDTH, y1 = source.y + ACTOR_NODE_HEIGHT / 2, x2 = target.x, y2 = target.y + ACTOR_NODE_HEIGHT / 2, bend = Math.max(45, Math.abs(x2 - x1) * .46);
                   const selectedLine = activeGraph === "design" && selected.kind === "edge" && selected.id === edge.id;
-                  return <path key={edge.id} className={`edge-path ${selectedLine ? "selected" : ""} mode-${edge.mode.toLowerCase()} visual-${edge.visualState}`} d={`M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`} markerEnd="url(#arrow)" />;
+                  return <path key={edge.id} className={`edge-path ${selectedLine ? "selected" : ""} mode-${edge.mode.toLowerCase()} visual-${edge.visualState}`} d={Math.abs(source.x - target.x) < ACTOR_NODE_WIDTH ? `M ${x1} ${y1} C ${x1 + 70} ${y1}, ${target.x + ACTOR_NODE_WIDTH + 70} ${y2}, ${target.x + ACTOR_NODE_WIDTH} ${y2}` : `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`} markerEnd="url(#arrow)" />;
                 })}
               </svg>
               {visualEdges.map((edge) => {
                 const source = visualNodeMap[edge.source]; const target = visualNodeMap[edge.target]; if (!source || !target) return null;
-                const left = (source.x + ACTOR_NODE_WIDTH + target.x) / 2 - 48; const top = (source.y + target.y) / 2 + 19;
+                const left = Math.abs(source.x - target.x) < ACTOR_NODE_WIDTH ? Math.max(source.x, target.x) + ACTOR_NODE_WIDTH + 14 : (source.x + ACTOR_NODE_WIDTH + target.x) / 2 - 48; const top = (source.y + target.y) / 2 + 19;
                 const designedEdge = edges.find((item) => item.id === edge.id);
-                return <button key={edge.id} title={`${edge.source} → ${edge.target}${designedEdge?.boundaryId ? ` · ${designedEdge.boundaryId}` : ""}`} style={{ left, top }} className={`edge-label visual-${edge.visualState} ${designedEdge?.boundaryId ? "boundary-crossing" : ""} ${activeGraph === "design" && selected.kind === "edge" && selected.id === edge.id ? "selected" : ""}`} onClick={() => { if (activeGraph === "design") { setSelected({ kind: "edge", id: edge.id }); setMobilePanel("inspector"); } else { focusNode(edge.target); setNotice(`${edge.relationshipId} ${edge.source} → ${edge.target} · ${edge.visualState}`); } }}><span>{edge.relationship}</span><small>{edge.relationshipId}{edge.visualState === "bypass" || edge.visualState === "undeclared" ? " !" : ""}</small>{designedEdge?.boundaryId && <i title="Compiled trust boundary">B</i>}</button>;
+                return <button key={edge.id} title={`${edge.source} → ${edge.target}${designedEdge?.boundaryId ? ` · ${designedEdge.boundaryId}` : ""}`} style={{ left, top }} className={`edge-label visual-${edge.visualState} ${designedEdge?.boundaryId ? "boundary-crossing" : ""} ${activeGraph === "design" && selected.kind === "edge" && selected.id === edge.id ? "selected" : ""}`} onClick={() => { if (activeGraph === "design") { setSelected({ kind: "edge", id: edge.id }); setMobilePanel("inspector"); } else { focusNode(edge.target); setNotice(`${edge.relationshipId} ${edge.source} → ${edge.target} · ${edge.visualState}`); } }}><span>{t(edge.relationship)}</span><small>{edge.relationshipId}{edge.visualState === "bypass" || edge.visualState === "undeclared" ? " !" : ""}</small>{designedEdge?.boundaryId && <i title={t("Compiled trust boundary")}>B</i>}</button>;
               })}
-              {visualNodes.map((node) => { const runtimeOnly = !nodeMap[node.id]; const zone = zoneMap[node.trustZoneId]; return <button key={node.id} data-trust-zone={node.trustZone} data-trust-zone-id={node.trustZoneId} title={`${node.label} · ${runtimeOnly ? node.id : `${node.type} · ${node.owner} · ${zone?.label ?? node.trustZone}`}`} style={{ left: node.x, top: node.y }} className={`actor-node tone-${nodeTone[node.type]} trust-${node.trustZone.toLowerCase()} ${activeGraph === "design" && selected.kind === "node" && selected.id === node.id ? "selected" : ""} ${focusedNodeId === node.id ? "focused" : ""} ${dragging?.id === node.id ? "dragging" : ""} ${connectFrom === node.id ? "connect-source" : ""} ${runtimeOnly ? "runtime-only" : ""}`} onPointerDown={(event) => onNodePointerDown(event, node)} onLostPointerCapture={() => { setDragging(null); dragCheckpointed.current = false; }} onClick={() => activeGraph === "design" ? selectNode(node) : focusNode(node.id)} aria-label={`${node.label}, ${node.type}, ${zone?.label ?? node.trustZone} trust zone`}><span className="node-icon">{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span className="node-copy"><strong>{node.label}</strong><small>{runtimeOnly ? node.id : `${node.type} · ${zone?.label ?? node.trustZone}`}</small></span><i className={`node-status ${runtimeOnly ? "warning" : ""}`} /></button>; })}
+              {visualNodes.map((node) => { const runtimeOnly = !nodeMap[node.id]; const zone = zoneMap[node.trustZoneId]; return <button key={node.id} data-trust-zone={node.trustZone} data-trust-zone-id={node.trustZoneId} title={`${node.label} · ${runtimeOnly ? node.id : `${t(node.type)} · ${node.owner} · ${zone?.label ?? node.trustZone}`}`} style={{ left: node.x, top: node.y }} className={`actor-node tone-${nodeTone[node.type]} trust-${node.trustZone.toLowerCase()} ${activeGraph === "design" && selected.kind === "node" && selected.id === node.id ? "selected" : ""} ${activeGraph === "design" && selectedEdge && [selectedEdge.source, selectedEdge.target].includes(node.id) ? "edge-endpoint" : ""} ${focusedNodeId === node.id ? "focused" : ""} ${dragging?.id === node.id ? "dragging" : ""} ${connectFrom === node.id ? "connect-source" : ""} ${runtimeOnly ? "runtime-only" : ""}`} onPointerDown={(event) => onNodePointerDown(event, node)} onLostPointerCapture={() => { setDragging(null); dragCheckpointed.current = false; }} onClick={() => activeGraph === "design" ? selectNode(node) : focusNode(node.id)} aria-label={t(message("{0}, {1}, {2} trust zone", String(node.label), t(node.type), String(zone?.label ?? node.trustZone)))}><span className="node-icon">{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span className="node-copy"><strong>{node.label}</strong><small>{runtimeOnly ? node.id : `${t(node.type)} · ${zone?.label ?? node.trustZone}`}</small></span><i className={`node-status ${runtimeOnly ? "warning" : ""}`} /></button>; })}
               </>}
             </div>
             </div>
           </div>}
-          <div className="notice-bar"><div className="notice-copy" role="status" aria-live="polite"><span>●</span>{notice}</div>{activeGraph === "design" && <div className="draft-actions"><button disabled={!past.length} onClick={undo}>Undo</button><button disabled={!future.length} onClick={redo}>Redo</button><button onClick={resetDraft}>Reset draft</button></div>}</div>
+          <div className="notice-bar"><div className="notice-copy" role="status" aria-live="polite"><span>●</span>{t(notice)}</div>{activeGraph === "design" && <div className="draft-actions"><button disabled={!past.length} onClick={undo}>{t("Undo")}</button><button disabled={!future.length} onClick={redo}>{t("Redo")}</button><button onClick={resetDraft}>{t("Reset draft")}</button></div>}</div>
         </section>
 
-        <aside className={`inspector ${mobilePanel === "inspector" ? "mobile-open" : ""}`} aria-label="Architecture inspector">
-          <button className="panel-close" aria-label="Close inspector" onClick={() => setMobilePanel(null)}>×</button>
-          <div className="panel-heading"><span>INSPECT</span><strong>{activeGraph === "design" ? selectedTask ? "Workflow task" : selectedEdge ? "Relationship security" : selectedZone ? "Trust zone" : "Actor contract" : "Runtime reconciliation"}</strong></div>
+        <aside className={`inspector ${mobilePanel === "inspector" ? "mobile-open" : ""}`} aria-label={t("Architecture inspector")}>
+          <button className="panel-close" aria-label={t("Close inspector")} onClick={() => setMobilePanel(null)}>×</button>
+          <div className="panel-heading"><span>{t("INSPECT")}</span><strong>{activeGraph === "design" ? selectedTask ? t("Workflow task") : selectedEdge ? t("Relationship security") : selectedZone ? t("Trust zone") : t("Actor contract") : t("Runtime reconciliation")}</strong></div>
           {activeGraph !== "design" ? <>
             <div className="inspector-body runtime-inspector">
-              <div className="runtime-health"><span className={!runtimeImport ? "pending" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "unsafe" : "safe"}>{!runtimeImport ? "·" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "!" : "✓"}</span><div><strong>{runtimeImport ? runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "Runtime drift detected" : "Runtime conforms" : "Awaiting telemetry"}</strong><small>{runtimeImport?.format ?? "Ledger or OTLP JSON"}</small></div></div>
-              <div className="runtime-metrics"><div><span>{runtimeImport ? runtimeImport.observations.length : "—"}</span><small>Observed</small></div><div><span>{runtimeImport ? runtimeDiff.undeclared.length : "—"}</span><small>Undeclared</small></div><div><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : "—"}</span><small>Bypass</small></div></div>
-              <div className="control-heading"><span>Reconciliation results</span><small>{runtimeResultCount}</small></div>
-              {!runtimeImport && <div className="runtime-empty-note">Import runtime telemetry to see actual relationship evidence.</div>}
-              {runtimeImport && runtimeDiff.undeclared.map((item) => <button className="drift-card critical" key={`undeclared-${item.interactionId}`} onClick={() => { focusNode(item.target); setMobilePanel(null); }}><i>!</i><span><strong>Undeclared relationship</strong><small>{item.source} → {item.target}</small><code>{item.relationshipId} · {item.interactionId}</code></span></button>)}
-              {runtimeImport && runtimeDiff.controlBypassInteractionIds.map((id) => { const observation = runtimeImport.observations.find((item) => item.interactionId === id); return <button className="drift-card critical" key={`bypass-${id}`} onClick={() => { if (observation) focusNode(observation.target); setMobilePanel(null); }}><i>!</i><span><strong>Control evaluation missing</strong><small>Interaction reached runtime without control evidence</small><code>{id}</code></span></button>; })}
-              {runtimeImport && runtimeDiff.unobservedEdgeIds.slice(0, 4).map((id) => { const edge = edges.find((item) => item.id === id); return <button className="drift-card warning" key={`unobserved-${id}`} onClick={() => { if (edge) focusNode(edge.target); setMobilePanel(null); }}><i>–</i><span><strong>Design edge not observed</strong><small>No matching call in this telemetry set</small><code>{id}</code></span></button>; })}
-              {(runtimeImport?.issues ?? []).map((issue, index) => <div className="drift-card warning" key={`${issue.code}-${index}`}><i>?</i><span><strong>{issue.code}</strong><small>{issue.message}</small><code>{issue.spanId ?? "no span id"}</code></span></div>)}
+              <div className="runtime-health"><span className={!runtimeImport ? "pending" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "unsafe" : "safe"}>{!runtimeImport ? "·" : runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? "!" : "✓"}</span><div><strong>{runtimeImport ? runtimeDiff.undeclared.length || runtimeDiff.controlBypassInteractionIds.length ? t("Runtime drift detected") : t("Runtime conforms") : t("Awaiting telemetry")}</strong><small>{runtimeImport?.format ?? t("Ledger or OTLP JSON")}</small></div></div>
+              <div className="runtime-metrics"><div><span>{runtimeImport ? runtimeImport.observations.length : "—"}</span><small>{t("Observed")}</small></div><div><span>{runtimeImport ? runtimeDiff.undeclared.length : "—"}</span><small>{t("Undeclared")}</small></div><div><span>{runtimeImport ? runtimeDiff.controlBypassInteractionIds.length : "—"}</span><small>{t("Bypass")}</small></div></div>
+              <div className="control-heading"><span>{t("Reconciliation results")}</span><small>{runtimeResultCount}</small></div>
+              {!runtimeImport && <div className="runtime-empty-note">{t("Import runtime telemetry to see actual relationship evidence.")}</div>}
+              {runtimeImport && runtimeDiff.undeclared.map((item) => <button className="drift-card critical" key={`undeclared-${item.interactionId}`} onClick={() => { focusNode(item.target); setMobilePanel(null); }}><i>!</i><span><strong>{t("Undeclared relationship")}</strong><small>{item.source} → {item.target}</small><code>{item.relationshipId} · {item.interactionId}</code></span></button>)}
+              {runtimeImport && runtimeDiff.controlBypassInteractionIds.map((id) => { const observation = runtimeImport.observations.find((item) => item.interactionId === id); return <button className="drift-card critical" key={`bypass-${id}`} onClick={() => { if (observation) focusNode(observation.target); setMobilePanel(null); }}><i>!</i><span><strong>{t("Control evaluation missing")}</strong><small>{t("Interaction reached runtime without control evidence")}</small><code>{id}</code></span></button>; })}
+              {runtimeImport && runtimeDiff.unobservedEdgeIds.map((id) => { const edge = edges.find((item) => item.id === id); return <button className="drift-card warning" key={`unobserved-${id}`} onClick={() => { if (edge) focusNode(edge.target); setMobilePanel(null); }}><i>–</i><span><strong>{t("Design edge not observed")}</strong><small>{t("No matching call in this telemetry set")}</small><code>{id}</code></span></button>; })}
+              {(runtimeImport?.issues ?? []).map((issue, index) => <div className="drift-card warning" key={`${issue.code}-${index}`}><i>?</i><span><strong>{issue.code}</strong><small>{issue.message}</small><code>{issue.spanId ?? t("no span id")}</code></span></div>)}
             </div>
-            <div className="runtime-boundary-note"><strong>No inferred security facts</strong><span>Standard GenAI fields classify spans. Exact drift decisions require explicit <code>interlock.*</code> attributes.</span></div>
+            <div className="runtime-boundary-note"><strong>{t("No inferred security facts")}</strong><span>{t("Standard GenAI fields classify spans. Exact drift decisions require explicit")} <code>interlock.*</code> {t("attributes.")}</span></div>
           </> : <>
           {selectedTask ? (
             <div className="inspector-body task-inspector">
-              <div className="selection-summary"><span className={`task-summary transport-${selectedTask.transport.toLowerCase()}`}>{selectedTask.transport === "HUMAN" ? "H" : selectedTask.transport.slice(0, 2)}</span><div><strong>{selectedTask.label}</strong><small>{selectedTask.id}</small></div><em>{selectedTask.transport}</em></div>
-              <label>Task name<input value={selectedTask.label} onChange={(event) => updateSelectedTask({ label: event.target.value })} /></label>
-              <label>Transport<select value={selectedTask.transport} onChange={(event) => updateSelectedTask({ transport: event.target.value as WorkflowTask["transport"] })}><option>A2A</option><option>MCP</option><option>LOCAL</option><option>HUMAN</option></select></label>
-              <label>Source actor<select value={selectedTask.sourceActorId} onChange={(event) => updateSelectedTask({ sourceActorId: event.target.value })}>{nodes.map((node) => <option key={node.id} value={node.id}>{node.label} · {node.type}</option>)}</select></label>
-              <label>Target actor<select value={selectedTask.targetActorId} onChange={(event) => updateSelectedTask({ targetActorId: event.target.value })}>{nodes.map((node) => <option key={node.id} value={node.id}>{node.label} · {node.type}</option>)}</select></label>
-              <label>Purpose<input value={selectedTask.purpose} onChange={(event) => updateSelectedTask({ purpose: event.target.value })} /></label>
-              <div className="field-group"><span>Depends on</span><div className="dependency-list">{orchestration.tasks.filter((task) => task.id !== selectedTask.id).map((task) => { const selected = selectedTask.dependsOn.includes(task.id); const createsCycle = !selected && workflowDependencyCreatesCycle(orchestration.tasks, selectedTask.id, task.id); return <button key={task.id} disabled={createsCycle} title={createsCycle ? "Unavailable because it would create a workflow cycle" : undefined} className={selected ? "chip selected" : "chip"} onClick={() => updateSelectedTask({ dependsOn: selected ? selectedTask.dependsOn.filter((id) => id !== task.id) : [...selectedTask.dependsOn, task.id] })}>{task.label}{createsCycle ? " · cycle" : ""}</button>; })}</div></div>
-              <div className="field-group"><span>Data classes</span><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} className={selectedTask.dataClasses.includes(item) ? "chip selected" : "chip"} onClick={() => updateSelectedTask({ dataClasses: selectedTask.dataClasses.includes(item) ? selectedTask.dataClasses.filter((value) => value !== item) : [...selectedTask.dataClasses, item] })}>{item}</button>)}</div></div>
-              <label>Acceptance criteria<input placeholder="Grounded evidence, schema valid" value={selectedTask.acceptanceCriteria.join(", ")} onChange={(event) => updateSelectedTask({ acceptanceCriteria: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
-              <div className="geometry-grid task-limits"><label>Attempts<input type="number" min="1" max="10" value={selectedTask.maxAttempts} onChange={(event) => updateSelectedTask({ maxAttempts: Math.max(1, Number(event.target.value)) })} /></label><label>Timeout sec<input type="number" min="1" value={selectedTask.timeoutSeconds} onChange={(event) => updateSelectedTask({ timeoutSeconds: Math.max(1, Number(event.target.value)) })} /></label></div>
-              <label>On failure<select value={selectedTask.onFailure} onChange={(event) => updateSelectedTask({ onFailure: event.target.value as WorkflowTask["onFailure"] })}><option>FAIL_WORKFLOW</option><option>SKIP</option><option>CONTINUE</option></select></label>
-              <div className="toggle-row"><div><strong>Human approval gate</strong><small>Pause the run before dispatch</small></div><button aria-label="Require approval for workflow task" aria-pressed={selectedTask.approvalRequired} className={`toggle ${selectedTask.approvalRequired ? "on" : ""}`} onClick={() => updateSelectedTask({ approvalRequired: !selectedTask.approvalRequired })}><i /></button></div>
-              <div className="control-heading"><span>Run policy</span><small>{orchestration.pattern}</small></div>
-              <div className="geometry-grid task-limits"><label>Parallel<input type="number" min="1" value={orchestration.maxParallelism} onChange={(event) => updateOrchestration({ maxParallelism: Math.max(1, Number(event.target.value)) })} /></label><label>Messages<input type="number" min="1" value={orchestration.maxMessages} onChange={(event) => updateOrchestration({ maxMessages: Math.max(1, Number(event.target.value)) })} /></label><label>Max tasks<input type="number" min="1" value={orchestration.maxTasks} onChange={(event) => updateOrchestration({ maxTasks: Math.max(1, Number(event.target.value)) })} /></label><label>Duration sec<input type="number" min="1" value={orchestration.maxDurationSeconds} onChange={(event) => updateOrchestration({ maxDurationSeconds: Math.max(1, Number(event.target.value)) })} /></label></div>
-              <button className="danger-button" onClick={removeSelectedTask}><span>Remove workflow task</span><small>Dependent tasks will be unlinked</small></button>
+              <div className="selection-summary"><span className={`task-summary transport-${selectedTask.transport.toLowerCase()}`}>{selectedTask.transport === "HUMAN" ? "H" : selectedTask.transport.slice(0, 2)}</span><div><strong>{selectedTask.label}</strong><small>{selectedTask.id}</small></div><em>{t(selectedTask.transport)}</em></div>
+              <label>{t("Task name")}<input value={selectedTask.label} onChange={(event) => updateSelectedTask({ label: event.target.value })} /></label>
+              <label>{t("Transport")}<select value={selectedTask.transport} onChange={(event) => updateSelectedTask({ transport: event.target.value as WorkflowTask["transport"] })}><option>A2A</option><option>MCP</option><option value="LOCAL">{t("LOCAL")}</option><option value="HUMAN">{t("HUMAN")}</option></select></label>
+              <label>{t("Source actor")}<select value={selectedTask.sourceActorId} onChange={(event) => updateSelectedTask({ sourceActorId: event.target.value })}>{nodes.map((node) => <option key={node.id} value={node.id}>{node.label} · {t(node.type)}</option>)}</select></label>
+              <label>{t("Target actor")}<select value={selectedTask.targetActorId} onChange={(event) => updateSelectedTask({ targetActorId: event.target.value })}>{nodes.map((node) => <option key={node.id} value={node.id}>{node.label} · {t(node.type)}</option>)}</select></label>
+              <label>{t("Purpose")}<input value={selectedTask.purpose} onChange={(event) => updateSelectedTask({ purpose: event.target.value })} /></label>
+              <div className="field-group"><span>{t("Depends on")}</span><div className="dependency-list">{orchestration.tasks.filter((task) => task.id !== selectedTask.id).map((task) => { const selected = selectedTask.dependsOn.includes(task.id); const createsCycle = !selected && workflowDependencyCreatesCycle(orchestration.tasks, selectedTask.id, task.id); return <button key={task.id} disabled={createsCycle} title={createsCycle ? t("Unavailable because it would create a workflow cycle") : undefined} className={selected ? "chip selected" : "chip"} onClick={() => updateSelectedTask({ dependsOn: selected ? selectedTask.dependsOn.filter((id) => id !== task.id) : [...selectedTask.dependsOn, task.id] })}>{task.label}{createsCycle ? t(" · cycle") : ""}</button>; })}</div></div>
+              <div className="field-group"><span>{t("Data classes")}</span><small className="field-help">{t("D2 request · D3 arguments · D5 credentials · D7 sensitive data · D8 host data")}</small><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} aria-pressed={selectedTask.dataClasses.includes(item)} title={t(DATA_CLASS_HELP[item])} aria-label={`${item} · ${t(DATA_CLASS_HELP[item])}`} className={selectedTask.dataClasses.includes(item) ? "chip selected" : "chip"} onClick={() => updateSelectedTask({ dataClasses: selectedTask.dataClasses.includes(item) ? selectedTask.dataClasses.filter((value) => value !== item) : [...selectedTask.dataClasses, item] })}>{item}</button>)}</div></div>
+              <label>{t("Acceptance criteria")}<input placeholder="required:message, nonempty:message" value={selectedTask.acceptanceCriteria.join(", ")} onChange={(event) => updateSelectedTask({ acceptanceCriteria: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
+              <div className="geometry-grid task-limits"><label>{t("Attempts")}<input type="number" min="1" max="10" value={selectedTask.maxAttempts} onChange={(event) => updateSelectedTask({ maxAttempts: Math.max(1, Number(event.target.value)) })} /></label><label>{t("Timeout sec")}<input type="number" min="1" value={selectedTask.timeoutSeconds} onChange={(event) => updateSelectedTask({ timeoutSeconds: Math.max(1, Number(event.target.value)) })} /></label></div>
+              <label>{t("On failure")}<select value={selectedTask.onFailure} onChange={(event) => updateSelectedTask({ onFailure: event.target.value as WorkflowTask["onFailure"] })}><option value="FAIL_WORKFLOW">{t("FAIL_WORKFLOW")}</option><option value="SKIP">{t("SKIP")}</option><option value="CONTINUE">{t("CONTINUE")}</option></select></label>
+              <div className="toggle-row"><div><strong>{t("Human approval gate")}</strong><small>{t("Pause the run before dispatch")}</small></div><button aria-label={t("Require approval for workflow task")} aria-pressed={selectedTask.approvalRequired} className={`toggle ${selectedTask.approvalRequired ? "on" : ""}`} onClick={() => updateSelectedTask({ approvalRequired: !selectedTask.approvalRequired })}><i /></button></div>
+              <div className="control-heading"><span>{t("Run policy")}</span><small>{t(orchestration.pattern).replaceAll("_", " ")}</small></div>
+              <div className="geometry-grid task-limits"><label>{t("Parallel")}<input type="number" min="1" value={orchestration.maxParallelism} onChange={(event) => updateOrchestration({ maxParallelism: Math.max(1, Number(event.target.value)) })} /></label><label>{t("Messages")}<input type="number" min="1" value={orchestration.maxMessages} onChange={(event) => updateOrchestration({ maxMessages: Math.max(1, Number(event.target.value)) })} /></label><label>{t("Max tasks")}<input type="number" min="1" value={orchestration.maxTasks} onChange={(event) => updateOrchestration({ maxTasks: Math.max(1, Number(event.target.value)) })} /></label><label>{t("Duration sec")}<input type="number" min="1" value={orchestration.maxDurationSeconds} onChange={(event) => updateOrchestration({ maxDurationSeconds: Math.max(1, Number(event.target.value)) })} /></label></div>
+              <button className="danger-button" onClick={removeSelectedTask}><span>{t("Remove workflow task")}</span><small>{t("Dependent tasks will be unlinked")}</small></button>
             </div>
           ) : selectedEdge ? (
             <div className="inspector-body">
-              <div className="selection-summary"><span className="relation-mark">→</span><div><strong>{selectedEdge.relationship}</strong><small>{selectedEdge.source} → {selectedEdge.target}</small></div><em>{selectedEdge.relationshipId}</em></div>
-              <label>Enforcement mode<select value={selectedEdge.mode} onChange={(e) => updateEdge({ mode: e.target.value as Mode })}><option>OBSERVE</option><option>SHADOW</option><option>ENFORCE</option></select></label>
-              <label>Failure mode<select value={selectedEdge.failureMode} onChange={(e) => updateEdge({ failureMode: e.target.value as ArchitectureEdge["failureMode"] })}><option>FAIL_CLOSED</option><option>DEGRADE_READ_ONLY</option><option>FAIL_OPEN</option></select></label>
-              <div className="field-group"><span>Allowed data</span><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} className={selectedEdge.allowedData.includes(item) ? "chip selected" : "chip"} onClick={() => updateEdge({ allowedData: selectedEdge.allowedData.includes(item) ? selectedEdge.allowedData.filter((value) => value !== item) : [...selectedEdge.allowedData, item] })}>{item}</button>)}</div></div>
-              <div className="field-group"><span>Allowed purposes</span><div className="chip-row">{selectedEdge.allowedPurposes.map((item) => <button key={item} className="chip selected" onClick={() => updateEdge({ allowedPurposes: selectedEdge.allowedPurposes.filter((value) => value !== item) })}>{item} ×</button>)}</div><input placeholder="Add purpose, press Enter" onKeyDown={(event) => { if (event.key !== "Enter") return; const value = event.currentTarget.value.trim(); if (value && !selectedEdge.allowedPurposes.includes(value)) updateEdge({ allowedPurposes: [...selectedEdge.allowedPurposes, value] }); event.currentTarget.value = ""; }} /></div>
-              <div className="control-heading"><span>Trust boundary</span><small>{selectedEdgeCrossesZone ? "Required" : "Same zone"}</small></div>
+              <div className="selection-summary"><span className="relation-mark">→</span><div><strong>{t(selectedEdge.relationship)}</strong><small>{selectedEdge.source} → {selectedEdge.target}</small></div><em>{selectedEdge.relationshipId}</em></div>
+              <div className="policy-summary"><strong>{t("Draft policy")}</strong><span>{selectedEdgeSource?.label} → {selectedEdgeTarget?.label}</span><span>{t(selectedEdge.mode)} · {t(selectedEdge.failureMode)}</span><span>{t("Boundary:")} {selectedBoundary?.label ?? (selectedEdgeCrossesZone ? t("Missing") : t("Same zone"))}</span><span>{t("Approval:")} {selectedEdge.approvalRequired ? t("Required") : t("Not required")}</span></div>
+              <label>{t("Enforcement mode")}<select value={selectedEdge.mode} onChange={(e) => updateEdge({ mode: e.target.value as Mode })}><option value="OBSERVE">{t("OBSERVE")}</option><option value="SHADOW">{t("SHADOW")}</option><option value="ENFORCE">{t("ENFORCE")}</option></select></label>
+              <label>{t("Failure mode")}<select value={selectedEdge.failureMode} onChange={(e) => updateEdge({ failureMode: e.target.value as ArchitectureEdge["failureMode"] })}><option value="FAIL_CLOSED">{t("FAIL_CLOSED")}</option><option value="DEGRADE_READ_ONLY">{t("DEGRADE_READ_ONLY")}</option><option value="FAIL_OPEN">{t("FAIL_OPEN")}</option></select></label>
+              <div className="field-group"><span>{t("Allowed data")}</span><small className="field-help">{t("D2 request · D3 arguments · D5 credentials · D7 sensitive data · D8 host data")}</small><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} aria-pressed={selectedEdge.allowedData.includes(item)} title={t(DATA_CLASS_HELP[item])} aria-label={`${item} · ${t(DATA_CLASS_HELP[item])}`} className={selectedEdge.allowedData.includes(item) ? "chip selected" : "chip"} onClick={() => updateEdge({ allowedData: selectedEdge.allowedData.includes(item) ? selectedEdge.allowedData.filter((value) => value !== item) : [...selectedEdge.allowedData, item] })}>{item}</button>)}</div></div>
+              <div className="field-group"><span>{t("Allowed purposes")}</span><div className="chip-row">{selectedEdge.allowedPurposes.map((item) => <button key={item} className="chip selected" onClick={() => updateEdge({ allowedPurposes: selectedEdge.allowedPurposes.filter((value) => value !== item) })}>{item} ×</button>)}</div><input aria-label={t("Add allowed purpose")} placeholder={t("Add purpose, press Enter")} onKeyDown={(event) => { if (event.key !== "Enter") return; const value = event.currentTarget.value.trim(); if (value && !selectedEdge.allowedPurposes.includes(value)) updateEdge({ allowedPurposes: [...selectedEdge.allowedPurposes, value] }); event.currentTarget.value = ""; }} /></div>
+              <div className="control-heading"><span>{t("Trust boundary")}</span><small>{selectedEdgeCrossesZone ? t("Required") : t("Same zone")}</small></div>
               {selectedEdgeCrossesZone ? <div className="boundary-editor">
-                <label>Directional boundary<select value={selectedEdge.boundaryId ?? ""} onChange={(event) => updateEdge({ boundaryId: event.target.value || undefined })}><option value="">Unbound · deployment blocked</option>{boundaries.filter((boundary) => boundary.sourceZoneId === selectedEdgeSource?.trustZoneId && boundary.targetZoneId === selectedEdgeTarget?.trustZoneId).map((boundary) => <option key={boundary.id} value={boundary.id}>{boundary.label} · {boundary.point}</option>)}</select></label>
-                {!selectedBoundary && <button className="secondary-button" onClick={bindBoundaryToSelectedEdge}>Create matching boundary</button>}
-                {selectedBoundary && <><div className="boundary-route"><span>{zoneMap[selectedBoundary.sourceZoneId]?.label ?? selectedBoundary.sourceZoneId}</span><b>→</b><span>{zoneMap[selectedBoundary.targetZoneId]?.label ?? selectedBoundary.targetZoneId}</span></div><label>Boundary name<input value={selectedBoundary.label} onChange={(event) => updateSelectedBoundary({ label: event.target.value })} /></label><label>Enforcement point<select value={selectedBoundary.point} onChange={(event) => updateSelectedBoundary({ point: event.target.value as EnforcementPoint })}>{["INPUT_GATEWAY", "RAG_GATEWAY", "MCP_GATEWAY", "A2A_BROKER", "EGRESS_GATEWAY", "AUDIT_SINK"].map((point) => <option key={point}>{point}</option>)}</select></label><div className="geometry-grid task-limits"><label>Mode<select value={selectedBoundary.mode} onChange={(event) => updateSelectedBoundary({ mode: event.target.value as Mode })}><option>OBSERVE</option><option>SHADOW</option><option>ENFORCE</option></select></label><label>Failure<select value={selectedBoundary.failureMode} onChange={(event) => updateSelectedBoundary({ failureMode: event.target.value as TrustBoundaryDefinition["failureMode"] })}><option>FAIL_CLOSED</option><option>DEGRADE_READ_ONLY</option><option>FAIL_OPEN</option></select></label></div><div className="field-group"><span>Boundary data</span><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} className={selectedBoundary.allowedData.includes(item) ? "chip selected" : "chip"} onClick={() => updateSelectedBoundary({ allowedData: selectedBoundary.allowedData.includes(item) ? selectedBoundary.allowedData.filter((value) => value !== item) : [...selectedBoundary.allowedData, item], deniedData: selectedBoundary.allowedData.includes(item) ? [...new Set([...selectedBoundary.deniedData, item])] : selectedBoundary.deniedData.filter((value) => value !== item) })}>{item}</button>)}</div></div><label>Maximum payload bytes<input type="number" min="1" value={selectedBoundary.maxPayloadBytes} onChange={(event) => updateSelectedBoundary({ maxPayloadBytes: Math.max(1, Number(event.target.value)) })} /></label><div className="toggle-row"><div><strong>Identity binding</strong><small>Require authenticated source actor</small></div><button aria-label="Require boundary identity binding" aria-pressed={selectedBoundary.requireIdentity} className={`toggle ${selectedBoundary.requireIdentity ? "on" : ""}`} onClick={() => updateSelectedBoundary({ requireIdentity: !selectedBoundary.requireIdentity })}><i /></button></div><div className="toggle-row"><div><strong>Tenant binding</strong><small>Keep A2A and data flows tenant-scoped</small></div><button aria-label="Require boundary tenant binding" aria-pressed={selectedBoundary.requireTenantBinding} className={`toggle ${selectedBoundary.requireTenantBinding ? "on" : ""}`} onClick={() => updateSelectedBoundary({ requireTenantBinding: !selectedBoundary.requireTenantBinding })}><i /></button></div></>}
-              </div> : <div className="same-zone-note">Both actors are in <strong>{zoneMap[selectedEdgeSource?.trustZoneId ?? ""]?.label ?? "the same zone"}</strong>. The relationship policy still applies; no cross-zone boundary is needed.</div>}
-              <div className="toggle-row"><div><strong>Human approval</strong><small>Required before high-impact execution</small></div><button aria-label="Require human approval" aria-pressed={selectedEdge.approvalRequired} className={`toggle ${selectedEdge.approvalRequired ? "on" : ""}`} onClick={() => updateEdge({ approvalRequired: !selectedEdge.approvalRequired })}><i /></button></div>
-              {selectedEdge.relationshipId === "REL-06" && <><div className="toggle-row"><div><strong>Same tenant only</strong><small>Reject cross-tenant delegation</small></div><button aria-label="Restrict delegation to the same tenant" aria-pressed={selectedEdge.sameTenant} className={`toggle ${selectedEdge.sameTenant ? "on" : ""}`} onClick={() => updateEdge({ sameTenant: !selectedEdge.sameTenant })}><i /></button></div><label>Maximum delegation depth<input type="number" min="0" max="8" value={selectedEdge.maxDepth} onChange={(e) => updateEdge({ maxDepth: Number(e.target.value) })} /></label></>}
-              <div className="control-heading"><span>Security controls</span><small>{selectedEdge.controls.length}</small></div>
-              {selectedEdge.controls.map((control) => <div className="control-card" key={control.id}><div><strong>{control.id}</strong><small>{control.objective} · {control.timing}</small></div><div className="control-settings"><select className="point-select" aria-label={`${control.id} enforcement point`} value={control.point} onChange={(e) => updateControl(control.id, { point: e.target.value as EnforcementPoint })}>{["INPUT_GATEWAY", "RAG_GATEWAY", "MCP_GATEWAY", "A2A_BROKER", "EGRESS_GATEWAY", "SANDBOX", "AUDIT_SINK"].map((point) => <option key={point}>{point}</option>)}</select><select className={`assurance-select assurance-${control.assurance.toLowerCase()}`} aria-label={`${control.id} assurance`} value={control.assurance} onChange={(e) => updateControl(control.id, { assurance: e.target.value as Assurance })}><option>DECLARED</option><option>OBSERVED</option><option>ENFORCED</option><option>RECONCILED</option></select></div></div>)}
-              <button className="danger-button" onClick={removeSelectedEdge}><span>Remove relationship</span><small>Only this connection will be removed</small></button>
+                <label>{t("Directional boundary")}<select value={selectedEdge.boundaryId ?? ""} onChange={(event) => updateEdge({ boundaryId: event.target.value || undefined })}><option value="">{t("Unbound · deployment blocked")}</option>{boundaries.filter((boundary) => boundary.sourceZoneId === selectedEdgeSource?.trustZoneId && boundary.targetZoneId === selectedEdgeTarget?.trustZoneId).map((boundary) => <option key={boundary.id} value={boundary.id}>{boundary.label} · {t(boundary.point)}</option>)}</select></label>
+                {!selectedBoundary && <button className="secondary-button" onClick={bindBoundaryToSelectedEdge}>{t("Create matching boundary")}</button>}
+                {selectedBoundary && <><div className="boundary-route"><span>{zoneMap[selectedBoundary.sourceZoneId]?.label ?? selectedBoundary.sourceZoneId}</span><b>→</b><span>{zoneMap[selectedBoundary.targetZoneId]?.label ?? selectedBoundary.targetZoneId}</span></div><label>{t("Boundary name")}<input value={selectedBoundary.label} onChange={(event) => updateSelectedBoundary({ label: event.target.value })} /></label><label>{t("Enforcement point")}<select value={selectedBoundary.point} onChange={(event) => updateSelectedBoundary({ point: event.target.value as EnforcementPoint })}>{["INPUT_GATEWAY", "RAG_GATEWAY", "MCP_GATEWAY", "A2A_BROKER", "EGRESS_GATEWAY", "AUDIT_SINK"].map((point) => <option key={point} value={point}>{t(point)}</option>)}</select></label><div className="geometry-grid task-limits"><label>{t("Mode")}<select value={selectedBoundary.mode} onChange={(event) => updateSelectedBoundary({ mode: event.target.value as Mode })}><option value="OBSERVE">{t("OBSERVE")}</option><option value="SHADOW">{t("SHADOW")}</option><option value="ENFORCE">{t("ENFORCE")}</option></select></label><label>{t("Failure")}<select value={selectedBoundary.failureMode} onChange={(event) => updateSelectedBoundary({ failureMode: event.target.value as TrustBoundaryDefinition["failureMode"] })}><option value="FAIL_CLOSED">{t("FAIL_CLOSED")}</option><option value="DEGRADE_READ_ONLY">{t("DEGRADE_READ_ONLY")}</option><option value="FAIL_OPEN">{t("FAIL_OPEN")}</option></select></label></div><div className="field-group"><span>{t("Boundary data")}</span><div className="chip-row">{["D2", "D3", "D5", "D7", "D8"].map((item) => <button key={item} aria-pressed={selectedBoundary.allowedData.includes(item)} title={t(DATA_CLASS_HELP[item])} aria-label={`${item} · ${t(DATA_CLASS_HELP[item])}`} className={selectedBoundary.allowedData.includes(item) ? "chip selected" : "chip"} onClick={() => updateSelectedBoundary({ allowedData: selectedBoundary.allowedData.includes(item) ? selectedBoundary.allowedData.filter((value) => value !== item) : [...selectedBoundary.allowedData, item], deniedData: selectedBoundary.allowedData.includes(item) ? [...new Set([...selectedBoundary.deniedData, item])] : selectedBoundary.deniedData.filter((value) => value !== item) })}>{item}</button>)}</div></div><label>{t("Maximum payload bytes")}<input type="number" min="1" value={selectedBoundary.maxPayloadBytes} onChange={(event) => updateSelectedBoundary({ maxPayloadBytes: Math.max(1, Number(event.target.value)) })} /></label><div className="toggle-row"><div><strong>{t("Identity binding")}</strong><small>{t("Require authenticated source actor")}</small></div><button aria-label={t("Require boundary identity binding")} aria-pressed={selectedBoundary.requireIdentity} className={`toggle ${selectedBoundary.requireIdentity ? "on" : ""}`} onClick={() => updateSelectedBoundary({ requireIdentity: !selectedBoundary.requireIdentity })}><i /></button></div><div className="toggle-row"><div><strong>{t("Tenant binding")}</strong><small>{t("Keep A2A and data flows tenant-scoped")}</small></div><button aria-label={t("Require boundary tenant binding")} aria-pressed={selectedBoundary.requireTenantBinding} className={`toggle ${selectedBoundary.requireTenantBinding ? "on" : ""}`} onClick={() => updateSelectedBoundary({ requireTenantBinding: !selectedBoundary.requireTenantBinding })}><i /></button></div></>}
+              </div> : <div className="same-zone-note">{t("Both actors are in")} <strong>{zoneMap[selectedEdgeSource?.trustZoneId ?? ""]?.label ?? t("the same zone")}</strong>{t(". The relationship policy still applies; no cross-zone boundary is needed.")}</div>}
+              <div className="toggle-row"><div><strong>{t("Human approval")}</strong><small>{t("Required before high-impact execution")}</small></div><button aria-label={t("Require human approval")} aria-pressed={selectedEdge.approvalRequired} className={`toggle ${selectedEdge.approvalRequired ? "on" : ""}`} onClick={() => updateEdge({ approvalRequired: !selectedEdge.approvalRequired })}><i /></button></div>
+              {selectedEdge.relationshipId === "REL-06" && <><div className="toggle-row"><div><strong>{t("Same tenant only")}</strong><small>{t("Reject cross-tenant delegation")}</small></div><button aria-label={t("Restrict delegation to the same tenant")} aria-pressed={selectedEdge.sameTenant} className={`toggle ${selectedEdge.sameTenant ? "on" : ""}`} onClick={() => updateEdge({ sameTenant: !selectedEdge.sameTenant })}><i /></button></div><label>{t("Maximum delegation depth")}<input type="number" min="0" max="8" value={selectedEdge.maxDepth} onChange={(e) => updateEdge({ maxDepth: Number(e.target.value) })} /></label></>}
+              <div className="control-heading"><span>{t("Authored security controls")}</span><small>{selectedEdge.controls.length}</small></div><p className="field-help">{t("Assurance below is declared in this draft, not proof of runtime enforcement.")}</p>
+              {selectedEdge.controls.map((control) => <div className="control-card" key={control.id}><div><strong>{control.id}</strong><small>{t(control.objective)} · {t(control.timing)}</small></div><div className="control-settings"><select className="point-select" aria-label={t(message("{0} enforcement point", String(control.id)))} value={control.point} onChange={(e) => updateControl(control.id, { point: e.target.value as EnforcementPoint })}>{["INPUT_GATEWAY", "RAG_GATEWAY", "MCP_GATEWAY", "A2A_BROKER", "EGRESS_GATEWAY", "SANDBOX", "AUDIT_SINK"].map((point) => <option key={point} value={point}>{t(point)}</option>)}</select><select className={`assurance-select assurance-${control.assurance.toLowerCase()}`} aria-label={t(message("{0} assurance", String(control.id)))} value={control.assurance} onChange={(e) => updateControl(control.id, { assurance: e.target.value as Assurance })}><option value="DECLARED">{t("DECLARED")}</option><option value="OBSERVED">{t("OBSERVED")}</option><option value="ENFORCED">{t("ENFORCED")}</option><option value="RECONCILED">{t("RECONCILED")}</option></select></div></div>)}
+              <button className="danger-button" onClick={removeSelectedEdge}><span>{t("Remove relationship")}</span><small>{t("Only this connection will be removed")}</small></button>
             </div>
           ) : selectedZone ? (
             <div className="inspector-body zone-inspector">
-              <div className="selection-summary"><span className={`zone-summary tone-${selectedZone.kind.toLowerCase()}`}>ZN</span><div><strong>{selectedZone.label}</strong><small>{selectedZone.id}</small></div><em>{selectedZone.kind}</em></div>
-              <label>Zone name<input required value={selectedZone.label} onChange={(event) => updateSelectedZone({ label: event.target.value })} /></label>
-              <label>Trust classification<select value={selectedZone.kind} onChange={(event) => updateSelectedZone({ kind: event.target.value as TrustZone })}><option value="INTERNAL">INTERNAL · managed</option><option value="EXTERNAL">EXTERNAL · untrusted</option></select></label>
-              <label>Description<input value={selectedZone.description} onChange={(event) => updateSelectedZone({ description: event.target.value })} /></label>
-              <div className="field-group"><span>Zone geometry</span><div className="geometry-grid">
-                <label>X<input aria-label="Zone X" type="number" min="0" value={Math.round(selectedZone.x)} onChange={(event) => updateSelectedZone({ x: Math.max(0, Number(event.target.value)) }, true)} /></label>
-                <label>Y<input aria-label="Zone Y" type="number" min="0" value={Math.round(selectedZone.y)} onChange={(event) => updateSelectedZone({ y: Math.max(0, Number(event.target.value)) }, true)} /></label>
-                <label>Width<input aria-label="Zone width" type="number" min={ZONE_MIN_WIDTH} value={Math.round(selectedZone.width)} onChange={(event) => updateSelectedZone({ width: Math.max(ZONE_MIN_WIDTH, Number(event.target.value)) })} /></label>
-                <label>Height<input aria-label="Zone height" type="number" min={ZONE_MIN_HEIGHT} value={Math.round(selectedZone.height)} onChange={(event) => updateSelectedZone({ height: Math.max(ZONE_MIN_HEIGHT, Number(event.target.value)) })} /></label>
+              <div className="selection-summary"><span className={`zone-summary tone-${selectedZone.kind.toLowerCase()}`}>ZN</span><div><strong>{selectedZone.label}</strong><small>{selectedZone.id}</small></div><em>{t(selectedZone.kind)}</em></div>
+              <label>{t("Zone name")}<input required value={selectedZone.label} onChange={(event) => updateSelectedZone({ label: event.target.value })} /></label>
+              <label>{t("Trust classification")}<select value={selectedZone.kind} onChange={(event) => updateSelectedZone({ kind: event.target.value as TrustZone })}><option value="INTERNAL">{t("INTERNAL · managed")}</option><option value="EXTERNAL">{t("EXTERNAL · untrusted")}</option></select></label>
+              <label>{t("Description")}<input value={selectedZone.description} onChange={(event) => updateSelectedZone({ description: event.target.value })} /></label>
+              <div className="field-group"><span>{t("Zone geometry")}</span><div className="geometry-grid">
+                <label>X<input aria-label={t("Zone X")} type="number" min="0" value={Math.round(selectedZone.x)} onChange={(event) => updateSelectedZone({ x: Math.max(0, Number(event.target.value)) }, true)} /></label>
+                <label>Y<input aria-label={t("Zone Y")} type="number" min="0" value={Math.round(selectedZone.y)} onChange={(event) => updateSelectedZone({ y: Math.max(0, Number(event.target.value)) }, true)} /></label>
+                <label>{t("Width")}<input aria-label={t("Zone width")} type="number" min={ZONE_MIN_WIDTH} value={Math.round(selectedZone.width)} onChange={(event) => updateSelectedZone({ width: Math.max(ZONE_MIN_WIDTH, Number(event.target.value)) })} /></label>
+                <label>{t("Height")}<input aria-label={t("Zone height")} type="number" min={ZONE_MIN_HEIGHT} value={Math.round(selectedZone.height)} onChange={(event) => updateSelectedZone({ height: Math.max(ZONE_MIN_HEIGHT, Number(event.target.value)) })} /></label>
               </div></div>
-              <button className="secondary-button zone-fit-button" onClick={fitSelectedZoneAroundActors}>Fit around actors</button>
-              <div className="control-heading"><span>Zone actors</span><small>{selectedZoneMembers.length}</small></div>
-              <div className="zone-member-list">{selectedZoneMembers.map((node) => <button key={node.id} onClick={() => { setSelected({ kind: "node", id: node.id }); focusNode(node.id); }}><span className={`node-icon tone-${nodeTone[node.type]}`}>{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span><strong>{node.label}</strong><small>{node.type} · {node.id}</small></span><i>›</i></button>)}</div>
-              {nodes.some((node) => node.trustZoneId !== selectedZone.id) && <div className="zone-assignment"><label>Assign existing actor<select aria-label="Actor to assign" value={zoneAssignmentActor} onChange={(event) => setZoneAssignmentActor(event.target.value)}><option value="">Choose actor…</option>{nodes.filter((node) => node.trustZoneId !== selectedZone.id).map((node) => <option key={node.id} value={node.id}>{node.label} · {zoneMap[node.trustZoneId]?.label ?? node.trustZone}</option>)}</select></label><button className="secondary-button" disabled={!zoneAssignmentActor} onClick={() => assignActorToSelectedZone(zoneAssignmentActor)}>Move into zone</button></div>}
-              <button className="danger-button" disabled={selectedZoneMembers.length > 0} onClick={removeSelectedZone}><span>Remove trust zone</span><small>{selectedZoneMembers.length > 0 ? "Move all actors to another zone first" : "The empty zone will be removed"}</small></button>
+              <button className="secondary-button zone-fit-button" onClick={fitSelectedZoneAroundActors}>{t("Fit around actors")}</button>
+              <div className="control-heading"><span>{t("Zone actors")}</span><small>{selectedZoneMembers.length}</small></div>
+              <div className="zone-member-list">{selectedZoneMembers.map((node) => <button key={node.id} onClick={() => { setSelected({ kind: "node", id: node.id }); focusNode(node.id); }}><span className={`node-icon tone-${nodeTone[node.type]}`}>{node.type === "SUBAGENT" ? "SA" : node.type.slice(0, 2)}</span><span><strong>{node.label}</strong><small>{t(node.type)} · {node.id}</small></span><i>›</i></button>)}</div>
+              {nodes.some((node) => node.trustZoneId !== selectedZone.id) && <div className="zone-assignment"><label>{t("Assign existing actor")}<select aria-label={t("Actor to assign")} value={zoneAssignmentActor} onChange={(event) => setZoneAssignmentActor(event.target.value)}><option value="">{t("Choose actor…")}</option>{nodes.filter((node) => node.trustZoneId !== selectedZone.id).map((node) => <option key={node.id} value={node.id}>{node.label} · {zoneMap[node.trustZoneId]?.label ?? node.trustZone}</option>)}</select></label><button className="secondary-button" disabled={!zoneAssignmentActor} onClick={() => assignActorToSelectedZone(zoneAssignmentActor)}>{t("Move into zone")}</button></div>}
+              <button className="danger-button" disabled={selectedZoneMembers.length > 0} onClick={removeSelectedZone}><span>{t("Remove trust zone")}</span><small>{selectedZoneMembers.length > 0 ? t("Move all actors to another zone first") : t("The empty zone will be removed")}</small></button>
             </div>
           ) : selectedNode ? (
             <div className="inspector-body">
               <div className="selection-summary"><span className={`node-icon tone-${nodeTone[selectedNode.type]}`}>{selectedNode.type.slice(0, 2)}</span><div><strong>{selectedNode.label}</strong><small>{selectedNode.id}</small></div></div>
-              <label>Display name<input value={selectedNode.label} onChange={(e) => updateNode({ label: e.target.value })} /></label>
-              <label>Actor type<select value={selectedNode.type} onChange={(e) => updateNode({ type: e.target.value as NodeType })}>{["USER", "AGENT", "SUBAGENT", "RAG", "TOOL", "MEMORY", "SCHEDULER", "EXTERNAL"].map((type) => <option key={type}>{type}</option>)}</select></label>
-              <label>Trust zone<select value={selectedNode.trustZoneId} onChange={(e) => assignSelectedNodeToZone(e.target.value)}>{zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.label} · {zone.kind}</option>)}</select></label>
-              <label>Owner<input value={selectedNode.owner} onChange={(e) => updateNode({ owner: e.target.value })} /></label>
-              <label>Workload identity<input value={selectedNode.identity} onChange={(e) => updateNode({ identity: e.target.value })} /></label>
-              <label>Tenant boundary<select value={selectedNode.tenantMode} onChange={(e) => updateNode({ tenantMode: e.target.value as ArchitectureNode["tenantMode"] })}><option>REQUIRED</option><option>OPTIONAL</option><option>GLOBAL</option></select></label>
-              {(selectedNode.type === "AGENT" || selectedNode.type === "SUBAGENT") && <label>Actor delegation limit<input type="number" min="0" max="8" value={selectedNode.maxDelegationDepth} onChange={(e) => updateNode({ maxDelegationDepth: Number(e.target.value) })} /></label>}
-              {selectedNode.type === "TOOL" && <label>Definition digest<input placeholder="sha256:…" value={selectedNode.definitionDigest ?? ""} onChange={(e) => updateNode({ definitionDigest: e.target.value })} /></label>}
-              <label>Data access<input placeholder="D2, D3, D7" value={(selectedNode.dataAccess ?? []).join(", ")} onChange={(e) => updateNode({ dataAccess: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
-              {selectedNode.type === "EXTERNAL" && <label>Allowed domains<input placeholder="api.example.com, files.example.com" value={(selectedNode.allowedDomains ?? []).join(", ")} onChange={(e) => updateNode({ allowedDomains: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>}
-              <label>Capabilities<input placeholder="SUPPORT_REPLY, KNOWLEDGE_SEARCH" value={selectedNode.capabilities.join(", ")} onChange={(e) => updateNode({ capabilities: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
-              <button className="danger-button" onClick={removeSelectedNode}><span>Remove actor</span><small>Connected relationships will also be removed</small></button>
+              <RuntimeEditor key={selectedNode.id} node={selectedNode} nodes={nodes} update={updateNode}/><label>{t("Display name")}<input value={selectedNode.label} onChange={(e) => updateNode({ label: e.target.value })} /></label>
+              <label>{t("Actor type")}<select value={selectedNode.type} onChange={(e) => updateNode({ type: e.target.value as NodeType })}>{["USER", "AGENT", "SUBAGENT", "RAG", "TOOL", "MEMORY", "SCHEDULER", "EXTERNAL"].map((type) => <option key={type} value={type}>{t(type)}</option>)}</select></label>
+              <label>{t("Trust zone")}<select value={selectedNode.trustZoneId} onChange={(e) => assignSelectedNodeToZone(e.target.value)}>{zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.label} · {t(zone.kind)}</option>)}</select></label>
+              <label>{t("Owner")}<input value={selectedNode.owner} onChange={(e) => updateNode({ owner: e.target.value })} /></label>
+              <label>{t("Workload identity")}<input value={selectedNode.identity} onChange={(e) => updateNode({ identity: e.target.value })} /></label>
+              <label>{t("Tenant boundary")}<select value={selectedNode.tenantMode} onChange={(e) => updateNode({ tenantMode: e.target.value as ArchitectureNode["tenantMode"] })}><option value="REQUIRED">{t("REQUIRED")}</option><option value="OPTIONAL">{t("OPTIONAL")}</option><option value="GLOBAL">{t("GLOBAL")}</option></select></label>
+              {(selectedNode.type === "AGENT" || selectedNode.type === "SUBAGENT") && <label>{t("Actor delegation limit")}<input type="number" min="0" max="8" value={selectedNode.maxDelegationDepth} onChange={(e) => updateNode({ maxDelegationDepth: Number(e.target.value) })} /></label>}
+              {selectedNode.type === "TOOL" && <label>{t("Definition digest")}<input placeholder="sha256:…" value={selectedNode.definitionDigest ?? ""} onChange={(e) => updateNode({ definitionDigest: e.target.value })} /></label>}
+              <label>{t("Data access")}<input placeholder="D2, D3, D7" value={(selectedNode.dataAccess ?? []).join(", ")} onChange={(e) => updateNode({ dataAccess: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
+              {selectedNode.type === "EXTERNAL" && <label>{t("Allowed domains")}<input placeholder="api.example.com, files.example.com" value={(selectedNode.allowedDomains ?? []).join(", ")} onChange={(e) => updateNode({ allowedDomains: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>}
+              <label>{t("Capabilities")}<input placeholder="SUPPORT_REPLY, KNOWLEDGE_SEARCH" value={selectedNode.capabilities.join(", ")} onChange={(e) => updateNode({ capabilities: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label>
+              <button className="danger-button" onClick={removeSelectedNode}><span>{t("Remove actor")}</span><small>{t("Connected relationships will also be removed")}</small></button>
             </div>
           ) : null}
-          <div className="posture-card"><div className="posture-score"><span>{score}</span><div><strong>Security posture</strong><small>{criticalCount ? "Action required" : warningCount ? "Review warnings" : "Architecture conforms"}</small></div></div><div className="score-track"><i style={{ width: `${score}%` }} /></div><div className="finding-counts"><span><b className="critical-count">{criticalCount}</b> Critical</span><span><b>{warningCount}</b> Warnings</span></div></div>
-          {findings.length > 0 && <div className="findings"><strong>Active findings</strong>{findings.slice(0, 3).map((finding, index) => <button key={`${finding.target}-${index}`} onClick={() => { const kind: Selection["kind"] = finding.target.startsWith("edge.") ? "edge" : finding.target.startsWith("task.") ? "task" : "node"; setSelected({ kind, id: finding.target }); if (kind === "task") { setDesignSurface("workflow"); fitGraph(); } else { setDesignSurface("topology"); const edge = kind === "edge" ? edges.find((item) => item.id === finding.target) : undefined; focusNode(edge?.target ?? finding.target); } }}><i className={finding.severity} /> <span>{finding.text}<small>{finding.target}</small></span></button>)}</div>}
+          <div className="posture-card"><div className="posture-score"><div><strong>{t("Static design readiness")}</strong><small>{nodes.length === 0 ? t("Not started · add actors and relationships") : edges.length === 0 ? t("Incomplete · connect your actors") : criticalCount ? t("Action required") : warningCount ? t("Review warnings") : t("No issues in browser checks")}</small></div></div><div className="finding-counts"><span><b className="critical-count">{criticalCount}</b> {t("Critical")}</span><span><b>{warningCount}</b> {t("Warnings")}</span></div><p className="panel-note">{t("These checks inspect the draft. Deploy runs server validation and host preflight; Runs provides execution evidence.")}</p><details><summary>{t("Checks and evidence")}</summary><p className="panel-note">{t("Actor connectivity, tool digest presence, destination domains, edge modes, data grants, trust boundaries, delegation, task gates, and dependency cycles are checked locally. Authored assurance is a design claim. Import telemetry to inspect observed controls.")}</p></details></div>
+          {findings.length > 0 && <div className="findings" id="design-findings"><strong>{t("All static findings (")}{findings.length})</strong>{findings.map((finding, index) => <button key={`${finding.target}-${index}`} onClick={() => { const kind: Selection["kind"] = edges.some((edge) => edge.id === finding.target) ? "edge" : orchestration.tasks.some((task) => task.id === finding.target) ? "task" : "node"; setSelected({ kind, id: finding.target }); if (kind === "task") { setDesignSurface("workflow"); fitGraph(); } else { setDesignSurface("topology"); const edge = kind === "edge" ? edges.find((item) => item.id === finding.target) : undefined; focusNode(edge?.target ?? finding.target); } }}><i className={finding.severity} /> <span>{t(finding.text)}<small>{finding.target}</small></span></button>)}</div>}
           </>}
         </aside>
       </section>
+      <SharedProjects key={`${controlPlaneUrl}:${controlPlaneToken}`} open={showSharedProjects} onClose={() => setShowSharedProjects(false)} apiUrl={controlPlaneUrl} token={controlPlaneToken} rawManifest={JSON.stringify(buildManifestPayload({nodes,edges,zones,boundaries,orchestration}, currentProject()))} projectId={projectId} onOpen={applyManifestImport}/>
     </main>
   );
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -31,7 +32,8 @@ from .architecture import (
     TaskTransport,
     parse_acceptance_criterion,
 )
-from .ledger import InMemoryLedger, Ledger
+from .canonical import canonical_digest, canonical_json
+from .ledger import InMemoryLedger, Ledger, workflow_evidence_scope
 from .models import DataSource, Environment
 
 _MISSING = object()
@@ -72,9 +74,7 @@ def _evaluate_criterion(criterion: AcceptanceCriterion, output: Mapping[str, Any
     return True, None
 
 
-def evaluate_acceptance_criteria(
-    criteria: tuple[str, ...], output: Mapping[str, Any]
-) -> tuple[bool, str | None]:
+def evaluate_acceptance_criteria(criteria: tuple[str, ...], output: Mapping[str, Any]) -> tuple[bool, str | None]:
     """Evaluate a task's acceptance-criteria grammar against its execution output.
 
     An entry outside the fixed grammar (``required:``/``nonempty:``/``equals:``) fails the
@@ -96,6 +96,14 @@ class OrchestrationError(RuntimeError):
     def __init__(self, reason_code: str, message: str) -> None:
         super().__init__(message)
         self.reason_code = reason_code
+
+
+class TaskExecutionHeld(OrchestrationError):
+    """Pause before an exact invocation; the stored payload is its approval scope."""
+
+    def __init__(self, pending_call: Mapping[str, Any]) -> None:
+        super().__init__("ORCH-APPROVAL-REQUIRED", "invocation requires approval")
+        self.pending_call = json.loads(canonical_json({k: v for k, v in pending_call.items() if k != "requestId"}))
 
 
 class WorkflowRunState(StrEnum):
@@ -188,9 +196,7 @@ class A2AOrchestrationAdapter:
                         "taskId": task.id,
                         "objective": task.label,
                         "input": dict(value.workflow_input),
-                        "dependencies": {
-                            key: dict(output) for key, output in value.dependency_outputs.items()
-                        },
+                        "dependencies": {key: dict(output) for key, output in value.dependency_outputs.items()},
                     }
                 ),
             ),
@@ -251,6 +257,7 @@ class WorkflowTaskRun:
     executed: bool = False
     goal_met: bool | None = None
     security_met: bool | None = None
+    pending_call: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -266,6 +273,7 @@ class WorkflowTaskRun:
             "executed": self.executed,
             "goalMet": self.goal_met,
             "securityMet": self.security_met,
+            "pendingCall": dict(self.pending_call) if self.pending_call else None,
         }
 
 
@@ -283,6 +291,8 @@ class WorkflowRun:
     updated_at: str
     messages_used: int = 0
     error_code: str | None = None
+    bundle_digest: str | None = None
+    approvals: Mapping[str, str] = field(default_factory=dict)
 
     def outcomes(self) -> dict[str, int]:
         tasks = self.tasks.values()
@@ -308,6 +318,8 @@ class WorkflowRun:
             "messagesUsed": self.messages_used,
             "errorCode": self.error_code,
             "outcomes": self.outcomes(),
+            "bundleDigest": self.bundle_digest,
+            "approvals": dict(self.approvals),
         }
 
 
@@ -317,6 +329,12 @@ class WorkflowRunStore(Protocol):
     def save(self, run: WorkflowRun) -> None: ...
 
     def get(self, *, tenant_id: str, run_id: str) -> WorkflowRun: ...
+
+    def list(self, *, tenant_id: str | None = None) -> tuple[WorkflowRun, ...]: ...
+
+    def approve(self, *, tenant_id: str, run_id: str, task_id: str, approved_by: str) -> WorkflowRun: ...
+
+    def prune(self, *, tenant_id: str, before: str) -> int: ...
 
 
 class InMemoryWorkflowRunStore:
@@ -332,7 +350,7 @@ class InMemoryWorkflowRunStore:
             key = (run.tenant_id, run.id)
             if key in self._runs:
                 raise OrchestrationError("ORCH-RUN-DUPLICATE", "workflow run id already exists")
-            if len(self._runs) >= self._max_runs:
+            if sum(item.state not in _RUN_TERMINAL for item in self._runs.values()) >= self._max_runs:
                 raise OrchestrationError("ORCH-RUN-CAPACITY", "workflow run store is at capacity")
             self._runs[key] = run
 
@@ -342,7 +360,7 @@ class InMemoryWorkflowRunStore:
             prior = self._runs.get(key)
             if prior is None:
                 raise OrchestrationError("ORCH-RUN-NOT-FOUND", "workflow run is not visible to this tenant")
-            self._runs[key] = run
+            self._runs[key] = _merge_run(prior, run)
 
     def get(self, *, tenant_id: str, run_id: str) -> WorkflowRun:
         with self._lock:
@@ -350,6 +368,48 @@ class InMemoryWorkflowRunStore:
             if run is None:
                 raise OrchestrationError("ORCH-RUN-NOT-FOUND", "workflow run is not visible to this tenant")
             return run
+
+    def list(self, *, tenant_id: str | None = None) -> tuple[WorkflowRun, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (run for run in self._runs.values() if tenant_id is None or run.tenant_id == tenant_id),
+                    key=lambda run: (run.created_at, run.id),
+                    reverse=True,
+                )
+            )
+
+    def approve(self, *, tenant_id: str, run_id: str, task_id: str, approved_by: str) -> WorkflowRun:
+        with self._lock:
+            run = self.get(tenant_id=tenant_id, run_id=run_id)
+            approved = replace(run, approvals={**run.approvals, task_id: approved_by}, updated_at=_now())
+            self.save(approved)
+            return approved
+
+    def prune(self, *, tenant_id: str, before: str) -> int:
+        cutoff = datetime.fromisoformat(before.replace("Z", "+00:00"))
+        if cutoff.tzinfo is None:
+            raise ValueError("retention cutoff must include a timezone")
+        with self._lock:
+            keys = [
+                key
+                for key, run in self._runs.items()
+                if run.tenant_id == tenant_id
+                and run.state in _RUN_TERMINAL
+                and datetime.fromisoformat(run.updated_at.replace("Z", "+00:00")) < cutoff
+            ]
+            for key in keys:
+                del self._runs[key]
+            return len(keys)
+
+
+def _merge_run(prior: WorkflowRun, run: WorkflowRun) -> WorkflowRun:
+    # A late worker may not revive cancellation or discard a concurrent approval.
+    if prior.state in _RUN_TERMINAL:
+        return prior
+    if prior.bundle_digest != run.bundle_digest:
+        raise OrchestrationError("ORCH-RUN-BUNDLE-MISMATCH", "a run's deployment binding is immutable")
+    return replace(run, approvals={**run.approvals, **prior.approvals})
 
 
 @dataclass(slots=True)
@@ -376,6 +436,7 @@ class OrchestrationEngine:
         approval_provider: ApprovalProvider | None = None,
         acceptance_evaluator: AcceptanceEvaluator | None = None,
         ledger: Ledger | None = None,
+        bundle_digest: str | None = None,
     ) -> None:
         if architecture.graph.orchestration is None:
             raise ValueError("compiled architecture has no orchestration definition")
@@ -386,6 +447,7 @@ class OrchestrationEngine:
         self.approval_provider = approval_provider
         self.acceptance_evaluator = acceptance_evaluator or self._default_acceptance
         self.ledger = ledger or InMemoryLedger()
+        self.bundle_digest = bundle_digest
 
     def register_adapter(self, transport: TaskTransport, adapter: OrchestrationTaskAdapter) -> None:
         self.adapters[transport] = adapter
@@ -434,6 +496,7 @@ class OrchestrationEngine:
             tasks={task.id: WorkflowTaskRun(task.id) for task in self.definition.tasks},
             created_at=now,
             updated_at=now,
+            bundle_digest=self.bundle_digest,
         )
         self.run_store.create(run)
         self._append_run_event("WORKFLOW_RUN_CREATED", run)
@@ -549,7 +612,9 @@ class OrchestrationEngine:
             results: dict[str, WorkflowTaskRun] = {}
             for task in tasks:
                 try:
-                    results[task.id] = futures[task.id].result(timeout=task.timeout_seconds * task.max_attempts)
+                    results[task.id] = futures[task.id].result(
+                        timeout=min(task.timeout_seconds * task.max_attempts, threading.TIMEOUT_MAX),
+                    )
                 except FutureTimeout:
                     futures[task.id].cancel()
                     results[task.id] = replace(
@@ -578,16 +643,13 @@ class OrchestrationEngine:
 
     def _execute_task(self, run: WorkflowRun, task: OrchestrationTask, budget: _Budget) -> WorkflowTaskRun:
         current = run.tasks[task.id]
-        dependency_outputs = {
-            dependency: dict(run.tasks[dependency].output) for dependency in task.depends_on
-        }
+        dependency_outputs = {dependency: dict(run.tasks[dependency].output) for dependency in task.depends_on}
         approval_context = {
             "input": dict(run.workflow_input),
             "dependencies": dependency_outputs,
         }
         if task.approval_required and (
-            self.approval_provider is None
-            or not self.approval_provider(run.tenant_id, run.id, task, approval_context)
+            self.approval_provider is None or not self.approval_provider(run.tenant_id, run.id, task, approval_context)
         ):
             return replace(current, state=WorkflowTaskState.WAITING_APPROVAL)
         adapter = self.adapters.get(task.transport)
@@ -597,23 +659,27 @@ class OrchestrationEngine:
         executed = False
         goal_met: bool | None = None
         for attempt in range(current.attempts + 1, task.max_attempts + 1):
+            latest = self.run_store.get(tenant_id=run.tenant_id, run_id=run.id)
+            if latest.state in _RUN_TERMINAL or latest.tasks[task.id].state in _TASK_TERMINAL:
+                return latest.tasks[task.id]
             goal_met = None
             try:
                 budget.consume()
                 deadline = time.time() + task.timeout_seconds
                 executed = True
-                result = adapter.execute(
-                    TaskExecutionInput(
-                        run_id=run.id,
-                        tenant_id=run.tenant_id,
-                        trace_id=run.trace_id,
-                        task=task,
-                        workflow_input=run.workflow_input,
-                        dependency_outputs=dependency_outputs,
-                        attempt=attempt,
-                        deadline_epoch=deadline,
+                with workflow_evidence_scope(run.tenant_id, run.trace_id, run.id, task.id):
+                    result = adapter.execute(
+                        TaskExecutionInput(
+                            run_id=run.id,
+                            tenant_id=run.tenant_id,
+                            trace_id=run.trace_id,
+                            task=task,
+                            workflow_input=run.workflow_input,
+                            dependency_outputs=dependency_outputs,
+                            attempt=attempt,
+                            deadline_epoch=deadline,
+                        )
                     )
-                )
                 if time.time() > deadline:
                     raise OrchestrationError("ORCH-TASK-TIMEOUT", "task exceeded its execution timeout")
                 accepted, reason = self.acceptance_evaluator(task, result)
@@ -630,6 +696,15 @@ class OrchestrationEngine:
                     executed=True,
                     goal_met=True,
                     security_met=self._security_met(run, task),
+                    pending_call=None,
+                )
+            except TaskExecutionHeld as held:
+                pending = held.pending_call
+                return replace(
+                    current,
+                    state=WorkflowTaskState.WAITING_APPROVAL,
+                    pending_call={**pending, "requestId": canonical_digest(pending)},
+                    attempts=attempt - 1,
                 )
             except Exception as error:  # noqa: BLE001 - retries contain adapter failures
                 last_error = error
@@ -672,19 +747,23 @@ class OrchestrationEngine:
         )
 
     def _security_met(self, run: WorkflowRun, task: OrchestrationTask) -> bool | None:
-        """Whether every ledger interaction naming this task's source->target pair was safe.
+        """Reduce only this task's correlated interactions; uncorrelated evidence is unknown."""
+        targets = {task.target_actor_id}
+        source = next((node for node in self.architecture.graph.nodes if node.id == task.source_actor_id), None)
+        runtime = source.annotations.get("interlock.runtime", {}) if source else {}
+        if runtime.get("kind") == "ANTHROPIC":
+            targets.update(runtime.get("toolActorIds", [task.target_actor_id]))
+            targets.add(runtime.get("providerActorId"))
 
-        Reduces the run's whole trace with ``analytics.reduce_interactions`` and looks only at
-        the interactions whose (source, target) actor pair matches the task's. ``None`` when
-        there is nothing to judge; ``True`` only when every such interaction permitted execution
-        and none of them was an enforced block; ``False`` otherwise.
-        """
-
-        events = (event.to_dict() for event in self.ledger.trace(run.tenant_id, run.trace_id))
+        events = (
+            event.to_dict() for event in self.ledger.trace(run.tenant_id, run.trace_id)
+            if event.event_type == "CONTROL_COVERAGE_DECLARED"
+            or (event.payload.get("workflowRunId") == run.id and event.payload.get("workflowTaskId") == task.id)
+        )
         relevant = [
             record
             for record in reduce_interactions(events)
-            if record.source_actor_id == task.source_actor_id and record.target_actor_id == task.target_actor_id
+            if record.source_actor_id == task.source_actor_id and record.target_actor_id in targets
         ]
         if not relevant:
             return None
@@ -730,6 +809,7 @@ class OrchestrationEngine:
             relationship_id="REL-02",
             payload={
                 "runId": run.id,
+                "bundleDigest": run.bundle_digest,
                 "state": run.state.value,
                 "errorCode": run.error_code,
                 "outcomes": run.outcomes(),
@@ -749,6 +829,7 @@ class OrchestrationEngine:
             relationship_id="REL-02",
             payload={
                 "runId": run.id,
+                "bundleDigest": run.bundle_digest,
                 "taskId": task.task_id,
                 "state": task.state.value,
                 "attempts": task.attempts,

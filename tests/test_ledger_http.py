@@ -6,6 +6,7 @@ import threading
 import unittest
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlencode
 
 from agent_interlock import (
     InMemoryLedger,
@@ -156,6 +157,48 @@ def seed_interaction(ledger, *, interaction_id: str, decision: str, data_source=
             **common,
         )
         ledger.append("SECURITY_OUTCOME_SET", payload={"securityOutcome": "BLOCKED"}, **common)
+
+
+class InteractionSearchTests(unittest.TestCase):
+    def test_search_paginates_filters_and_links_to_tenant_scoped_trace(self):
+        with RunningLedgerServer() as server:
+            seed_interaction(server.ledger, interaction_id="allowed", decision="ALLOW")
+            seed_interaction(server.ledger, interaction_id="blocked", decision="BLOCK")
+            query = {"start": "2020-01-01T00:00:00Z", "end": "2099-01-01T00:00:00Z", "limit": 1}
+            status, first, _ = server.request("GET", "/v1/interactions?" + urlencode(query))
+            self.assertEqual(status, 200)
+            self.assertEqual(first["interactions"][0]["traceId"], "trace-allowed")
+            self.assertIsNotNone(first["nextCursor"])
+            status, second, _ = server.request(
+                "GET", "/v1/interactions?" + urlencode({**query, "cursor": first["nextCursor"]})
+            )
+            self.assertEqual(second["interactions"][0]["securityOutcome"], "BLOCKED")
+            self.assertIsNone(second["nextCursor"])
+            status, filtered, _ = server.request(
+                "GET",
+                "/v1/interactions?" + urlencode({**query, "reasonCode": "L1-TEST-BLOCK", "policyId": "policy.mail"}),
+            )
+            self.assertEqual(filtered["interactions"][0]["interactionId"], "blocked")
+            status, _, _ = server.request(
+                "GET", "/v1/interactions?" + urlencode({**query, "traceId": "other", "cursor": first["nextCursor"]})
+            )
+            self.assertEqual(status, 400)
+            status, isolated, _ = server.request(
+                "GET", "/v1/interactions?" + urlencode(query), token=TOKEN_B, tenant_id="tenant-b"
+            )
+            self.assertEqual(isolated["interactions"], [])
+            status, trace, _ = server.request("GET", "/v1/traces/" + filtered["interactions"][0]["traceId"])
+            self.assertEqual(status, 200)
+            self.assertEqual(len(trace["events"]), 4)
+
+    def test_search_rejects_incomplete_evidence_instead_of_truncating(self):
+        with RunningLedgerServer(config=LedgerHTTPConfig(max_statistics_events=1)) as server:
+            seed_interaction(server.ledger, interaction_id="large", decision="ALLOW")
+            status, value, _ = server.request(
+                "GET", "/v1/interactions?start=2020-01-01T00:00:00Z&end=2099-01-01T00:00:00Z"
+            )
+            self.assertEqual(status, 422)
+            self.assertEqual(value["error"]["code"], "LEDGER-RANGE-TOO-LARGE")
 
 
 WIDE_RANGE = "from=2000-01-01T00:00:00Z&to=2100-01-01T00:00:00Z"

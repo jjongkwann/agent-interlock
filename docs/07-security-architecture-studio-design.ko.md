@@ -214,7 +214,7 @@ JSON 계약은 `schemas/architecture.schema.json`, Python 구현은 `src/agent_i
 - Design 내부 `Actor topology`/`Task workflow` 전환과 A2A/MCP/LOCAL/HUMAN task palette
 - Task별 source/target, dependency, data, acceptance, retry, timeout, on-failure, approval 편집과 workflow budget 설정
 
-**프로젝트.** 이제 Canvas는 익명 manifest 하나가 아니라 이름 있는 프로젝트(`ProjectIdentity`: 편집 가능한 `id` slug와 `version`) 위에서 동작한다. 신규/열기/저장은 `studio/app/manifest.ts`를 거쳐 왕복한다. `buildManifestPayload`는 프로젝트의 `id`/`version`을 manifest의 `metadata`에 기록하고, manifest를 import하면 — Studio 밖에서 작성한 것도 포함해 — 그 값을 그대로 읽어들인다. 그래서 export가 담은 id·version은 다시 import했을 때 Canvas가 보여주는 값과 정확히 같다.
+**프로젝트.** 이제 Canvas는 익명 manifest 하나가 아니라 이름 있는 프로젝트(`ProjectIdentity`: 편집 가능한 `id` slug와 `version`) 위에서 동작한다. 신규/열기/저장은 `studio/app/architecture-model.ts`를 거쳐 왕복한다. `buildManifestPayload`는 프로젝트의 `id`/`version`을 manifest의 `metadata`에 기록하고, manifest를 import하면 — Studio 밖에서 작성한 것도 포함해 — 그 값을 그대로 읽어들인다. 그래서 export가 담은 id·version은 다시 import했을 때 Canvas가 보여주는 값과 정확히 같다.
 
 ```bash
 cd studio

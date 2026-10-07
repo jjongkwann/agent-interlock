@@ -79,7 +79,7 @@ def build(bindings=BINDINGS, *, ledger=None):
     return gateway, tools
 ```
 
-`guard_tools` admits each definition, approves and activates it, and refuses to hand back a tool whose definition was quarantined — a poisoned description, a cross-server reference, an unsupported schema keyword — so the model never sees it. Each returned `GuardedTool`/`GuardedAsyncTool` derives intent from the arguments the model actually chose on every call, asks the gateway for a verdict, runs the real function only when permitted, and returns the sanitized result; a refusal reaches the model as an `is_error` tool result carrying the reason codes, never a raised exception. An edge with `externalWriteRequiresApproval: true` holds the first call until `guard_tools(..., approve=...)`'s callback — or a `gateway.grant_approval` made ahead of time — grants an approval bound to those exact arguments.
+`guard_tools` admits each definition, approves and activates it, and refuses to hand back a tool whose definition was quarantined — a poisoned description, a cross-server reference, an unsupported schema keyword — so the model never sees it. Each returned `GuardedTool`/`GuardedAsyncTool` derives intent from the arguments the model actually chose on every call, asks the gateway for a verdict, runs the real function only when permitted, and returns the sanitized result; a refusal reaches the model as an `is_error` tool result carrying the reason codes, never a raised exception. An edge with `externalWriteRequiresApproval: true` holds the first call until `guard_tools(..., approve=...)`'s callback — or a `gateway.grant_approval` made ahead of time — grants a one-use approval bound to the complete invocation identity and installed policy.
 
 The tools then run inside the SDK's own agentic loop, unmodified:
 
@@ -185,28 +185,27 @@ Even without an SDK, a Proxy can observe communication, but semantics such as pl
 
 `wrap()` is not observation-only. Under `PolicyMode.ENFORCE` it runs `SDK_PROFILE`'s 19 checks (`sdk.py:152`) and raises `GatewayError` when the aggregate refuses. The call does not happen. Nineteen of the gateway's twenty-one checks run here; only the two M2 definition checks are absent, because the SDK never holds a `ToolRevision`.
 
-**A wrapped Tool can perform an external write once it holds a matching approval.** `external_write_requires_approval` defaults `True`, so `INTERLOCK-APPROVAL-REQUIRED` fires on every `EXTERNAL_WRITE` intent unless `approval_valid` is set. The gateway and the SDK now share one approval store (`approvals.ApprovalStore`): `Interlock.grant_approval(...)` grants an approval the same way `MCPToolGateway.grant_approval` does, and `_invoke` looks it up and passes the result into `CheckContext.approval_valid` on every call. An approval binds to the exact arguments hash, canonical destination set, tenant, and expiry it was granted for — nothing else validates against it.
+The gateway and SDK use the same approval implementation, with separate process-local stores per instance. `grant_approval` binds tenant, source and target Actors, definition revision/digest, installed policy content, the complete intent (including canonical destinations, data classes and side effect), exact arguments and expiry. A grant is consumed atomically immediately before an enforced external write, including a failed execution. It cannot approve another tool, purpose, policy or second operation. Gateway idempotent retries reuse the original result; this is not a durable cross-process invocation cache.
 
 ```python
+from dataclasses import replace
+
 agent.connect(tool, LinkPolicy(id="p", version="1", mode=PolicyMode.ENFORCE))
 send = tool.wrap(send_email)
 arguments = {"to": "user@customer.example"}
+intent = InvocationIntent(
+    purpose="reply", destinations=("user@customer.example",),
+    estimated_side_effect=SideEffect.EXTERNAL_WRITE,
+)
 approval = interlock.grant_approval(
-    tenant_id="t",
-    arguments=arguments,
-    canonical_destinations=(canonical_destination("user@customer.example"),),
-    approver="operator",
+    tenant_id="t", source_actor_id=agent.spec.id, target_actor_id=tool.spec.id,
+    intent=intent, arguments=arguments, approver="operator",
 )
 send(arguments, source=agent, tenant_id="t",
-     intent=InvocationIntent(purpose="reply",
-                             destinations=("user@customer.example",),
-                             estimated_side_effect=SideEffect.EXTERNAL_WRITE,
-                             approval_id=approval.approval_id))
-# executes -- the same call without approval_id still raises
-# GatewayError: actor invocation blocked: INTERLOCK-APPROVAL-REQUIRED
+     intent=replace(intent, approval_id=approval.approval_id))
 ```
 
-`_invoke` also shares the gateway's result handling: every returned value passes through `results.inspect_tool_result`, which redacts secrets and validates the result against the target's output schema. Under `ENFORCE` a schema-invalid result is replaced by the same quarantine value the gateway emits, and `SECURITY_OUTCOME_SET` records `SUCCEEDED` for that quarantine even when no argument-side check flagged the call. Under `SHADOW`/`OBSERVE` the sanitized-but-unquarantined value is returned and the schema errors are recorded without altering the result.
+`_invoke` also shares the gateway's result handling: every returned value passes through `results.inspect_tool_result`, which redacts secrets and validates the result against the target's output schema. Under `ENFORCE` a schema-invalid result is replaced by the same quarantine value the gateway emits, and `SECURITY_OUTCOME_SET` records `SUCCEEDED` for that quarantine even when no argument-side check flagged the call. The SDK returns its sanitized, non-quarantined value under `SHADOW`/`OBSERVE`; schema errors remain recorded. ENFORCE additionally quarantines invalid output.
 
 `LinkPolicy(external_write_requires_approval=False)` remains available as an explicit, auditable decision to drop the control entirely. Do not work around a missing approval by declaring the side effect as something other than `EXTERNAL_WRITE`; that trades a visible hold for a silent `L1-UNDECLARED-SIDE-EFFECT` at best and an undetected write at worst.
 

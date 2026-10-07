@@ -8,13 +8,13 @@ from pathlib import Path
 from agent_interlock import (
     ArchitectureCompiler,
     ArchitectureGraph,
+    InvocationIntent,
     MCPInvocationContext,
     MCPServerProfile,
     MCPToolGateway,
     MCPTransportAdapter,
     SideEffect,
 )
-from agent_interlock.security import canonical_destination
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "examples" / "secure_multi_agent_architecture.json"
@@ -99,7 +99,10 @@ arguments = {"to": "a@customer.example", "body": "Your case is resolved."}
 approval = gateway.grant_approval(
     tenant_id="tenant-a",
     arguments=arguments,
-    canonical_destinations=(canonical_destination(arguments["to"]),),
+    source_actor_id="agent.support",
+    revision_id=revision.revision_id,
+    intent=InvocationIntent(purpose="SUPPORT_REPLY", destinations=(arguments["to"],),
+                            estimated_side_effect=SideEffect.EXTERNAL_WRITE),
     approver="support-operator",
 )
 response = adapter.handle_client_message(

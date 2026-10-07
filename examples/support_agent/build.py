@@ -45,7 +45,15 @@ from agent_interlock import (
 from agent_interlock.adapters.anthropic_tools import Approver, GuardedAsyncTool, GuardedTool
 from agent_interlock.canonical import canonical_digest
 
-from .tools import LOOKUP_ORDER, SEND_EMAIL, lookup_order, send_email
+from .tools import (
+    LOOKUP_ORDER,
+    SEND_EMAIL,
+    classify_support_data,
+    estimate_support_export,
+    lookup_order,
+    send_email,
+    support_result_provenance,
+)
 
 MANIFEST = Path(__file__).with_name("architecture.json")
 TENANT_ID = "tenant-acme"
@@ -53,8 +61,10 @@ SOURCE_ACTOR_ID = "agent.support"
 APPROVER = "security-reviewer"
 
 BINDINGS: tuple[ToolBinding, ...] = (
-    ToolBinding(LOOKUP_ORDER, lookup_order, "tool.lookup-order", "SUPPORT_LOOKUP"),
-    ToolBinding(SEND_EMAIL, send_email, "tool.send-email", "SUPPORT_REPLY"),
+    ToolBinding(LOOKUP_ORDER, lookup_order, "tool.lookup-order", "SUPPORT_LOOKUP",
+                classify_support_data, estimate_support_export, support_result_provenance),
+    ToolBinding(SEND_EMAIL, send_email, "tool.send-email", "SUPPORT_REPLY",
+                classify_support_data, estimate_support_export, support_result_provenance),
 )
 
 
@@ -76,7 +86,7 @@ def build(
     ledger: Ledger | None = None,
     approve: Approver | None = None,
 ) -> tuple[MCPToolGateway, tuple[GuardedTool | GuardedAsyncTool, ...]]:
-    """Compile the manifest, admit the definitions, and return ``(gateway, guarded tools)``.
+    """LOCAL mode: compile the local manifest, admit definitions, and return ``(gateway, guarded tools)``.
 
     ``bindings`` is a parameter so a test can swap a function or a definition without a second copy
     of the wiring; ``ledger`` so a project can keep its evidence somewhere durable; ``approve`` is

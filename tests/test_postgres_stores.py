@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +37,7 @@ from agent_interlock import (
 from agent_interlock.canonical import canonical_json
 from agent_interlock.postgres_ledger import LedgerTenantMismatch
 from agent_interlock.postgres_stores import (
+    _LOCK_ACTIVE,
     _revision_from,
     _revision_value,
     _transaction_from,
@@ -271,7 +274,7 @@ class ConfigStoreUnitTests(unittest.TestCase):
     def test_activate_supersedes_and_upserts_active_pointer(self):
         revision = sample_revision()
         old_digest = "sha256:" + "0" * 64
-        connection = ScriptedConnection((TENANT_A,), ("rev-0", old_digest), None, None, None)
+        connection = ScriptedConnection((TENANT_A,), ("rev-0", old_digest), None, None, (revision.revision_id,))
         store = PostgreSQLConfigStore(lambda: connection, bound_tenant_id=TENANT_A)
         active = store.activate(revision, expected_active_digest=old_digest)
         self.assertEqual(active.state, ConfigRevisionState.ACTIVE)
@@ -377,6 +380,38 @@ class PostgreSQLStoresIntegrationTests(unittest.TestCase):
         self.assertEqual(active.config_digest, follow_config.digest)
         states = [revision.state for revision in node_1.revisions_for("tenant-a", config_id)]
         self.assertEqual(states, [ConfigRevisionState.SUPERSEDED, ConfigRevisionState.ACTIVE])
+
+    def test_concurrent_first_config_activation_has_one_winner(self):
+        barrier = threading.Barrier(2)
+
+        class RacingStore(PostgreSQLConfigStore):
+            def _execute(self, connection, query, parameters):
+                result = super()._execute(connection, query, parameters)
+                if query == _LOCK_ACTIVE:
+                    assert result is None
+                    barrier.wait(timeout=10)
+                return result
+
+        stores = [RacingStore.from_dsn(self.dsn_a, bound_tenant_id="tenant-a") for _ in range(2)]
+        config_id = f"first-race-{uuid.uuid4()}"
+
+        def activate(index):
+            config = AgentConfig(tenant_id="tenant-a", config_id=config_id, agent_id=f"agent-{index}")
+            revision = ConfigRevision(
+                revision_id=f"{config_id}-{index}",
+                config=config,
+                config_digest=config.digest,
+                state=ConfigRevisionState.APPROVED,
+                commit="race",
+            )
+            try:
+                return stores[index].activate(revision, expected_active_digest=None).state.value
+            except ConfigStoreStale:
+                return "STALE"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(sorted(pool.map(activate, range(2))), ["ACTIVE", "STALE"])
+        self.assertEqual(len(stores[0].revisions_for("tenant-a", config_id)), 1)
 
 
 if __name__ == "__main__":

@@ -45,8 +45,9 @@ from ..models import (
     ToolDefinition,
 )
 from ..registry import ToolRevision
-from ..security import canonical_destination
 
+VolumeEstimator = Callable[[Mapping[str, Any]], tuple[int, int]]
+ResultProvenance = Callable[[Any], Mapping[str, Any]]
 Classifier = Callable[[Mapping[str, Any]], frozenset[str]]
 # Called with the exact arguments the model chose and the decision that held them for approval.
 # Returns the approver's identity to grant an approval bound to those arguments, or None to refuse.
@@ -83,6 +84,9 @@ class ToolBinding:
     function: Callable[[Mapping[str, Any]], Any]
     actor_id: str
     purpose: str
+    classify: Classifier | None = None
+    estimate_export: VolumeEstimator | None = None
+    result_provenance: ResultProvenance | None = None
 
     def __post_init__(self) -> None:
         if not self.actor_id or not self.purpose:
@@ -170,7 +174,7 @@ class _GuardedToolBase:
         self._source_actor_id = source_actor_id
         self._environment = environment
         self._data_source = data_source
-        self._classify = classify
+        self._classify = binding.classify or classify
         self._credential = credential
         self._trace_id = trace_id
         self._approve = approve
@@ -209,29 +213,35 @@ class _GuardedToolBase:
         effect the tool actor is allowed to have, which is the fail-closed reading of "this tool
         can do these things and did not say which one this call is".
 
-        ``estimated_record_count`` is left at 0: the model's tool call carries no volume estimate,
-        and 0 is how the volume controls spell "nothing to compare the cap against". Inventing a
-        count would report a control as having examined an estimate nobody made.
+        Classification and export volume come from host-installed hooks. Missing classification
+        retains the SDK's conservative D3 default; installedHooks records the missing classifier.
         """
         definition = self._binding.definition
         derived = derive_intent(arguments, definition.input_schema, definition.annotations)
         side_effect = derived.side_effect
         if side_effect is None:
             side_effect = _strongest_declared(self._gateway.actor(self._binding.actor_id))
-        data_classes = self._classify(arguments) if self._classify is not None else None
-        # An approval is bound to the exact arguments and destinations, never to a tool or a
-        # session, so the lookup is by what this call carries. The model never sees an approval id.
-        approval = self._gateway.find_approval(
-            tenant_id=self._tenant_id, arguments=arguments, destinations=derived.destinations
+        data_classes = self._classify(arguments) if self._classify is not None else frozenset({"D3"})
+        if not data_classes or not set(data_classes) <= {f"D{i}" for i in range(1, 9)}:
+            raise ValueError("classifier must return nonempty D1..D8 classes")
+        records, byte_count = (
+            self._binding.estimate_export(arguments) if self._binding.estimate_export else (0, 0)
         )
+        if any(type(value) is not int or value < 0 for value in (records, byte_count)):
+            raise ValueError("export estimates must be nonnegative integers")
         intent = InvocationIntent(
             purpose=self._binding.purpose,
+            data_classes=frozenset(data_classes),
             destinations=derived.destinations,
             estimated_side_effect=side_effect,
-            estimated_record_count=0,
-            approval_id=approval.approval_id if approval is not None else None,
+            estimated_record_count=records,
+            estimated_byte_count=byte_count,
         )
-        return intent if data_classes is None else replace(intent, data_classes=data_classes)
+        approval = self._gateway.find_approval(
+            tenant_id=self._tenant_id, source_actor_id=self._source_actor_id,
+            revision_id=self._revision.revision_id, arguments=arguments, intent=intent,
+        )
+        return replace(intent, approval_id=approval.approval_id) if approval is not None else intent
 
     def _decide(self, arguments: Mapping[str, Any]) -> PolicyDecisionRecord:
         """Evaluate, and give an operator one chance to approve a call held only for approval.
@@ -249,21 +259,17 @@ class _GuardedToolBase:
         if approver is None:
             return decision
         try:
-            destinations = tuple(
-                canonical_destination(item) for item in self._declared_intent(arguments).destinations
+            self._gateway.grant_approval(
+                tenant_id=self._tenant_id,
+                arguments=arguments,
+                source_actor_id=self._source_actor_id,
+                revision_id=self._revision.revision_id,
+                intent=self._declared_intent(arguments),
+                approver=approver,
             )
         except ValueError:
-            # A destination the canonicaliser cannot read is already a finding of its own
-            # (L1-M9-NEW-DESTINATION), so the second pass would refuse the call anyway. Returning
-            # the first decision keeps the refusal and its reason codes rather than replacing them
-            # with a parse error the model cannot act on.
+            # Malformed destinations retain the original policy refusal.
             return decision
-        self._gateway.grant_approval(
-            tenant_id=self._tenant_id,
-            arguments=arguments,
-            canonical_destinations=destinations,
-            approver=approver,
-        )
         return self._evaluate(arguments)
 
     def _evaluate(self, arguments: Mapping[str, Any]) -> PolicyDecisionRecord:
@@ -290,6 +296,10 @@ class GuardedTool(_GuardedToolBase):
     def call(self, input: object) -> str:
         arguments = _arguments(input)
         decision = self._decide(arguments)
+        return self._execute_decision(arguments, decision)
+
+    def _execute_decision(self, arguments: Mapping[str, Any], decision: PolicyDecisionRecord) -> str:
+        """Execute this tool's evaluated decision; the gateway verifies arguments and consumes its permit."""
         try:
             result = self._gateway.execute_approved_call(
                 decision.decision_id,
@@ -446,6 +456,12 @@ def guard_tools(
         if target.definition_digest is None:
             target = replace(target, definition_digest=revision.canonical_digest)
         gateway.register_actor(target, tool_id=revision.tool_id)
+        gateway.set_tool_hooks(
+            target.id,
+            classification_installed=binding.classify is not None or classify is not None,
+            volume_estimator_installed=binding.estimate_export is not None,
+            result_provenance=binding.result_provenance,
+        )
 
         tool_class = GuardedAsyncTool if inspect.iscoroutinefunction(binding.function) else GuardedTool
         guarded.append(

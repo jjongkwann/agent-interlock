@@ -17,6 +17,7 @@ import json
 import os
 import threading
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -200,7 +201,21 @@ class FileWORMAuditStore:
         self._entries: list[WORMEntry] = []
         self._seen: set[tuple[str, str]] = set()
         self._lock = threading.RLock()
-        self._load()
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._file_lock():
+            self._load()
+
+    @contextmanager
+    def _file_lock(self):
+        import fcntl
+
+        # ponytail: local POSIX file locking; use object-lock storage for remote writers.
+        with self._lock, self._path.open("a", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
     def _load(self) -> None:
         if not self._path.exists():
@@ -228,7 +243,8 @@ class FileWORMAuditStore:
         self._seen = {(entry.record.tenant_id, entry.record.event_id) for entry in entries}
 
     def append(self, record: SignedAuditRecord) -> WORMEntry:
-        with self._lock:
+        with self._file_lock():
+            self._load()
             key = (record.tenant_id, record.event_id)
             if key in self._seen:
                 raise WORMViolation("audit record already written; WORM store is append-only")
@@ -257,9 +273,14 @@ class FileWORMAuditStore:
             os.fsync(stream.fileno())
 
     def entries(self) -> tuple[WORMEntry, ...]:
-        with self._lock:
+        with self._file_lock():
+            self._load()
             return tuple(self._entries)
 
     def verify_chain(self) -> bool:
-        with self._lock:
+        with self._file_lock():
+            try:
+                self._load()
+            except WORMViolation:
+                return False
             return _verify_chain(self._entries)

@@ -25,7 +25,6 @@ from agent_interlock import (
 )
 from agent_interlock.gateway import GatewayError
 from agent_interlock.security import (
-    canonical_destination,
     sanitize_secrets,
     unsupported_schema_keywords,
     validate_authorization_url,
@@ -270,11 +269,13 @@ class GatewayPolicyTests(unittest.TestCase):
     def test_hash_bound_approval_allows_only_exact_arguments_and_destination(self):
         gateway, revision, source, _ = configured_gateway(external_approval=True)
         arguments = {"to": "user@customer.example", "body": "hello"}
-        destination = (canonical_destination("user@customer.example"),)
         approval = gateway.grant_approval(
             tenant_id="tenant-a",
             arguments=arguments,
-            canonical_destinations=destination,
+            source_actor_id=source.id,
+            revision_id=revision.revision_id,
+            intent=InvocationIntent(purpose="reply", destinations=("user@customer.example",),
+                                    estimated_side_effect=SideEffect.EXTERNAL_WRITE),
             approver="operator",
         )
         decision = gateway.evaluate_invocation(

@@ -1,0 +1,10 @@
+.shared-projects { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 24px; border: 1px solid #ccd5dd; border-radius: 14px; color: #273444; background: #fff; box-shadow: 0 16px 60px #0003; }
+.shared-projects::backdrop { background: #17233070; }
+.shared-projects header, .shared-projects li, .shared-project-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.shared-projects h2 { margin: 0; font-size: 20px; }
+.shared-projects p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.shared-projects ul { list-style: none; padding: 0; margin: 20px 0 0; }
+.shared-projects li { border-top: 1px solid #e2e8ed; padding: 12px 0; }
+.shared-projects li div { min-width: 0; overflow-wrap: anywhere; }
+.shared-projects small { display: block; margin-top: 4px; color: #52606d; }
+@media (max-width: 480px) { .shared-projects { padding: 16px; } .shared-project-actions { flex-wrap: wrap; } .shared-project-actions button { width: 100%; } }

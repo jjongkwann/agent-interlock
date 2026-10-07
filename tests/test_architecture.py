@@ -32,6 +32,35 @@ def graph() -> ArchitectureGraph:
 
 
 class ArchitectureModelTests(unittest.TestCase):
+    def test_complete_manifest_roundtrip_preserves_policy_and_node_contracts(self):
+        value = manifest()
+        value["spec"]["nodes"][0].update(label="Intake", annotations={"readOnlyHint": True})
+        policy = value["spec"]["edges"][0]["policy"]
+        policy.update(maxExportRecords=7, maxExportBytes=1024, volumeAction="HOLD",
+                      secretAction="QUARANTINE", destructiveWriteAction="HOLD",
+                      undeclaredSideEffectAction="QUARANTINE", allowCrossServerReferences=True)
+        original = ArchitectureGraph.from_dict(value)
+        self.assertEqual(ArchitectureGraph.from_dict(original.to_manifest()), original)
+        serialized_policy = original.to_manifest()["spec"]["edges"][0]["policy"]
+        schema = json.loads((ROOT / "schemas" / "architecture.schema.json").read_text())
+        self.assertLessEqual(serialized_policy.keys(), schema["$defs"]["policy"]["properties"].keys())
+
+    def test_duplicate_actor_pair_is_linted_and_cannot_compile(self):
+        value = manifest()
+        duplicate = copy.deepcopy(value["spec"]["edges"][0])
+        duplicate.update(id="second-policy-same-pair", controls=[])
+        value["spec"]["edges"].append(duplicate)
+        ambiguous = ArchitectureGraph.from_dict(value)
+        self.assertIn("EDGE_PAIR_AMBIGUOUS", {item.code for item in ArchitectureLinter().lint(ambiguous)})
+        for reject_critical in (True, False):
+            with self.assertRaises(ArchitectureCompileError):
+                ArchitectureCompiler().compile(ambiguous, reject_critical=reject_critical)
+
+    def test_runtime_glob_fixture_matches_python(self):
+        from fnmatch import fnmatchcase
+        for case in json.loads((ROOT / "tests" / "fixtures" / "runtime-glob.json").read_text()):
+            self.assertEqual(fnmatchcase(case["value"], case["pattern"]), case["matches"], case)
+
     def test_secure_multi_agent_manifest_parses(self):
         value = graph()
         self.assertEqual(value.id, "customer-support-multi-agent")

@@ -138,6 +138,21 @@ server.serve_forever()
 - OTLP/HTTP JSON receiver의 인증·tenant/scope·context 누락 처리
 - `SignedAuditSink`의 integrity 선검증, detached seal·tamper·record swap 거부
 
+## 패키지 Migration과 운영 책임
+
+Wheel은 `src/agent_interlock/migrations/postgresql/NNNN_*.sql` 원본을 포함한다. 저장소의 `migrations/postgresql`은 이 디렉터리의 symlink이며, 이미 적용된 SQL의 byte와 checksum은 바뀌지 않는다. 소스 checkout 없이 실행할 수 있다.
+
+```python
+import os
+from agent_interlock import PostgreSQLMigrationRunner
+
+PostgreSQLMigrationRunner.from_dsn(None, os.environ["INTERLOCK_MIGRATION_DSN"]).apply()
+```
+
+릴리스 담당자는 application worker 시작 전에 migration-owner 연결로 migration을 한 번 실행한다. Application 요청에는 별도의 tenant 범위 credential을 사용한다. 적용한 SQL은 수정하지 않고 다음 네 자리 버전을 추가한다.
+
+DB 운영자는 매월 시작 전에 `PartitionMaintenance.ensure_partitions(today=..., months_ahead=1)` 실행을 예약한다. `drop_partitions_older_than(cutoff_month=...)` 호출 전에는 가장 긴 tenant 보존 기간과 복구 가능한 backup을 확인한다. 이 helper는 자체 scheduler가 아니다. Backup, 보존 일정, 복원 훈련은 DB 운영자 책임이며, 격리된 DB에 복원하고 ledger 무결성을 확인한 뒤 traffic을 전환한다.
+
 ## 6. 현재 경계
 
 - Migration runner는 `postgres_ops.py` `PostgreSQLMigrationRunner`로 제공한다. `migrations/postgresql`의 4-digit `NNNN_*.sql`을 순서대로 멱등 적용하고 `public.interlock_schema_migrations`에 checksum과 함께 기록하며, 적용 후 파일이 바뀌면(checksum drift) 거부한다. 자동 partition/retention은 `PartitionMaintenance`(월별 partition ensure, cutoff보다 오래된 월 partition을 DETACH·ingest-key prune 후 drop)로 제공한다. 실행은 RLS를 bypass하는 migration owner/superuser 연결을 전제한다.

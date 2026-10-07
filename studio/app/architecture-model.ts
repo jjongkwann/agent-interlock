@@ -7,7 +7,7 @@ export type NodeType = "USER" | "AGENT" | "SUBAGENT" | "RAG" | "TOOL" | "MEMORY"
 export type TrustZone = "INTERNAL" | "EXTERNAL";
 export type Mode = "OBSERVE" | "SHADOW" | "ENFORCE";
 export type Assurance = "DECLARED" | "OBSERVED" | "ENFORCED" | "RECONCILED";
-export type EnforcementPoint = "INPUT_GATEWAY" | "RAG_GATEWAY" | "MCP_GATEWAY" | "A2A_BROKER" | "EGRESS_GATEWAY" | "SANDBOX" | "AUDIT_SINK";
+export type EnforcementPoint = "DESIGN_LINTER" | "SDK" | "MODEL_ROUTER" | "MEMORY_STORE" | "APPROVAL_GATE" | "TRIGGER_VALIDATOR" | "STATE_MACHINE" | "DEPLOY_GATE" | "RESPONSE_ORCHESTRATOR" | "INPUT_GATEWAY" | "RAG_GATEWAY" | "MCP_GATEWAY" | "A2A_BROKER" | "EGRESS_GATEWAY" | "SANDBOX" | "AUDIT_SINK";
 
 export type ArchitectureNode = {
   id: string;
@@ -20,6 +20,8 @@ export type ArchitectureNode = {
   maxDelegationDepth: number;
   trustZone: TrustZone;
   trustZoneId: string;
+  failureMode?: "FAIL_CLOSED" | "DEGRADE_READ_ONLY" | "FAIL_OPEN";
+  controls?: Control[];
   definitionDigest?: string;
   dataAccess: string[];
   allowedDomains?: string[];
@@ -91,12 +93,23 @@ export type OrchestrationDesign = {
 export type Control = {
   id: string;
   objective: "PREVENT" | "DETECT" | "RESPOND" | "EVIDENCE";
-  timing: "PRE_EXECUTION" | "POST_EXECUTION";
+  timing: "DESIGN" | "ADMISSION" | "PRE_EXECUTION" | "EXECUTION" | "POST_EXECUTION";
+  description?: string;
   point: EnforcementPoint;
   assurance: Assurance;
 };
 
+export type DynamicTargetSelector = {
+  types: NodeType[];
+  requiredCapabilities: string[];
+  idPattern: string;
+  sameTenant: boolean;
+};
+
 export type ArchitectureEdge = {
+  // Keep policy settings without dedicated inspector controls through edits and saved projects.
+  policy?: Record<string, unknown>;
+  targetSelector?: DynamicTargetSelector;
   id: string;
   source: string;
   target: string;
@@ -157,6 +170,8 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
   const nodeMap = Object.fromEntries(nodes.map((node) => [node.id, node]));
   const manifestNodes = nodes.map((node) => ({
     id: node.id,
+    label: node.label,
+    controls: (node.controls ?? []).map(controlPayload),
     type: node.type,
     owner: node.owner,
     identity: node.identity,
@@ -166,11 +181,11 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
     ...(node.inputSchema ? { inputSchema: node.inputSchema } : {}),
     ...(node.outputSchema ? { outputSchema: node.outputSchema } : {}),
     tenantMode: node.tenantMode,
-    failureMode: "FAIL_CLOSED",
+    failureMode: node.failureMode ?? "FAIL_CLOSED",
     allowedDomains: node.allowedDomains ?? [],
     maxDelegationDepth: node.maxDelegationDepth,
     trustZone: node.trustZone,
-    trustZoneId: node.trustZoneId,
+    ...(node.trustZoneId ? { trustZoneId: node.trustZoneId } : {}),
     ...(node.definitionDigest ? { definitionDigest: node.definitionDigest } : {}),
     ...(node.annotations ? { annotations: node.annotations } : {}),
     position: { x: node.x, y: node.y },
@@ -185,13 +200,10 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
       relationship: edge.relationship,
       ...(edge.boundaryId ? { boundaryId: edge.boundaryId } : {}),
       dynamic: edge.dynamic,
-      ...(edge.dynamic && target ? { targetSelector: { types: [target.type], requiredCapabilities: target.capabilities, idPattern: `${target.id}*`, sameTenant: edge.sameTenant } } : {}),
+      ...(edge.dynamic ? { targetSelector: { ...(edge.targetSelector ?? { types: target ? [target.type] : [], requiredCapabilities: target?.capabilities ?? [], idPattern: `${edge.target}*` }), sameTenant: edge.sameTenant } } : {}),
       policy: {
         id: `${edge.id}-policy`,
         version: "1.0.0",
-        mode: edge.mode,
-        allowedPurposes: edge.allowedPurposes,
-        allowedDataClasses: edge.allowedData,
         deniedDataClasses: ["D5", "D8"].filter((item) => !edge.allowedData.includes(item)),
         requireActiveDefinition: true,
         requireDigestPin: true,
@@ -201,10 +213,14 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
         requireAudience: true,
         requireResource: true,
         requireActorBinding: true,
+        decisionTtlSeconds: 30,
+        ...edge.policy,
+        mode: edge.mode,
+        allowedPurposes: edge.allowedPurposes,
+        allowedDataClasses: edge.allowedData,
         maxDelegationDepth: edge.maxDepth,
         externalWriteRequiresApproval: edge.approvalRequired,
         failureMode: edge.failureMode,
-        decisionTtlSeconds: 30,
         ...(edge.maxExportRecords !== undefined ? { maxExportRecords: edge.maxExportRecords } : {}),
         ...(edge.maxExportBytes !== undefined ? { maxExportBytes: edge.maxExportBytes } : {}),
         ...(edge.volumeAction !== undefined ? { volumeAction: edge.volumeAction } : {}),
@@ -212,7 +228,7 @@ export function buildManifestPayload(snapshot: ArchitectureSnapshot, project: Pr
         ...(edge.destructiveWriteAction !== undefined ? { destructiveWriteAction: edge.destructiveWriteAction } : {}),
         ...(edge.undeclaredSideEffectAction !== undefined ? { undeclaredSideEffectAction: edge.undeclaredSideEffectAction } : {}),
       },
-      controls: edge.controls.map((control) => ({ id: control.id, objective: control.objective, timing: control.timing, enforcementPoint: control.point, assurance: control.assurance })),
+      controls: edge.controls.map(controlPayload),
     };
   });
   const manifestZones = zones.map((zone) => ({ id: zone.id, label: zone.label, kind: zone.kind, description: zone.description, bounds: { x: zone.x, y: zone.y, width: zone.width, height: zone.height } }));
@@ -277,12 +293,12 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
         targetZoneId: text(boundary.targetZoneId) ?? "",
         point: (text(boundary.enforcementPoint) as EnforcementPoint) ?? "INPUT_GATEWAY",
         allowedRelationships: stringArray(boundary.allowedRelationships),
-        allowedData: stringArray(boundary.allowedDataClasses),
-        deniedData: stringArray(boundary.deniedDataClasses),
-        mode: (text(boundary.mode) as Mode) ?? "SHADOW",
+        allowedData: stringArray(boundary.allowedDataClasses ?? ["D2", "D3", "D7"]),
+        deniedData: stringArray(boundary.deniedDataClasses ?? ["D5", "D8"]),
+        mode: (text(boundary.mode) as Mode) ?? "ENFORCE",
         failureMode: (text(boundary.failureMode) as TrustBoundaryDefinition["failureMode"]) ?? "FAIL_CLOSED",
-        requireIdentity: boundary.requireIdentity === true,
-        requireTenantBinding: boundary.requireTenantBinding === true,
+        requireIdentity: boundary.requireIdentity !== false,
+        requireTenantBinding: boundary.requireTenantBinding !== false,
         maxPayloadBytes: numberOr(boundary.maxPayloadBytes, 1048576),
         description: text(boundary.description) ?? "",
       };
@@ -303,12 +319,14 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
         capabilities: stringArray(node.capabilities),
         dataAccess: stringArray(node.dataAccess),
         tenantMode: (text(node.tenantMode) as ArchitectureNode["tenantMode"]) ?? "REQUIRED",
-        maxDelegationDepth: numberOr(node.maxDelegationDepth, 0),
+        maxDelegationDepth: numberOr(node.maxDelegationDepth, 1),
+        failureMode: (text(node.failureMode) as ArchitectureNode["failureMode"]) ?? "FAIL_CLOSED",
+        controls: arrayOf(node.controls).map(parseControl),
         trustZone: (text(node.trustZone) as TrustZone) ?? zoneKind[trustZoneId] ?? "INTERNAL",
         trustZoneId,
         ...(text(node.definitionDigest) ? { definitionDigest: text(node.definitionDigest) } : {}),
         allowedDomains: stringArray(node.allowedDomains),
-        ...(Array.isArray(node.sideEffects) ? { sideEffects: stringArray(node.sideEffects) } : {}),
+        sideEffects: stringArray(node.sideEffects),
         ...(isRecord(node.inputSchema) ? { inputSchema: node.inputSchema } : {}),
         ...(isRecord(node.outputSchema) ? { outputSchema: node.outputSchema } : {}),
         ...(isRecord(node.annotations) ? { annotations: node.annotations } : {}),
@@ -330,12 +348,14 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
         relationship: text(edge.relationship) ?? "",
         mode: (text(policy.mode) as Mode) ?? "SHADOW",
         failureMode: (text(policy.failureMode) as ArchitectureEdge["failureMode"]) ?? "FAIL_CLOSED",
-        allowedData: stringArray(policy.allowedDataClasses),
+        policy: { id: text(policy.id) ?? text(edge.id) ?? "architecture-link", deniedDataClasses: ["D5", "D8"], ...policy },
+        ...(targetSelector ? { targetSelector: { types: stringArray(targetSelector.types) as NodeType[], requiredCapabilities: stringArray(targetSelector.requiredCapabilities), idPattern: text(targetSelector.idPattern) ?? "*", sameTenant: targetSelector.sameTenant !== false } } : {}),
+        allowedData: stringArray(policy.allowedDataClasses ?? ["D2", "D3", "D7"]),
         allowedPurposes: stringArray(policy.allowedPurposes),
-        approvalRequired: policy.externalWriteRequiresApproval === true,
+        approvalRequired: policy.externalWriteRequiresApproval !== false,
         dynamic,
         sameTenant: dynamic && targetSelector ? targetSelector.sameTenant !== false : true,
-        maxDepth: numberOr(policy.maxDelegationDepth, 0),
+        maxDepth: numberOr(policy.maxDelegationDepth, 1),
         ...(text(edge.boundaryId) ? { boundaryId: text(edge.boundaryId) } : {}),
         ...(typeof policy.maxExportRecords === "number" ? { maxExportRecords: policy.maxExportRecords } : {}),
         ...(typeof policy.maxExportBytes === "number" ? { maxExportBytes: policy.maxExportBytes } : {}),
@@ -343,16 +363,7 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
         ...(text(policy.secretAction) ? { secretAction: text(policy.secretAction) } : {}),
         ...(text(policy.destructiveWriteAction) ? { destructiveWriteAction: text(policy.destructiveWriteAction) } : {}),
         ...(text(policy.undeclaredSideEffectAction) ? { undeclaredSideEffectAction: text(policy.undeclaredSideEffectAction) } : {}),
-        controls: arrayOf(edge.controls).map((rawControl) => {
-          const control = isRecord(rawControl) ? rawControl : {};
-          return {
-            id: text(control.id) ?? "",
-            objective: (text(control.objective) as Control["objective"]) ?? "PREVENT",
-            timing: (text(control.timing) as Control["timing"]) ?? "PRE_EXECUTION",
-            point: (text(control.enforcementPoint) as EnforcementPoint) ?? "AUDIT_SINK",
-            assurance: (text(control.assurance) as Assurance) ?? "DECLARED",
-          };
-        }),
+        controls: arrayOf(edge.controls).map(parseControl),
       };
     });
 
@@ -363,9 +374,9 @@ export function parseManifestPayload(value: unknown): ManifestImportResult {
       coordinatorActorId: text(orchestrationRaw.coordinatorActorId) ?? "",
       pattern: (text(orchestrationRaw.pattern) as OrchestrationDesign["pattern"]) ?? "HYBRID",
       maxParallelism: numberOr(runPolicy.maxParallelism, 4),
-      maxTasks: numberOr(runPolicy.maxTasks, 50),
-      maxDurationSeconds: numberOr(runPolicy.maxDurationSeconds, 1800),
-      maxMessages: numberOr(runPolicy.maxMessages, 200),
+      maxTasks: numberOr(runPolicy.maxTasks, 100),
+      maxDurationSeconds: numberOr(runPolicy.maxDurationSeconds, 3600),
+      maxMessages: numberOr(runPolicy.maxMessages, 500),
       failFast: runPolicy.failFast !== false,
       tasks: arrayOf(orchestrationRaw.tasks).map((raw) => {
         const task = isRecord(raw) ? raw : {};
@@ -439,4 +450,28 @@ function text(value: unknown): string | undefined {
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && !Number.isNaN(value) ? value : fallback;
+}
+
+function controlPayload(control: Control) {
+  return { id: control.id, objective: control.objective, timing: control.timing, enforcementPoint: control.point, assurance: control.assurance, ...(control.description !== undefined ? { description: control.description } : {}) };
+}
+
+function parseControl(value: unknown): Control {
+  const control = isRecord(value) ? value : {};
+  return {
+    id: text(control.id) ?? "",
+    objective: (text(control.objective) as Control["objective"]) ?? "PREVENT",
+    timing: (text(control.timing) as Control["timing"]) ?? "PRE_EXECUTION",
+    point: (text(control.enforcementPoint) as EnforcementPoint) ?? "AUDIT_SINK",
+    assurance: (text(control.assurance) as Assurance) ?? "DECLARED",
+    ...(typeof control.description === "string" ? { description: control.description } : {}),
+  };
+}
+
+// A complete deterministic workflow: no provider, network, or host credential needed.
+export function localTransformStarter(id: string, field: string): unknown {
+  const schema = {type:"object", properties:{[field]:{type:"string"}}, required:[field], additionalProperties:false};
+  const agent: ArchitectureNode = {id:"coordinator",label:"Coordinator",type:"AGENT",owner:"local",identity:"spiffe://local/coordinator",capabilities:[],tenantMode:"REQUIRED",maxDelegationDepth:1,trustZone:"INTERNAL",trustZoneId:"local",dataAccess:["D3"],sideEffects:[],inputSchema:schema,x:160,y:160};
+  const tool: ArchitectureNode = {...agent,id:"transform",label:"JSON transform",type:"TOOL",sideEffects:["READ"],identity:"spiffe://local/transform",inputSchema:schema,outputSchema:schema,annotations:{"interlock.runtime":{kind:"JSON_TRANSFORM",purpose:"PROCESS",dataClasses:["D3"],arguments:{[field]:{$path:`input.${field}`}},template:{[field]:{$path:`arguments.${field}`}}}},x:450,y:160};
+  return buildManifestPayload({nodes:[agent,tool],zones:[{id:"local",label:"Local workspace",kind:"INTERNAL",description:"Managed local execution",x:70,y:70,width:680,height:350}],boundaries:[],edges:[{id:"transform-call",source:agent.id,target:tool.id,relationshipId:"REL-05",relationship:"INVOKES",mode:"SHADOW",failureMode:"FAIL_CLOSED",allowedData:["D3"],allowedPurposes:["PROCESS"],approvalRequired:false,dynamic:false,sameTenant:true,maxDepth:1,controls:[{id:"tool-gate",objective:"PREVENT",timing:"PRE_EXECUTION",point:"MCP_GATEWAY",assurance:"ENFORCED"},{id:"tool-audit",objective:"EVIDENCE",timing:"POST_EXECUTION",point:"AUDIT_SINK",assurance:"ENFORCED"}]}],orchestration:{...emptyOrchestration,coordinatorActorId:agent.id,pattern:"STATE_GRAPH",tasks:[{id:"transform-task",label:"Transform input",sourceActorId:agent.id,targetActorId:tool.id,transport:"LOCAL",purpose:"PROCESS",dependsOn:[],dataClasses:["D3"],acceptanceCriteria:[`required:${field}`],maxAttempts:1,timeoutSeconds:30,approvalRequired:false,onFailure:"FAIL_WORKFLOW",x:220,y:160}]}},{id,version:"1.0.0"});
 }
