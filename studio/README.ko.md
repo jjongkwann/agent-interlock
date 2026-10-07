@@ -17,6 +17,8 @@ The development server selects the next available port when port 3000 is busy.
 
 ## Verify
 
+먼저 저장소 루트에서 `uv sync --locked --extra jwt`를 실행합니다. Studio의 서명·API 계약 테스트는 루트 `.venv`의 Python 구현을 호출해 Ed25519 서명까지 검증합니다.
+
 ```bash
 npm test
 npm run lint

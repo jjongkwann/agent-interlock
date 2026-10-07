@@ -17,6 +17,8 @@ The development server selects the next available port when port 3000 is busy.
 
 ## Verify
 
+Run `uv sync --locked --extra jwt` at the repository root first. The Studio signing and API contract tests use the root `.venv` to verify the Python implementation, including Ed25519 signatures.
+
 ```bash
 npm test
 npm run lint
