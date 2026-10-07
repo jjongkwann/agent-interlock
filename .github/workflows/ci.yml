@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install psycopg + crypto extras
-        run: pip install "psycopg[binary]" "cryptography>=42,<47"
+        run: pip install "psycopg[binary]" "cryptography>=50,<51"
       - name: Apply migrations + provisioning
         env:
           PGPASSWORD: owner_pw

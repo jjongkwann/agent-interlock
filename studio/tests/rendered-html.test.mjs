@@ -1,34 +1,42 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { computeRuntimeDiff, parseRuntimeTelemetry } from "../app/runtime.ts";
 
 const templateRoot = new URL("../", import.meta.url);
 const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
+async function render(context) {
+  // The generated Worker imports cloudflare:workers and must run in workerd.
+  process.env.WRANGLER_WRITE_LOGS ??= "false";
+  const { unstable_dev } = await import("wrangler");
+  const worker = await unstable_dev(
+    fileURLToPath(new URL("../dist/server/index.js", import.meta.url)),
     {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
+      config: fileURLToPath(new URL("../dist/server/wrangler.json", import.meta.url)),
+      local: true,
+      persist: false,
+      port: 0,
+      inspectorPort: 0,
+      envFiles: [],
+      logLevel: "error",
+      experimental: {
+        disableExperimentalWarning: true,
+        disableDevRegistry: true,
+        forceLocal: true,
+        watch: false,
       },
     },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
   );
+  context.after(() => worker.stop());
+  return worker.fetch("http://localhost/", {
+    headers: { accept: "text/html" },
+  });
 }
 
-test("server-renders the Agent Interlock Studio", async () => {
-  const response = await render();
+test("server-renders the Agent Interlock Studio", async (context) => {
+  const response = await render(context);
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 

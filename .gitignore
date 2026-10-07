@@ -13,3 +13,18 @@ build/
 *.key
 .DS_Store
 studio/tsconfig.tsbuildinfo
+
+!src/agent_interlock/migrations/postgresql/????_*.sql
+
+.claude/
+
+CLAUDE.md
+AGENTS.md
+
+# Local verification output and runtime credentials/state
+/artifacts/
+operator.token
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

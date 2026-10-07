@@ -14,7 +14,7 @@ dependencies = []
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1,<4"]
-jwt = ["cryptography>=42,<47"]
+jwt = ["cryptography>=50,<51"]
 anthropic = ["anthropic>=1.4,<2"]
 
 [project.scripts]
