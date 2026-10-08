@@ -96,7 +96,7 @@ InterlockGraph  Design, execution, and attack-path graphs
 
 ## Documentation
 
-- [External-effect recovery (Korean)](docs/effect-recovery.ko.md): receipt reconciliation, fenced non-execution, approval-preserving resume, and a real todayPlanner fault demo
+- [External-effect recovery (Korean)](docs/effect-recovery.ko.md): receipt reconciliation, fenced non-execution, and approval-preserving resume
 - [Model tool-use evaluation (Korean)](docs/model-evaluation.ko.md): independent selection, argument, order, approval, and task-success scores
 - [Provider operations (Korean)](docs/provider-operations.ko.md): reviewed retries/failover, policy preservation, latency, and usage
 

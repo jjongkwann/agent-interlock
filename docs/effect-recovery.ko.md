@@ -77,16 +77,10 @@ def resolver(run, task_id, checkpoint):
 ```sh
 uv run pytest tests/test_effect_recovery.py tests/test_distributed_failure.py \
   tests/test_distributed_model.py tests/test_provider_policy.py
-PYTHONPATH=src python -m examples.todayplanner.run \
-  --todayplanner ../todayPlanner --evidence-dir /tmp/interlock-planner-evidence
 ```
 
 분산 검사는 실제 worker subprocess를 외부 POST 직후 종료한다. coordinator를 재시작해도 두 번째
 worker가 재실행하지 않는지, 이전 fence가 거절되는지, 인증된 결과 조회 후 쓰기 없이 완료하는지 확인한다.
 잘못된 영수증·문자열 fencing 값·다른 tenant·취소·동시 갱신·병렬 checkpoint·출력 격리도 검사한다.
-
-[todayPlanner 예제](../examples/todayplanner/README.md)는 실제 로컬 Express/OAuth/SQLite를 사용한다.
-저장 후 응답 유실과 저장 전 중단을 주입하며 승인 대기, DB 재개, 영수증 확인, 최종 일정 재조회를
-실행한다. 각 승인된 변경의 revision 증가는 정확히 한 번이다. 운영 배포·모바일·알림 검증은 포함하지 않는다.
 
 [실제 모델 평가](model-evaluation.ko.md)와 [provider 운영 정책](provider-operations.ko.md)은 별도 검증 축이다.
