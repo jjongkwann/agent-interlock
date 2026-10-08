@@ -96,6 +96,10 @@ InterlockGraph  설계·실행·공격 경로 그래프
 
 ## 문서
 
+- [외부 실행 복구](docs/effect-recovery.ko.md): 영수증 확인, 미실행 확정, 승인 보존 재개와 todayPlanner 장애 검증
+- [모델 도구 사용 평가](docs/model-evaluation.ko.md): 선택·인수·순서·승인 판단·업무 성공의 독립 평가
+- [Provider 운영 정책](docs/provider-operations.ko.md): 오류별 재시도·전환·차단과 호출 지연·사용량
+
 - [`docs/00-document-map.md`](docs/00-document-map.ko.md): 문서별 책임, 권장 읽기 순서, ID와 변경 원칙
 - [`docs/01-project-plan.md`](docs/01-project-plan.ko.md): 이벤트 DB, 탐지·차단 플랫폼, PostgreSQL DDL, 구현 로드맵
 - [`docs/02-developer-framework-design.md`](docs/02-developer-framework-design.ko.md): SDK, Actor Wrapper, LinkPolicy, Graph 중심 개발자 경험

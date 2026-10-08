@@ -18,8 +18,9 @@ from agent_interlock.architecture import (
     SecurityObjective,
 )
 from agent_interlock.canonical import canonical_digest
+from agent_interlock.effects import checkpoint_run
 from agent_interlock.ledger import Event, build_event, workflow_evidence_scope
-from agent_interlock.orchestration import OrchestrationEngine, WorkflowRunState
+from agent_interlock.orchestration import OrchestrationEngine, WorkflowRunState, _merge_run
 from agent_interlock.remote_worker import (
     CoordinatorClient,
     RemoteLedger,
@@ -63,9 +64,12 @@ class Coordinator:
         assert body["sessionId"] == self.owner and body["fence"] == 1 and body["runId"] == self.run.id
         if operation == "save":
             assert body["revision"] == self.revision
-            self.run = _decode(json.dumps(body["run"]))
+            self.run = _merge_run(self.run, _decode(json.dumps(body["run"])))
             self.revision += 1
-        if operation in {"save", "get"}:
+        if operation == "checkpoint":
+            self.run = checkpoint_run(self.run, body["taskId"], body["checkpoint"], body["expected"])
+            self.revision += 1
+        if operation in {"save", "get", "checkpoint"}:
             return {"run": asdict(self.run), "revision": self.revision}
         if operation == "append":
             self.events.append(Event(**body["event"]))

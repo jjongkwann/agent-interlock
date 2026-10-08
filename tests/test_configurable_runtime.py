@@ -215,6 +215,21 @@ class ConfigurableRuntimeTests(unittest.TestCase):
         status = runtime_status(replace(value, nodes=(source, tool, provider, other)), ("fixture",))
         self.assertIn("selected tool", " ".join(status["tasks"][0]["problems"]))
 
+    @unittest.skipUnless(importlib.util.find_spec("anthropic"), "Anthropic extra is required for model readiness")
+    def test_host_model_readiness_checks_intended_enforced_deployment(self):
+        from agent_interlock.control_plane import ControlPlaneAPI
+        from agent_interlock.models import PolicyMode
+
+        value = graph(model=True)
+        reviewed = replace(value, edges=tuple(replace(edge, policy=replace(edge.policy, mode=PolicyMode.SHADOW))
+                                              for edge in value.edges))
+        host = object.__new__(ControlPlaneAPI)
+        host.run_service = None
+        host.credential_refs = ("fixture",)
+        host.configurable_runtime = True
+        self.assertFalse(runtime_status(reviewed, host.credential_refs)["ready"])
+        self.assertTrue(host._runtime_readiness(reviewed)["ready"])
+
     def test_non_idempotent_retries_are_rejected_and_timeout_executes_once(self):
         for value in (graph(model=True), graph(http=True)):
             task = replace(value.orchestration.tasks[0], max_attempts=2)

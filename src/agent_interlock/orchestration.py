@@ -148,6 +148,7 @@ class TaskExecutionInput:
     dependency_outputs: Mapping[str, Mapping[str, Any]]
     attempt: int
     deadline_epoch: float
+    run_generation: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +259,7 @@ class WorkflowTaskRun:
     goal_met: bool | None = None
     security_met: bool | None = None
     pending_call: Mapping[str, Any] | None = None
+    effect_checkpoint: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -274,6 +276,7 @@ class WorkflowTaskRun:
             "goalMet": self.goal_met,
             "securityMet": self.security_met,
             "pendingCall": dict(self.pending_call) if self.pending_call else None,
+            "effectCheckpoint": dict(self.effect_checkpoint) if self.effect_checkpoint else None,
         }
 
 
@@ -328,6 +331,11 @@ class WorkflowRunStore(Protocol):
 
     def save(self, run: WorkflowRun) -> None: ...
 
+    def checkpoint_effect(self, *, tenant_id: str, run_id: str, task_id: str,
+                          checkpoint: Mapping[str, Any], expected: Mapping[str, Any] | None) -> None: ...
+
+    def recover_effects(self, prior: WorkflowRun, recovered: WorkflowRun) -> None: ...
+
     def get(self, *, tenant_id: str, run_id: str) -> WorkflowRun: ...
 
     def list(self, *, tenant_id: str | None = None) -> tuple[WorkflowRun, ...]: ...
@@ -369,6 +377,19 @@ class InMemoryWorkflowRunStore:
                 raise OrchestrationError("ORCH-RUN-NOT-FOUND", "workflow run is not visible to this tenant")
             return run
 
+    def checkpoint_effect(self, *, tenant_id, run_id, task_id, checkpoint, expected):
+        from .effects import checkpoint_run
+
+        with self._lock:
+            prior = self.get(tenant_id=tenant_id, run_id=run_id)
+            self._runs[(tenant_id, run_id)] = checkpoint_run(prior, task_id, checkpoint, expected)
+
+    def recover_effects(self, prior, recovered):
+        with self._lock:
+            if self.get(tenant_id=prior.tenant_id, run_id=prior.id) != prior:
+                raise OrchestrationError("RUN-RECOVERY-CONFLICT", "run changed during reconciliation")
+            self._runs[(prior.tenant_id, prior.id)] = recovered
+
     def list(self, *, tenant_id: str | None = None) -> tuple[WorkflowRun, ...]:
         with self._lock:
             return tuple(
@@ -409,7 +430,11 @@ def _merge_run(prior: WorkflowRun, run: WorkflowRun) -> WorkflowRun:
         return prior
     if prior.bundle_digest != run.bundle_digest:
         raise OrchestrationError("ORCH-RUN-BUNDLE-MISMATCH", "a run's deployment binding is immutable")
-    return replace(run, approvals={**run.approvals, **prior.approvals})
+    # Adapter checkpoints are persisted during a wave, before its returned task snapshot.
+    # Keep those durable records when the engine saves the older wave snapshot.
+    tasks = {key: replace(task, effect_checkpoint=prior.tasks.get(key, task).effect_checkpoint)
+             for key, task in run.tasks.items()}
+    return replace(run, tasks=tasks, approvals={**run.approvals, **prior.approvals})
 
 
 @dataclass(slots=True)
@@ -556,6 +581,8 @@ class OrchestrationEngine:
             if time.monotonic() - started > policy.max_duration_seconds:
                 return self._fail_run(run, "ORCH-RUN-DEADLINE")
             waiting = [task for task in run.tasks.values() if task.state == WorkflowTaskState.WAITING_APPROVAL]
+            if any(task.error_code == "RUN-EFFECT-UNCERTAIN" for task in run.tasks.values()):
+                return self._fail_run(run, "RUN-EFFECT-UNCERTAIN")
             if waiting:
                 paused = replace(run, state=WorkflowRunState.WAITING_APPROVAL, updated_at=_now())
                 self.run_store.save(paused)
@@ -637,6 +664,7 @@ class OrchestrationEngine:
         if latest.state == WorkflowRunState.CANCELED:
             return latest
         self.run_store.save(updated)
+        updated = self.run_store.get(tenant_id=run.tenant_id, run_id=run.id)
         for task_id in results:
             self._append_task_event(updated, results[task_id])
         return updated
@@ -678,6 +706,7 @@ class OrchestrationEngine:
                             dependency_outputs=dependency_outputs,
                             attempt=attempt,
                             deadline_epoch=deadline,
+                            run_generation=run.created_at,
                         )
                     )
                 if time.time() > deadline:
@@ -708,6 +737,15 @@ class OrchestrationEngine:
                 )
             except Exception as error:  # noqa: BLE001 - retries contain adapter failures
                 last_error = error
+                latest_task = self.run_store.get(tenant_id=run.tenant_id, run_id=run.id).tasks[task.id]
+                # A task may have committed a write before any later failure, including a
+                # model timeout or acceptance failure. Never replay the whole task then.
+                if (latest_task.effect_checkpoint is not None
+                        or getattr(error, "reason_code", "") == "RUN-EFFECT-UNCERTAIN"):
+                    return self._failed_task(
+                        latest_task, task, "RUN-EFFECT-UNCERTAIN", "external effect requires reconciliation",
+                        attempts=attempt, executed=executed, goal_met=goal_met,
+                    )
         reason_code = getattr(last_error, "reason_code", "ORCH-TASK-EXECUTION-FAILED")
         message = str(last_error) if last_error else "task execution failed"
         return self._failed_task(
@@ -751,9 +789,11 @@ class OrchestrationEngine:
         targets = {task.target_actor_id}
         source = next((node for node in self.architecture.graph.nodes if node.id == task.source_actor_id), None)
         runtime = source.annotations.get("interlock.runtime", {}) if source else {}
-        if runtime.get("kind") == "ANTHROPIC":
+        from .provider_policy import MODEL_KINDS, provider_candidates
+
+        if runtime.get("kind") in MODEL_KINDS:
             targets.update(runtime.get("toolActorIds", [task.target_actor_id]))
-            targets.add(runtime.get("providerActorId"))
+            targets.update(candidate["providerActorId"] for candidate in provider_candidates(runtime))
 
         events = (
             event.to_dict() for event in self.ledger.trace(run.tenant_id, run.trace_id)
@@ -785,6 +825,8 @@ class OrchestrationEngine:
         return True
 
     def _fail_run(self, run: WorkflowRun, reason_code: str) -> WorkflowRun:
+        if any(task.error_code == "RUN-EFFECT-UNCERTAIN" for task in run.tasks.values()):
+            reason_code = "RUN-EFFECT-UNCERTAIN"
         failed = replace(run, state=WorkflowRunState.FAILED, updated_at=_now(), error_code=reason_code)
         self.run_store.save(failed)
         self._append_run_event("WORKFLOW_RUN_FAILED", failed)

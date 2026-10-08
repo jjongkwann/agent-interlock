@@ -10,12 +10,14 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from urllib.request import urlopen
 
 import test_distributed_host
 from test_candidate_compare import graph
 from test_run_control import CRYPTO_AVAILABLE
 
 from agent_interlock.configurable_runtime import RUNTIME_KEY
+from agent_interlock.effects import EffectResolution, EffectStatus
 from agent_interlock.local_host import serve_local
 from agent_interlock.models import SideEffect
 
@@ -33,7 +35,7 @@ def call(operation, body):
     return result
 client.call = call
 def request(endpoint, method, body, headers, **kwargs):
-    outgoing = Request(sys.argv[3], data=body, method='POST', headers={'Content-Type':'application/json'})
+    outgoing = Request(sys.argv[3], data=body, method='POST', headers=dict(headers))
     with urlopen(outgoing, timeout=3) as response:
         content = response.read()
     if sys.argv[4] == 'crash':
@@ -68,11 +70,21 @@ class DistributedFailureTests(unittest.TestCase):
 
     def test_process_dies_after_post_is_never_reassigned_even_after_restart(self):
         effects = []
+        receipts = {}
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 effects.append(json.loads(body))
+                receipts[self.headers["Idempotency-Key"]] = json.loads(body)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                body = json.dumps(receipts.get(self.path.rsplit("/", 1)[-1])).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -96,6 +108,12 @@ class DistributedFailureTests(unittest.TestCase):
         architecture = replace(architecture, nodes=(architecture.nodes[0], target))
         with patch("test_distributed_host.graph", return_value=architecture):
             self.promote(approval=True)
+        def resolve(_run, _task, checkpoint):
+            with urlopen(f"{fixture_url}/{checkpoint['idempotencyKey']}", timeout=3) as response:
+                receipt = json.load(response)
+            return EffectResolution(EffectStatus.COMPLETED, checkpoint["idempotencyKey"],
+                                    checkpoint["invocationDigest"], "fixture HTTP receipt", result=receipt)
+
         with serve_local(self.path, port=0, dispatch="remote") as server:
             status, _, created = self.request(server, "POST", "/v1/runs", token=self.token,
                 body={"input":{"message":"commit once"}, "runId":"ambiguous"})
@@ -120,8 +138,24 @@ class DistributedFailureTests(unittest.TestCase):
                     token=self.tokens["INTERLOCK_DIST_TEST_1"], body={**stale, **extra})
                 self.assertEqual(status, 409, body)
                 self.assertEqual(body["error"]["code"], "WORKER-LEASE-LOST")
-        with serve_local(self.path, port=0, dispatch="remote") as server:
+        with serve_local(self.path, port=0, dispatch="remote", effect_resolver=resolve) as server:
             persisted = self.request(server, "GET", "/v1/runs/ambiguous", token=self.token)[2]["run"]
             self.assertEqual((persisted["state"], persisted["errorCode"]), ("FAILED", "RUN-EFFECT-UNCERTAIN"))
             self.assertIsNone(self.process(server, fixture_url, crash=False, worker_number=2))
+            # A caller cannot submit its own 'completed' verdict or reconcile as a worker.
+            status, _, _ = self.request(server, "POST", "/v1/runs/ambiguous/reconcile",
+                token=self.token, body={"status": "COMPLETED"})
+            self.assertEqual(status, 400)
+            status, _, _ = self.request(server, "POST", "/v1/runs/ambiguous/reconcile",
+                token=self.tokens["INTERLOCK_DIST_TEST_2"], body={})
+            self.assertEqual(status, 403)
+            status, _, resolved = self.request(server, "POST", "/v1/runs/ambiguous/reconcile",
+                token=self.token, body={})
+            self.assertEqual(status, 200, resolved)
+            self.assertEqual(resolved["effects"]["transform"]["status"], "COMPLETED")
+            self.request(server, "POST", "/v1/runs/ambiguous/resume", token=self.token, body={})
+            self.assertIsNotNone(self.process(server, fixture_url, crash=False, worker_number=2))
+            completed = self.request(server, "GET", "/v1/runs/ambiguous", token=self.token)[2]["run"]
+            self.assertEqual(completed["state"], "COMPLETED", completed)
+            self.assertEqual(completed["tasks"]["transform"]["output"], {"message": "commit once"})
         self.assertEqual(effects, [{"message":"commit once"}])

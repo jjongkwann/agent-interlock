@@ -43,6 +43,7 @@ from .studio_deploy import (
     TrustedApprovalKey,
     _write_json,
     compile_review_bundle,
+    deployed_architecture,
     verify_deployment_approval,
 )
 
@@ -374,6 +375,15 @@ class ControlPlaneAPI:
                 run = service.resume(tenant_id=principal.tenant_id, run_id=segments[2])
                 self._send_json(handler, 202, {"run": run})
                 return
+            if (handler.command == "POST" and len(segments) == 4
+                    and segments[:2] == ["v1", "runs"] and segments[3] == "reconcile"):
+                self._require_scope(principal, SCOPE_RUN_APPROVE)
+                service = self._require_run_service()
+                self._require_run_project(principal, segments[2], "deploy")
+                self._read_empty_json(handler)
+                result = service.reconcile(tenant_id=principal.tenant_id, run_id=segments[2])
+                self._send_json(handler, 200, result)
+                return
             if (
                 handler.command == "POST"
                 and len(segments) == 4
@@ -588,6 +598,9 @@ class ControlPlaneAPI:
         ]
 
     def _runtime_readiness(self, graph: ArchitectureGraph) -> dict[str, Any]:
+        # Reviewed bundles are authored in SHADOW; this host only runs promoted
+        # ENFORCE deployments, so readiness must inspect the intended deployed mode.
+        graph = deployed_architecture({"architecture": graph.to_manifest()}, "ENFORCE")
         if self.run_service is not None and self.run_service.dispatcher is not None:
             return {**self.run_service.dispatcher.readiness(graph), "hostConfigured": True}
         result = runtime_status(graph, self.credential_refs)

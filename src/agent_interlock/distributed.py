@@ -14,13 +14,14 @@ import time
 from collections.abc import Mapping
 from dataclasses import asdict, replace
 
-from .architecture import ArchitectureGraph
 from .canonical import canonical_digest
 from .configurable_runtime import RUNTIME_KEY, configured_definition, runtime_status
 from .ledger import Event, verify_event
 from .ledger_http import LedgerAPIError
 from .models import DataSource, Environment
 from .orchestration import _RUN_TERMINAL, WorkflowRunState, WorkflowTaskState, _now
+from .provider_policy import MODEL_KINDS, provider_candidates
+from .studio_deploy import deployed_architecture
 from .workflow_store import SQLiteWorkflowRunStore, _decode
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
@@ -38,6 +39,7 @@ _EVENTS = frozenset(
         "INTERACTION_COMPLETED",
         "DATA_FLOW_OBSERVED",
         "SECURITY_OUTCOME_SET",
+        "PROVIDER_CALL_RECORDED",
     }
 )
 
@@ -85,7 +87,7 @@ class DistributedCoordinator:
 
     def _bundle(self, run):
         bundle = self.deployment_store.bundle(run.bundle_digest)
-        graph = ArchitectureGraph.from_dict(bundle.body["architecture"])
+        graph = deployed_architecture(bundle.body, "ENFORCE")
         if graph.id != bundle.architecture_id:
             raise LedgerAPIError(409, "WORKER-BUNDLE-MISMATCH", "run bundle project identity is invalid")
         return bundle, graph
@@ -101,7 +103,7 @@ class DistributedCoordinator:
             tasks={
                 key: replace(task, state=WorkflowTaskState.FAILED, error_code="RUN-EFFECT-UNCERTAIN", ended_at=_now())
                 if task.state
-                in {WorkflowTaskState.PENDING, WorkflowTaskState.RUNNING, WorkflowTaskState.WAITING_APPROVAL}
+                == WorkflowTaskState.RUNNING
                 else task
                 for key, task in run.tasks.items()
             },
@@ -253,8 +255,9 @@ class DistributedCoordinator:
             connection.row_factory = sqlite3.Row
             if action == "claim":
                 return self._claim(connection, principal, value)
-            extra = {"save": {"revision", "run"}, "append": {"event"}}.get(action, set())
-            if action not in {"start", "heartbeat", "get", "save", "append", "trace", "finish"}:
+            extra = {"save": {"revision", "run"}, "append": {"event"},
+                     "checkpoint": {"taskId", "checkpoint", "expected"}}.get(action, set())
+            if action not in {"start", "heartbeat", "get", "save", "append", "trace", "finish", "checkpoint"}:
                 raise LedgerAPIError(404, "WORKER-ROUTE-NOT-FOUND", "worker action does not exist")
             if (
                 set(value) != {"runId", "sessionId", "fence"} | extra
@@ -300,6 +303,25 @@ class DistributedCoordinator:
                 raise LedgerAPIError(409, "WORKER-START-REQUIRED", "durable start is required before execution")
             if action == "save":
                 return self._save(connection, run, value)
+            if action == "checkpoint":
+                from .effects import checkpoint_run
+
+                task_id, checkpoint = value["taskId"], value["checkpoint"]
+                if not isinstance(task_id, str) or task_id not in run.tasks or not isinstance(checkpoint, dict):
+                    raise LedgerAPIError(400, "WORKER-CHECKPOINT-INVALID", "checkpoint task is invalid")
+                spec = next(task for task in graph.orchestration.tasks if task.id == task_id)
+                invocation = checkpoint.get("invocation", {})
+                runtime = graph.node_map[spec.source_actor_id].annotations.get(RUNTIME_KEY, {})
+                targets = runtime.get("toolActorIds", [spec.target_actor_id])
+                if (not isinstance(invocation, dict) or invocation.get("sourceActorId") != spec.source_actor_id
+                        or invocation.get("targetActorId") not in targets):
+                    raise LedgerAPIError(403, "WORKER-CHECKPOINT-FORBIDDEN", "effect is outside the task scope")
+                try:
+                    updated = checkpoint_run(run, task_id, checkpoint, value["expected"])
+                except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                    raise LedgerAPIError(409, "WORKER-CHECKPOINT-INVALID", "effect checkpoint rejected") from error
+                self.run_store._write(connection, updated)
+                return self._snapshot(connection, updated)
             if action == "append":
                 return {"event": self._append(run, graph, value["event"]).to_dict()}
             if action == "trace":
@@ -429,6 +451,10 @@ class DistributedCoordinator:
         specs = {task.id: task for task in graph.orchestration.tasks}
         for key, task in run.tasks.items():
             old = prior.tasks[key]
+            if task.effect_checkpoint != old.effect_checkpoint:
+                # Only the atomic checkpoint operation may advance effect evidence.
+                task = replace(task, effect_checkpoint=old.effect_checkpoint)
+                run = replace(run, tasks={**run.tasks, key: task})
             if (
                 type(task.attempts) is not int
                 or not 0 <= task.attempts <= specs[key].max_attempts
@@ -483,15 +509,15 @@ class DistributedCoordinator:
             runtime = source.annotations.get(RUNTIME_KEY, {})
             targets = set(runtime.get("toolActorIds", [task.target_actor_id]))
             targets.add(task.target_actor_id)
-            if runtime.get("providerActorId"):
-                targets.add(runtime["providerActorId"])
+            if runtime.get("kind") in MODEL_KINDS:
+                targets.update(candidate["providerActorId"] for candidate in provider_candidates(runtime))
             actor_pair = event.source_actor_id == task.source_actor_id and event.target_actor_id in targets
             definition_pair = False
             if event.event_type == "CONTROL_EVALUATED" and "toolDefinition" in payload:
                 for target in targets:
                     node = graph.node_map.get(target)
                     config = node.annotations.get(RUNTIME_KEY) if node else None
-                    if not config or config.get("kind") == "ANTHROPIC":
+                    if not config or config.get("kind") in MODEL_KINDS:
                         continue
                     definition = configured_definition(node)
                     definition_pair |= (

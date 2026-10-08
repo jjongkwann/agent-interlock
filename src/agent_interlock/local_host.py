@@ -180,7 +180,7 @@ class _LocalAPI(LedgerHTTPAPI):
 @contextmanager
 def serve_local(
     data_dir: str | Path, *, port: int = 8787, origins: Sequence[str] = (), postgres_dsn_env: str | None = None,
-    dispatch: str = "local", lease_seconds: float = 30,
+    dispatch: str = "local", lease_seconds: float = 30, effect_resolver=None,
 ):
     """Start one loopback server and close dispatch within ten seconds on exit."""
     from .configurable_runtime import configurable_adapter_provider
@@ -243,7 +243,7 @@ def serve_local(
                                                 lease_seconds=lease_seconds)
         service = RunControlService(
             store, configurable_adapter_provider(ledger, run_store, credentials), ledger=ledger, run_store=run_store,
-            dispatcher=dispatcher,
+            dispatcher=dispatcher, effect_resolver=effect_resolver,
         )
         stack.callback(service.close, timeout=10)
         control = ControlPlaneAPI(

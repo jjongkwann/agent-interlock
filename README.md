@@ -96,6 +96,10 @@ InterlockGraph  Design, execution, and attack-path graphs
 
 ## Documentation
 
+- [External-effect recovery (Korean)](docs/effect-recovery.ko.md): receipt reconciliation, fenced non-execution, approval-preserving resume, and a real todayPlanner fault demo
+- [Model tool-use evaluation (Korean)](docs/model-evaluation.ko.md): independent selection, argument, order, approval, and task-success scores
+- [Provider operations (Korean)](docs/provider-operations.ko.md): reviewed retries/failover, policy preservation, latency, and usage
+
 Design docs are English-first; each has a Korean original alongside it (`*.ko.md`).
 
 - [`docs/00-document-map.md`](docs/00-document-map.md): Doc responsibilities, recommended reading order, IDs, change rules

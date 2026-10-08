@@ -271,7 +271,7 @@ class DistributedTests(unittest.TestCase):
         migrated = SQLiteWorkflowRunStore(legacy)
         self.assertEqual(migrated.get(tenant_id="tenant-a", run_id=run.id), run)
         with sqlite3.connect(legacy) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
             self.assertEqual(connection.execute("SELECT revision FROM workflow_runs").fetchone()[0], 0)
 
 

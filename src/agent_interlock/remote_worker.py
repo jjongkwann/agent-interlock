@@ -64,7 +64,7 @@ class CoordinatorClient:
         self.opener = build_opener(ProxyHandler({}), _NoRedirect())
 
     def call(self, operation: str, body: Mapping) -> dict:
-        if operation not in {"claim", "start", "heartbeat", "get", "save", "append", "trace", "finish"}:
+        if operation not in {"claim", "start", "heartbeat", "get", "save", "append", "trace", "finish", "checkpoint"}:
             raise ValueError("unsupported worker operation")
         data = json.dumps(body, allow_nan=False, separators=(",", ":")).encode()
         if len(data) > MAX_RESPONSE_BYTES:
@@ -197,6 +197,11 @@ class RemoteRunStore:
                         return
                     run = replace(run, approvals=latest.approvals)
 
+    def checkpoint_effect(self, *, tenant_id, run_id, task_id, checkpoint, expected):
+        with self.lock:
+            self._scope(tenant_id, run_id)
+            self._read(self.lease.call("checkpoint", taskId=task_id, checkpoint=checkpoint, expected=expected))
+
 
 class RemoteLedger:
     def __init__(self, lease, trace_id):
@@ -232,13 +237,14 @@ class RemoteLedger:
 
 class RemoteWorker:
     def __init__(self, client, *, target_id: str, tenant_id: str, credentials: Mapping[str, str],
-                 http_request=_request, anthropic_client_factory=_anthropic_client):
+                 http_request=_request, anthropic_client_factory=_anthropic_client, model_http_request=_request):
         if not target_id or not tenant_id:
             raise ValueError("target and tenant pins are required")
         self.client, self.target_id, self.tenant_id = client, target_id, tenant_id
         self.credentials = dict(credentials)
         self.session_id = str(uuid.uuid4())
         self.http_request, self.anthropic_client_factory = http_request, anthropic_client_factory
+        self.model_http_request = model_http_request
 
     def run_once(self):
         request_started = time.monotonic()
@@ -269,6 +275,10 @@ class RemoteWorker:
             check_run()
             return self.http_request(*args, **kwargs)
 
+        def model_http_request(*args, **kwargs):
+            check_run()
+            return self.model_http_request(*args, **kwargs)
+
         def model_client(*args, **kwargs):
             client = self.anthropic_client_factory(*args, **kwargs)
 
@@ -280,7 +290,8 @@ class RemoteWorker:
                 tool_runner=tool_runner)))
 
         adapters = configurable_adapter_provider(ledger, store, self.credentials,
-            http_request=http_request, anthropic_client_factory=model_client)(compiled)
+            http_request=http_request, anthropic_client_factory=model_client,
+            model_http_request=model_http_request)(compiled)
 
         activity = threading.Condition()
         active_calls = 0

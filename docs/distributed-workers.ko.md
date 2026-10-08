@@ -71,6 +71,8 @@ uv run interlock worker \
 
 worker는 engine과 adapter를 실행하기 전에 중앙 서버에 시작을 영속 기록한다. 시작 전 lease가 만료된 작업은 다시 배정할 수 있다. 시작 후 lease가 만료되면 run은 `FAILED`와 `RUN-EFFECT-UNCERTAIN`으로 남고 자동으로 다시 실행하지 않는다. 이 규칙은 JSON 작업에도 적용된다. 외부 쓰기뿐 아니라 모델 요청이나 HTTP GET도 이미 전송되었을 수 있기 때문이다.
 
+영속 effect checkpoint와 신뢰할 수 있는 외부 영수증 resolver가 있으면 [외부 실행 복구](effect-recovery.ko.md)에 따라 `COMPLETED / NOT_EXECUTED / UNKNOWN`을 확인할 수 있다. `POST /v1/runs/{runId}/reconcile`은 기존 승인과 완료한 task를 보존하며, 확인 불가이면 실패 상태를 유지한다.
+
 정상적인 호출 승인 대기는 다르게 처리한다. worker가 정확한 pending call과 model continuation을 저장하고 마지막 event를 전송한 뒤 lease를 해제한다. 사람이 승인하면 다음 worker는 저장된 인수·도구·definition digest·continuation을 이어서 사용한다. 앞선 모델 요청이나 완료한 도구를 다시 호출해 문맥을 재구성하지 않는다. 승인과 finish가 교차하더라도 승인된 대기 작업이 큐에서 사라지지 않도록 처리한다.
 
 취소와 lease 상실은 후속 작업 시작 및 중앙 저장을 막는다. 이미 외부 서버로 보낸 요청을 취소하거나 되돌렸다는 뜻은 아니다. 응답을 잃은 run은 외부 서비스의 실제 상태를 확인한 뒤 운영자가 처리해야 한다. 자동 재시도나 정확히 한 번의 외부 실행을 보장하지 않는다.

@@ -48,6 +48,7 @@ _EVENT_TYPES = frozenset(
         "WORKFLOW_RUN_CANCELED",
         "WORKFLOW_TASK_STATUS_UPDATED",
         "WORKFLOW_TASK_APPROVED",
+        "PROVIDER_CALL_RECORDED",
     }
 )
 _SEVERITIES = frozenset({"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"})

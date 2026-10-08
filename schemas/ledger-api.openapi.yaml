@@ -392,6 +392,7 @@ components:
         - WORKFLOW_RUN_CANCELED
         - WORKFLOW_TASK_STATUS_UPDATED
         - WORKFLOW_TASK_APPROVED
+        - PROVIDER_CALL_RECORDED
     Severity:
       type: string
       enum: [INFO, LOW, MEDIUM, HIGH, CRITICAL]

@@ -76,13 +76,14 @@ class MigrationRunnerTests(unittest.TestCase):
 
     def test_workflow_event_vocabulary_matches_database_and_http_contracts(self):
         from agent_interlock.ledger_http import _EVENT_TYPES
-        migration = (ROOT / "src/agent_interlock/migrations/postgresql/0005_workflow_events.sql").read_text()
+        migration = (ROOT / "src/agent_interlock/migrations/postgresql/0006_provider_events.sql").read_text()
         envelope = json.loads((ROOT / "schemas/event-envelope.schema.json").read_text())
         schema_types = set(envelope["properties"]["event_type"]["enum"])
         sql_types = set(re.findall(r"'([A-Z_]+)'", migration))
         self.assertEqual(sql_types, _EVENT_TYPES)
         self.assertEqual(sql_types, schema_types)
         self.assertIn("WORKFLOW_TASK_APPROVED", sql_types)
+        self.assertIn("PROVIDER_CALL_RECORDED", sql_types)
 
     def test_discover_orders_and_ignores_legacy_names(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -67,6 +67,7 @@ class RunControlService:
         acceptance_evaluator: AcceptanceEvaluator | None = None,
         max_runs: int = 1024,
         dispatcher: Any = None,
+        effect_resolver=None,
     ) -> None:
         if max_runs < 1:
             raise ValueError("max_runs must be positive")
@@ -77,6 +78,7 @@ class RunControlService:
         self.acceptance_evaluator = acceptance_evaluator
         self.max_runs = max_runs
         self.dispatcher = dispatcher
+        self.effect_resolver = effect_resolver
         self._engines: dict[str, OrchestrationEngine] = {}
         self._workers: dict[tuple[str, str], threading.Thread] = {}
         self._pending_resumes: set[tuple[str, str]] = set()
@@ -199,6 +201,31 @@ class RunControlService:
                 return self._public_run(run, binding.bundle_digest)
             self._resume_async_locked(tenant_id, run_id)
             return self._public_run(run, binding.bundle_digest)
+
+    def reconcile(self, *, tenant_id: str, run_id: str) -> dict[str, Any]:
+        """Query trusted external evidence; recovery does not dispatch or grant approval."""
+        from .effects import EffectResolution, EffectStatus, reconcile_effects
+
+        with self._lock:
+            if self.dispatcher is not None:
+                self.dispatcher.recover()
+            worker = self._workers.get((tenant_id, run_id))
+            if worker is not None and worker.is_alive():
+                raise RunControlError(409, "RUN-RECOVERY-WORKER-ACTIVE", "execution must stop before reconciliation")
+            binding = self._binding(tenant_id, run_id)
+            run = self._get_run(tenant_id, run_id)
+
+            def unknown(_run, _task, checkpoint):
+                return EffectResolution(EffectStatus.UNKNOWN, checkpoint["idempotencyKey"],
+                                        checkpoint["invocationDigest"], "resolver is not configured")
+
+            try:
+                recovered, reports = reconcile_effects(
+                    self.run_store, self.ledger, run=run, resolver=self.effect_resolver or unknown,
+                )
+            except OrchestrationError as error:
+                raise RunControlError(409, error.reason_code, str(error)) from error
+            return {"run": self._public_run(recovered, binding.bundle_digest), "effects": reports}
 
     def approve(
         self, *, tenant_id: str, run_id: str, task_id: str, approved_by: str, request_id: str | None = None

@@ -52,7 +52,7 @@ class SQLiteWorkflowRunStore:
         self._lock = threading.RLock()
         with self._transaction() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1, 2}:
+            if version not in {0, 1, 2, 3}:
                 raise ValueError(f"unsupported workflow store schema version: {version}")
             connection.execute("""CREATE TABLE IF NOT EXISTS workflow_runs (
                 tenant_id TEXT NOT NULL, run_id TEXT NOT NULL, state TEXT NOT NULL,
@@ -66,7 +66,15 @@ class SQLiteWorkflowRunStore:
                 started INTEGER NOT NULL DEFAULT 0, queued INTEGER NOT NULL DEFAULT 0,
                 wakeup INTEGER NOT NULL DEFAULT 0, claimed_wakeup INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (tenant_id, run_id))""")
-            connection.execute("PRAGMA user_version = 2")
+            if version < 3:
+                # Add the optional checkpoint without discarding any existing run data.
+                for tenant, run_id, raw in connection.execute("SELECT tenant_id,run_id,body FROM workflow_runs"):
+                    body = json.loads(raw)
+                    for task in body["tasks"].values():
+                        task.setdefault("effect_checkpoint", None)
+                    connection.execute("UPDATE workflow_runs SET body=? WHERE tenant_id=? AND run_id=?",
+                                       (json.dumps(body), tenant, run_id))
+            connection.execute("PRAGMA user_version = 3")
 
     @contextmanager
     def _transaction(self):
@@ -125,6 +133,30 @@ class SQLiteWorkflowRunStore:
     def get(self, *, tenant_id: str, run_id: str) -> WorkflowRun:
         with self._transaction() as connection:
             return self._get(connection, tenant_id, run_id)
+
+    def checkpoint_effect(self, *, tenant_id, run_id, task_id, checkpoint, expected):
+        from .effects import checkpoint_run
+
+        with self._transaction() as connection:
+            prior = self._get(connection, tenant_id, run_id)
+            self._write(connection, checkpoint_run(prior, task_id, checkpoint, expected))
+
+    def recover_effects(self, prior, recovered):
+        with self._transaction() as connection:
+            if self._get(connection, prior.tenant_id, prior.id) != prior:
+                raise OrchestrationError("RUN-RECOVERY-CONFLICT", "run changed during reconciliation")
+            active = connection.execute(
+                "SELECT subject FROM workflow_dispatch WHERE tenant_id=? AND run_id=?",
+                (prior.tenant_id, prior.id),
+            ).fetchone()
+            if active and active[0] is not None:
+                raise OrchestrationError("RUN-RECOVERY-LEASE-ACTIVE", "worker lease must be revoked before recovery")
+            self._write(connection, recovered)
+            # Invalidate every previous worker generation before making recovery resumable.
+            connection.execute(
+                "UPDATE workflow_dispatch SET fence=fence+1,queued=0,started=0 WHERE tenant_id=? AND run_id=?",
+                (prior.tenant_id, prior.id),
+            )
 
     def list(self, *, tenant_id: str | None = None) -> tuple[WorkflowRun, ...]:
         with self._transaction() as connection:
