@@ -2,7 +2,7 @@
 
 python -m agent_interlock.model_eval examples.refund_agent.evaluate --runner replay
 python -m agent_interlock.model_eval examples.refund_agent.evaluate --runner anthropic --model MODEL
-python -m agent_interlock.model_eval examples.refund_agent.evaluate --runner codex --model MODEL
+python -m agent_interlock.model_eval examples.refund_agent.evaluate --runner claude-code --model MODEL
 
 The external-state oracle is a separate local store. It never trusts final model prose.
 The test approver grants only the exact fixture request; no real payment or mail is sent.

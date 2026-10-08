@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from agent_interlock.model_eval import AnthropicRunner, ReplayRunner, main, run_model_evaluation
-from agent_interlock.model_eval_codex import CodexDecisionRunner
+from agent_interlock.model_eval_claude import ClaudeCodeDecisionRunner
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -202,17 +202,32 @@ class ModelEvaluationTests(unittest.TestCase):
                 code = main(["examples.refund_agent.evaluate", "--runner", "anthropic"])
             self.assertEqual(code, 2)
 
-    def test_codex_runner_disables_ambient_tools_and_rejects_out_of_protocol_calls(self):
-        runner = CodexDecisionRunner("test-model")
-        fake = Mock(returncode=0, stdout=json.dumps({"type": "item.completed", "item": {"type": "mcp_tool_call"}}))
-        with patch("agent_interlock.model_eval_codex.subprocess.run", return_value=fake) as invoked:
-            with self.assertRaises(RuntimeError):
-                runner.complete(system="test", messages=[], tools=[])
-        command = invoked.call_args.args[0]
-        for flag in ("--ignore-user-config", "--ignore-rules", "--ephemeral", "shell_tool", "plugins", "memories"):
-            self.assertIn(flag, command)
-        self.assertIn("project_doc_max_bytes=0", command)
+    def test_claude_code_runner_disables_ambient_tools_and_rejects_out_of_protocol_calls(self):
+        runner = ClaudeCodeDecisionRunner("test-model")
+        init = {"type": "system", "subtype": "init", "tools": ["StructuredOutput"], "mcp_servers": []}
+        decision = {"calls": [{"name": "lookup_order", "input": {"orderId": "2001"}}], "text": "", "refusal": False}
 
+        def stream(*events):
+            return Mock(returncode=0, stdout="\n".join(json.dumps(event) for event in events))
+
+        def assistant(name):
+            return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name}]}}
+
+        result = {"type": "result", "is_error": False, "structured_output": decision, "usage": {"output_tokens": 9}}
+        with patch("agent_interlock.model_eval_claude.subprocess.run",
+                   return_value=stream(init, assistant("StructuredOutput"), result)) as invoked:
+            response = runner.complete(system="test", messages=[], tools=[])
+        self.assertEqual(response["content"], [{"type": "tool_use", "id": "cli-0-0", **decision["calls"][0]}])
+        self.assertEqual(response["usage"], {"output_tokens": 9})
+        command = invoked.call_args.args[0]
+        for flag in ("--safe-mode", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"):
+            self.assertIn(flag, command)
+        self.assertEqual(command[command.index("--tools") + 1], "")
+        for events in ((init, assistant("Bash"), result), ({**init, "tools": ["StructuredOutput", "Bash"]}, result),
+                       ({**init, "mcp_servers": [{"name": "x"}]}, result)):
+            with patch("agent_interlock.model_eval_claude.subprocess.run", return_value=stream(*events)):
+                with self.assertRaises(RuntimeError):
+                    runner.complete(system="test", messages=[], tools=[])
 
 if __name__ == "__main__":
     unittest.main()

@@ -281,7 +281,7 @@ def run_model_evaluation(case: EvaluationCase, runner: ModelRunner, *, max_turns
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project", help="module exposing build_cases() and replay_responses(case_id)")
-    parser.add_argument("--runner", choices=("replay", "anthropic", "codex"), required=True)
+    parser.add_argument("--runner", choices=("replay", "anthropic", "claude-code"), required=True)
     parser.add_argument("--model", help="explicit model identifier required for live runners")
     parser.add_argument("--case", help="run only the named case")
     parser.add_argument("--out", type=Path)
@@ -300,9 +300,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.runner == "anthropic":
                 runner = AnthropicRunner(args.model)
             else:
-                from .model_eval_codex import CodexDecisionRunner
+                from .model_eval_claude import ClaudeCodeDecisionRunner
 
-                runner = CodexDecisionRunner(args.model)
+                runner = ClaudeCodeDecisionRunner(args.model)
             reports.append(run_model_evaluation(case, runner))
         report = {"passed": all(item["passed"] for item in reports), "mode": reports[0]["mode"], "results": reports}
     except Exception as error:
